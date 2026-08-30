@@ -1,0 +1,486 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import ProgressRing from './ProgressRing'
+import {
+  completeEnrollment,
+  buildPresignRequestBody,
+  getAccessToken,
+  presignMedia,
+  uploadToS3,
+} from './apiClient'
+import { computeSha256 } from './checksum'
+import {
+  countDone,
+  createInitialTrackerState,
+  isCaptureComplete,
+  resolveClockPosition,
+  updateSectorState,
+} from './clockSectors'
+import type { SectorTrackerState } from './clockSectors'
+import { detectFace, loadFaceDetectionModels } from './faceDetector'
+import { estimateHeadPose } from './headPose'
+import { assessQuality } from './imageQuality'
+import type { QualityStatus } from './types'
+import './EnrollmentCapturePage.css'
+
+type WizardStep =
+  | 'consent'
+  | 'preflight'
+  | 'video'
+  | 'review'
+  | 'uploading'
+  | 'done'
+
+const MIN_DURATION_S = 10
+const MAX_DURATION_S = 30
+const SAMPLE_INTERVAL_MS = 150
+
+/**
+ * S-30 Enrollment capture wizard (FR-ENR-02/03/04).
+ *
+ * Motion model per FSD-AI.md ASM-03 (CORRECTED 2026-08-30): the subject's
+ * body stays facing the camera the whole time; only head yaw/pitch sweeps
+ * through the 12 clock positions. Every position must show a detected
+ * face — there is no back-of-head / auto-pass sector.
+ *
+ * Media never touches local storage: the photo and the recorded webm live
+ * only as in-memory Blobs in React state until they are uploaded straight
+ * to S3 via BE-06's presigned URLs, after which they are dropped.
+ */
+export default function EnrollmentCapturePage() {
+  const { id: enrollmentId } = useParams<{ id: string }>()
+  const isAuthenticated = Boolean(getAccessToken())
+
+  const [step, setStep] = useState<WizardStep>('consent')
+  const [modelsReady, setModelsReady] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
+  const [faceInFrame, setFaceInFrame] = useState(false)
+  const [quality, setQuality] = useState<QualityStatus>('poor')
+  const [tracker, setTracker] = useState<SectorTrackerState>(
+    createInitialTrackerState,
+  )
+  const [elapsedS, setElapsedS] = useState(0)
+  const [photoBlob, setPhotoBlob] = useState<Blob | null>(null)
+  const [videoBlob, setVideoBlob] = useState<Blob | null>(null)
+  const [uploadStatus, setUploadStatus] = useState<{
+    photo: 'idle' | 'uploading' | 'done' | 'error'
+    video: 'idle' | 'uploading' | 'done' | 'error'
+  }>({ photo: 'idle', video: 'idle' })
+  const [uploadError, setUploadError] = useState<string | null>(null)
+
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const recordedChunksRef = useRef<Blob[]>([])
+  const sampleTimerRef = useRef<number | null>(null)
+  const elapsedTimerRef = useRef<number | null>(null)
+  const sectorsDone = countDone(tracker.status)
+  const canFinishVideo = isCaptureComplete(tracker.status)
+
+  // Load face-detection models once, up front.
+  useEffect(() => {
+    loadFaceDetectionModels()
+      .then(() => setModelsReady(true))
+      .catch(() => setCameraError('Gagal memuat model deteksi wajah.'))
+  }, [])
+
+  const stopCamera = useCallback(() => {
+    if (sampleTimerRef.current !== null) {
+      window.clearInterval(sampleTimerRef.current)
+      sampleTimerRef.current = null
+    }
+    if (elapsedTimerRef.current !== null) {
+      window.clearInterval(elapsedTimerRef.current)
+      elapsedTimerRef.current = null
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+  }, [])
+
+  useEffect(() => stopCamera, [stopCamera])
+
+  const startCamera = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      })
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+      }
+      setCameraError(null)
+      setStep('preflight')
+    } catch {
+      setCameraError(
+        'Tidak dapat mengakses kamera. Periksa izin kamera pada browser.',
+      )
+    }
+  }, [])
+
+  // Continuous face/quality sampling while camera is live (preflight + video steps).
+  const sampleFrame = useCallback(async () => {
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    if (!video || !canvas || video.videoWidth === 0) return
+
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const qualityAssessment = assessQuality(imageData)
+    setQuality(qualityAssessment.status)
+
+    const detection = await detectFace(canvas)
+    setFaceInFrame(detection.faceInFrame)
+
+    if (step !== 'video') return
+
+    const pose = detection.landmarks
+      ? estimateHeadPose(detection.landmarks)
+      : null
+    const clockPosition = pose ? resolveClockPosition(pose) : null
+
+    setTracker((prev) =>
+      updateSectorState(prev, {
+        faceInFrame: detection.faceInFrame,
+        clockPosition,
+        quality: qualityAssessment.status,
+      }),
+    )
+  }, [step])
+
+  useEffect(() => {
+    if (step !== 'preflight' && step !== 'video') return
+    sampleTimerRef.current = window.setInterval(() => {
+      void sampleFrame()
+    }, SAMPLE_INTERVAL_MS)
+    return () => {
+      if (sampleTimerRef.current !== null) {
+        window.clearInterval(sampleTimerRef.current)
+        sampleTimerRef.current = null
+      }
+    }
+  }, [step, sampleFrame])
+
+  const capturePhoto = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    canvas.toBlob(
+      (blob) => {
+        if (blob) setPhotoBlob(blob)
+      },
+      'image/jpeg',
+      0.92,
+    )
+  }, [])
+
+  const finishVideoCaptureRef = useRef<() => void>(() => {})
+
+  const finishVideoCapture = useCallback(() => {
+    if (elapsedTimerRef.current !== null) {
+      window.clearInterval(elapsedTimerRef.current)
+      elapsedTimerRef.current = null
+    }
+    const recorder = recorderRef.current
+    if (!recorder || recorder.state === 'inactive') return
+    recorder.onstop = () => {
+      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' })
+      recordedChunksRef.current = []
+      setVideoBlob(blob)
+      setStep('review')
+    }
+    recorder.stop()
+  }, [])
+  useEffect(() => {
+    finishVideoCaptureRef.current = finishVideoCapture
+  }, [finishVideoCapture])
+
+  const startVideoCapture = useCallback(() => {
+    const stream = streamRef.current
+    if (!stream) return
+    recordedChunksRef.current = []
+    setTracker(createInitialTrackerState())
+    setElapsedS(0)
+
+    const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' })
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) recordedChunksRef.current.push(event.data)
+    }
+    recorder.start(1000)
+    recorderRef.current = recorder
+
+    elapsedTimerRef.current = window.setInterval(() => {
+      setElapsedS((prev) => {
+        const next = prev + 1
+        if (next >= MAX_DURATION_S) finishVideoCaptureRef.current()
+        return next
+      })
+    }, 1000)
+
+    setStep('video')
+  }, [])
+
+  const retryVideoCapture = useCallback(() => {
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.onstop = null
+      recorderRef.current.stop()
+    }
+    recordedChunksRef.current = []
+    setVideoBlob(null)
+    setTracker(createInitialTrackerState())
+    setElapsedS(0)
+    startVideoCapture()
+  }, [startVideoCapture])
+
+  const retakePhoto = useCallback(() => setPhotoBlob(null), [])
+
+  const videoPreviewUrl = useMemo(
+    () => (videoBlob ? URL.createObjectURL(videoBlob) : null),
+    [videoBlob],
+  )
+  useEffect(() => {
+    return () => {
+      if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl)
+    }
+  }, [videoPreviewUrl])
+
+  const photoPreviewUrl = useMemo(
+    () => (photoBlob ? URL.createObjectURL(photoBlob) : null),
+    [photoBlob],
+  )
+  useEffect(() => {
+    return () => {
+      if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl)
+    }
+  }, [photoPreviewUrl])
+
+  const uploadOne = useCallback(
+    async (kind: 'photo' | 'video', blob: Blob, contentType: string) => {
+      const digest = await computeSha256(blob)
+      const presigned = await presignMedia(
+        enrollmentId ?? '',
+        buildPresignRequestBody(kind, {
+          contentType,
+          size: blob.size,
+          sha256Hex: digest.hex,
+        }),
+      )
+      await uploadToS3(presigned.upload_url, blob, digest.base64, contentType)
+    },
+    [enrollmentId],
+  )
+
+  const startUpload = useCallback(async () => {
+    if (!photoBlob || !videoBlob || !enrollmentId) return
+    setStep('uploading')
+    setUploadError(null)
+    stopCamera()
+
+    try {
+      setUploadStatus((prev) => ({ ...prev, photo: 'uploading' }))
+      await uploadOne('photo', photoBlob, 'image/jpeg')
+      setUploadStatus((prev) => ({ ...prev, photo: 'done' }))
+
+      setUploadStatus((prev) => ({ ...prev, video: 'uploading' }))
+      await uploadOne('video', videoBlob, 'video/webm')
+      setUploadStatus((prev) => ({ ...prev, video: 'done' }))
+
+      await completeEnrollment(enrollmentId)
+      setStep('done')
+    } catch (error) {
+      setUploadError(
+        error instanceof Error ? error.message : 'Upload gagal, coba lagi.',
+      )
+      setUploadStatus((prev) => ({
+        photo: prev.photo === 'done' ? 'done' : 'error',
+        video: prev.video === 'done' ? 'done' : 'error',
+      }))
+    }
+  }, [photoBlob, videoBlob, enrollmentId, uploadOne, stopCamera])
+
+  if (!enrollmentId) {
+    return <p role="alert">ID sesi enrollment tidak ditemukan pada URL.</p>
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <section className="capture-page">
+        <p role="alert">
+          Anda perlu login untuk membuka capture enrollment.{' '}
+          <Link to="/login">Masuk</Link>
+        </p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="capture-page">
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
+      <header className="capture-page__header">
+        <p className="mono capture-page__eyebrow">S-30 · sesi {enrollmentId}</p>
+        <h1>Enrollment — Capture 360°</h1>
+      </header>
+
+      {step === 'consent' && (
+        <div className="capture-card">
+          <p style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}>
+            Subjek akan direkam foto wajah dan video orientasi kepala (menoleh
+            dan menunduk/mendongak mengikuti pola 12 posisi jam, wajah tetap
+            menghadap kamera sepanjang proses) untuk keperluan pendaftaran
+            biometrik. Media akan diunggah langsung ke penyimpanan aman dan
+            tidak disimpan pada perangkat ini.
+          </p>
+          <div className="capture-actions">
+            <button type="button" className="btn btn--primary" onClick={startCamera}>
+              Saya Setuju &amp; Mulai
+            </button>
+          </div>
+          {cameraError && <p role="alert" className="capture-error">{cameraError}</p>}
+        </div>
+      )}
+
+      {(step === 'preflight' || step === 'video') && (
+        <div className="capture-stage">
+          <div className="capture-viewport">
+            <video ref={videoRef} className="capture-viewport__video" muted playsInline />
+            {step === 'video' && (
+              <div className="capture-ring-overlay">
+                <ProgressRing status={tracker.status} />
+              </div>
+            )}
+            <div
+              className={
+                faceInFrame && quality === 'ok'
+                  ? 'capture-face-guide capture-face-guide--ok'
+                  : 'capture-face-guide capture-face-guide--bad'
+              }
+              aria-hidden="true"
+            />
+            {step === 'video' && (
+              <div className="capture-rec-indicator">
+                <span className="capture-rec-dot" /> REC{' '}
+                <span className="mono">
+                  {String(Math.floor(elapsedS / 60)).padStart(2, '0')}:
+                  {String(elapsedS % 60).padStart(2, '0')}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <aside className="capture-checklist">
+            {!modelsReady && <p>Memuat model deteksi wajah…</p>}
+            <ul>
+              <li data-ok={faceInFrame}>{faceInFrame ? '✔' : '✕'} Wajah terdeteksi</li>
+              <li data-ok={quality === 'ok'}>
+                {quality === 'ok' ? '✔' : '✕'} Pencahayaan &amp; ketajaman baik
+              </li>
+              {step === 'video' && (
+                <li data-ok={canFinishVideo}>
+                  {sectorsDone}/12 posisi jam tercakup
+                </li>
+              )}
+            </ul>
+
+            {step === 'preflight' && !photoBlob && (
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={!faceInFrame || quality !== 'ok' || !modelsReady}
+                onClick={capturePhoto}
+              >
+                Ambil Foto Frontal
+              </button>
+            )}
+
+            {step === 'preflight' && photoBlob && (
+              <div>
+                {photoPreviewUrl && (
+                  <img src={photoPreviewUrl} alt="Pratinjau foto frontal" className="capture-thumb" />
+                )}
+                <div className="capture-actions">
+                  <button type="button" className="btn" onClick={retakePhoto}>
+                    Ulangi Foto
+                  </button>
+                  <button type="button" className="btn btn--primary" onClick={startVideoCapture}>
+                    Lanjut ke Video 360°
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {step === 'video' && (
+              <div className="capture-actions">
+                <button type="button" className="btn" onClick={retryVideoCapture}>
+                  Ulangi Rekam
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={!canFinishVideo || elapsedS < MIN_DURATION_S}
+                  onClick={finishVideoCapture}
+                >
+                  Selesai
+                </button>
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
+
+      {step === 'review' && (
+        <div className="capture-card">
+          <h2>Review</h2>
+          <div className="capture-review-grid">
+            {photoPreviewUrl && <img src={photoPreviewUrl} alt="Foto frontal" className="capture-thumb" />}
+            {videoPreviewUrl && (
+              <video src={videoPreviewUrl} controls className="capture-thumb" />
+            )}
+          </div>
+          <p>{sectorsDone}/12 posisi jam tercakup. QC akhir dilakukan di server.</p>
+          <div className="capture-actions">
+            <button type="button" className="btn" onClick={retryVideoCapture}>
+              Rekam Ulang Video
+            </button>
+            <button type="button" className="btn btn--primary" onClick={() => void startUpload()}>
+              Unggah &amp; Selesaikan
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 'uploading' && (
+        <div className="capture-card">
+          <h2>Mengunggah…</h2>
+          <ul>
+            <li>Foto: {uploadStatus.photo}</li>
+            <li>Video: {uploadStatus.video}</li>
+          </ul>
+          {uploadError && (
+            <>
+              <p role="alert" className="capture-error">{uploadError}</p>
+              <button type="button" className="btn btn--primary" onClick={() => void startUpload()}>
+                Coba Lagi
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {step === 'done' && (
+        <div className="capture-card">
+          <h2>Berhasil diunggah</h2>
+          <p>Sesi telah masuk antrean pemeriksaan kualitas (QC_RUNNING).</p>
+          <Link to="/enrollments" className="btn btn--primary">
+            Kembali ke Daftar Enrollment
+          </Link>
+        </div>
+      )}
+    </section>
+  )
+}
