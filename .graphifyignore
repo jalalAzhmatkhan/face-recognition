@@ -4,8 +4,6 @@
 
 # Documentation: hanya FSD dan TSD yang di-commit
 documentation/*
-!documentation/fsd/
-!documentation/tsd/
 
 # Python
 __pycache__/
@@ -54,3 +52,7 @@ wandb/
 Thumbs.db
 .idea/
 .vscode/
+
+README.md
+AGENTS.md
+CLAUDE.md
