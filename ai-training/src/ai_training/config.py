@@ -125,17 +125,34 @@ class QCSettings(BaseModel):
 
 
 class EmbedderSettings(BaseModel):
-    """Selects the embedding backend (TR-03).
+    """Selects the embedding backend (TR-03/TR-06).
 
-    `backend="stub"` (default) is the ONLY supported option today —
-    AdaFace pretrained weights have not been procured (see
-    documentation/research/recommendations.md §2, a separate licensing
-    decision). `backend="adaface"` selects `AdaFaceEmbedder`, which is a
-    documented `NotImplementedError` skeleton, not a working embedder.
+    `backend="stub"` remains the DEFAULT on purpose (unchanged by TR-06):
+    `AdaFaceEmbedder` needs a real ~250MB pretrained checkpoint on disk
+    (see `adaface_weights_path` below), which test/CI environments do not
+    have and should not need in order to run. Real matching requires an
+    operator to explicitly opt in via `TRN_EMBEDDER__BACKEND=adaface` in
+    an environment that has run the download step.
+
+    `adaface_arch`/`adaface_weights_path` configure `AdaFaceEmbedder`
+    (`ai_training.embedding.embedder`). Per
+    `documentation/research/recommendations.md` §2 ("AdaFace IR-101
+    (WebFace12M) untuk akurasi maksimal"), the project's chosen weights are
+    IR-101 trained on WebFace12M — hence `adaface_arch` defaults to
+    `"ir_101"` (upstream naming; architecturally `num_layers=100`, see
+    `ai_training.embedding.adaface_net`). `adaface_weights_path=""` (the
+    default) resolves to the repo-bundled-by-convention (but NOT
+    git-committed — `*.ckpt` is gitignored, files are large and not owned
+    by this repo) path `ai-training/models/adaface_ir101_webface12m.ckpt`,
+    fetched on demand with `uv run ai-training download-adaface-weights`
+    (see `ai_training.download_adaface_weights` for the exact Google Drive
+    source and checksum-free-but-size-sanity-checked download mechanics).
     """
 
     backend: str = "stub"
     stub_version: str = "stub-v1"
+    adaface_arch: str = "ir_101"
+    adaface_weights_path: str = ""
 
 
 class Settings(BaseSettings):
