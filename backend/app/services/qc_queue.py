@@ -1,17 +1,18 @@
-"""QC job enqueue — INTEGRATION SEAM for BE-07 (Celery worker infra).
+"""QC job enqueue — wired to Celery (BE-07).
 
-BE-07 (the actual Celery app/worker that consumes quality-check jobs) does
-not exist yet. Building it is explicitly out of scope for BE-06 — this
-module exists solely so `POST /enrollments/{id}/complete` (BE-06) has ONE
-clearly-named call site to enqueue the async QC job (FR-ENR-06) against,
-instead of either blocking on media/S3 access work that doesn't belong in
-this task, or leaving no hook at all for BE-07 to wire into later.
+Was a documented no-op integration seam for BE-06 (see git history for the
+original docstring). BE-07 built the actual worker (`app/worker/`), so this
+now dispatches the real `run_enrollment_qc` task.
 
-For now `enqueue_qc_job` is a documented no-op: it logs at INFO level and
-returns immediately. When BE-07 lands, this function's body should be
-replaced with the real Celery `.delay()`/`.apply_async()` call (or whatever
-queue technology BE-07 chooses) — callers (app/routers/enrollments.py) do
-not need to change.
+Dispatch is deliberately **best-effort**: `POST /enrollments/{id}/complete`
+(BE-06) has already committed the session's `CAPTURED -> QC_RUNNING`
+transition and the `enrollment.media_completed` audit entry by the time this
+is called — those are the source of truth, not the Celery dispatch. If the
+broker (Redis) is down or unreachable, `enqueue_qc_job` swallows the error,
+logs it, and returns normally so `/complete` still responds 200. The QC job
+itself will simply not run yet; retry-of-dispatch (not just retry-of-job) is
+a known gap, tracked as a manual/ops step (re-run `enqueue_qc_job` for
+sessions stuck in QC_RUNNING) rather than solved here — see backend/README.md.
 """
 
 import logging
@@ -23,11 +24,18 @@ logger = logging.getLogger(__name__)
 def enqueue_qc_job(session_id: uuid.UUID) -> None:
     """Enqueue an async quality-check job for `session_id` (FR-ENR-06).
 
-    NO-OP TODAY (BE-07 not implemented yet): logs the intent and returns.
-    Does not raise, does not block, does not talk to a real queue/broker.
+    Never raises: broker/connection errors are caught and logged so the
+    caller (the `/complete` endpoint's critical DB transaction) is never
+    affected by Redis/Celery availability.
     """
-    logger.info(
-        "qc_queue.enqueue_qc_job: no-op (BE-07 Celery worker infra not yet "
-        "implemented) session_id=%s",
-        session_id,
-    )
+    try:
+        from app.worker.tasks import run_enrollment_qc
+
+        run_enrollment_qc.delay(str(session_id))
+    except Exception:
+        logger.exception(
+            "qc_queue.enqueue_qc_job: failed to dispatch run_enrollment_qc for "
+            "session_id=%s (broker unavailable?) — session remains QC_RUNNING "
+            "until the job is (re)dispatched",
+            session_id,
+        )

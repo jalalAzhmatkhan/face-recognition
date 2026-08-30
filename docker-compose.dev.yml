@@ -49,6 +49,26 @@ services:
         condition: service_healthy
     profiles: ["app"]
 
+  # BE-07: Celery worker consuming async enrollment-processing jobs (QC job
+  # today; TR-02 replaces the QC task body without touching this service).
+  # Same image as `backend` (same code, same deps) — just a different
+  # container command, per NFR-OPS-02 (async/retryable jobs).
+  celery-worker:
+    build:
+      context: ./backend
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--loglevel=info"]
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: DEBUG
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-frac}:${POSTGRES_PASSWORD:-frac_dev_password}@postgres:5432/${POSTGRES_DB:-frac}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["app"]
+
   frontend:
     build:
       context: ./frontend
