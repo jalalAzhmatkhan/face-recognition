@@ -54,3 +54,5 @@ wandb/
 Thumbs.db
 .idea/
 .vscode/
+
+graphify-out/
