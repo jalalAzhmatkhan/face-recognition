@@ -1,22 +1,32 @@
-"""Frame extraction & pose binning stub (TR-02/TR-05).
+"""Frame extraction & pose-bin re-exports (TR-01 stub, superseded by TR-02).
 
-Planned per ratified recommendation (SS4 of recommendations.md):
-decode 360deg enrollment video in-memory -> SCRFD detect + 5 landmarks ->
-yaw estimate -> pose bins {0, +-15 ... +-90} -> quality filter
-(feature-norm + variance-of-Laplacian) -> top-K frames per bin.
+TR-01 sketched a flat yaw-only pose-bin scheme (`POSE_BIN_YAWS` from -90 to
++90 degrees, "back-of-head frames discarded") based on the ORIGINAL (later
+corrected) assumption that enrollment was a full 360-degree body/camera
+rotation. **ASM-03 was corrected on 2026-08-30** (see
+`documentation/fsd/FSD-AI.md`): the capture is a head-orientation sweep
+only (yaw+pitch, body/camera fixed, face always visible — no back-of-head
+segment exists to discard). TR-02 replaces the pose-bin model with a
+12-clock-position (yaw, pitch) mapping in `ai_training.quality.pose`, and
+the real (in-memory, `cv2`-backed) video decoder now lives in
+`ai_training.quality.pipeline.extract_frames`.
+
+This module is kept only as a thin compatibility re-export so any external
+caller importing `ai_training.preprocessing.frames` does not hard-crash;
+new code should import directly from `ai_training.quality.pose` /
+`ai_training.quality.pipeline`.
 """
 
 from __future__ import annotations
 
-# Yaw pose bins (degrees); back-of-head frames are discarded (ASM-03).
-POSE_BIN_YAWS: tuple[int, ...] = (-90, -75, -60, -45, -30, -15, 0, 15, 30, 45, 60, 75, 90)
+from ai_training.quality.pipeline import extract_frames as extract_frames
+from ai_training.quality.pose import CLOCK_POSITIONS as CLOCK_POSITIONS
+from ai_training.quality.pose import clock_position_targets as clock_position_targets
+from ai_training.quality.pose import nearest_clock_position as nearest_clock_position
 
-
-def extract_frames(video_bytes: bytes, fps: float = 12.0) -> list[bytes]:
-    """Decode video (held only in memory) and sample frames. TR-02."""
-    raise NotImplementedError("Frame extraction lands with TR-02.")
-
-
-def assign_pose_bin(yaw_degrees: float) -> int:
-    """Map an estimated yaw to the nearest pose bin."""
-    return min(POSE_BIN_YAWS, key=lambda b: abs(b - yaw_degrees))
+__all__ = [
+    "extract_frames",
+    "CLOCK_POSITIONS",
+    "clock_position_targets",
+    "nearest_clock_position",
+]

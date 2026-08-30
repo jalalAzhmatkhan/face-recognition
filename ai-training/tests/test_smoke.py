@@ -5,7 +5,7 @@ import pytest
 from ai_training.cli import build_parser, main
 from ai_training.config import Settings
 from ai_training.evaluation.metrics import EvalReport
-from ai_training.preprocessing.frames import POSE_BIN_YAWS, assign_pose_bin
+from ai_training.quality.pose import CLOCK_POSITIONS, nearest_clock_position
 
 
 def test_packages_importable() -> None:
@@ -44,9 +44,11 @@ def test_cli_parser_has_all_stage_commands() -> None:
 
 
 def test_pose_bins() -> None:
-    assert 0 in POSE_BIN_YAWS
-    assert assign_pose_bin(17.0) == 15
-    assert assign_pose_bin(-88.0) == -90
+    # ASM-03 corrected 2026-08-30: 12 clock positions mapped to (yaw, pitch)
+    # pairs, not a flat +-90deg yaw bin list (see ai_training.quality.pose).
+    assert len(CLOCK_POSITIONS) == 12
+    assert "12" in CLOCK_POSITIONS
+    assert nearest_clock_position(0.0, 25.0, yaw_range_deg=35.0, pitch_range_deg=25.0) == "12"
 
 
 def test_eval_report_schema() -> None:
