@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     aws_s3_prefix: str = ""
     aws_access_key_id: str | None = None
     aws_secret_access_key: SecretStr | None = None
+    # Dev/test-only escape hatch (BE-06): point boto3 at an S3-compatible
+    # endpoint (e.g. MinIO from docker-compose.dev.yml, http://localhost:9000)
+    # instead of real AWS. MUST stay unset in staging/prod so boto3 falls
+    # back to AWS's own endpoint resolution for `aws_region`.
+    aws_s3_endpoint_url: str | None = None
 
     # Staff AuthN/AuthZ (BE-03, NFR-SEC-04). Local email+password JWT auth
     # against `staff_accounts` — `oidc_sub` stays in the schema (nullable) as
