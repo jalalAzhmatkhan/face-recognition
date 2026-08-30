@@ -1,28 +1,31 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import PagePlaceholder from './PagePlaceholder'
-import { createTrainingJob, describeApiError, listModels } from '../features/training-models/api'
+import {
+  createTrainingJob,
+  describeApiError,
+  listModels,
+  listTrainingJobs,
+} from '../features/training-models/api'
 import { canAccessTrainingModels } from '../features/training-models/roleGating'
 import { getCurrentRole } from '../lib/authToken'
 import ProductionModelCard from '../features/training-models/ProductionModelCard'
 import ModelsTable from '../features/training-models/ModelsTable'
-import SessionJobsTable from '../features/training-models/SessionJobsTable'
+import TrainingJobsTable from '../features/training-models/TrainingJobsTable'
 import StartTrainingDialog from '../features/training-models/StartTrainingDialog'
-import {
-  addSessionTrainingJob,
-  listSessionTrainingJobs,
-} from '../features/training-models/sessionJobs'
+import { IN_FLIGHT_JOB_STATUSES } from '../features/training-models/types'
 import '../features/training-models/TrainingModels.css'
+
+const JOBS_POLL_INTERVAL_MS = 4000
 
 /**
  * S-50 Models & Training — FE-09 scope. ADMIN-only per screen-plan (see
  * `features/training-models/roleGating.ts` docstring for why this is
  * stricter than the backend's technical read ceiling).
  *
- * The "tabel training runs" here is a browser-session-local list, NOT a
- * server-side history — see `features/training-models/sessionJobs.ts` for
- * why (BE-13 has no `GET /training/jobs` list endpoint; candidate follow-up
- * task "BE-15: GET /training/jobs list endpoint").
+ * The "tabel training runs" is real server-side history via `GET
+ * /training/jobs` (BE-15) — this used to be a browser-localStorage-only
+ * workaround before that endpoint existed.
  */
 export default function ModelsPage() {
   const role = getCurrentRole()
@@ -30,7 +33,6 @@ export default function ModelsPage() {
   const queryClient = useQueryClient()
 
   const [showStartDialog, setShowStartDialog] = useState(false)
-  const [sessionJobs, setSessionJobs] = useState(() => listSessionTrainingJobs())
 
   const modelsQuery = useQuery({
     queryKey: ['training-models', 'all'],
@@ -38,18 +40,24 @@ export default function ModelsPage() {
     enabled: allowed,
   })
 
+  const jobsQuery = useQuery({
+    queryKey: ['training-jobs', 'list'],
+    queryFn: () => listTrainingJobs({ limit: 20 }),
+    enabled: allowed,
+    // Keep polling while any of the visible jobs is still PENDING/RUNNING,
+    // same "stop once settled" spirit as the per-job polling on S-51.
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? []
+      const anyInFlight = items.some((job) => IN_FLIGHT_JOB_STATUSES.includes(job.status))
+      return anyInFlight ? JOBS_POLL_INTERVAL_MS : false
+    },
+  })
+
   const startMutation = useMutation({
     mutationFn: createTrainingJob,
-    onSuccess: (job) => {
-      addSessionTrainingJob({
-        id: job.id,
-        model_version: job.model_version ?? '',
-        benchmark_id: job.benchmark_id,
-        created_at: job.created_at,
-      })
-      setSessionJobs(listSessionTrainingJobs())
+    onSuccess: () => {
       setShowStartDialog(false)
-      void queryClient.invalidateQueries({ queryKey: ['training-job', job.id] })
+      void queryClient.invalidateQueries({ queryKey: ['training-jobs', 'list'] })
     },
   })
 
@@ -97,17 +105,20 @@ export default function ModelsPage() {
 
       <section className="training-models-section">
         <div className="training-models-section__header">
-          <h2 className="training-models-section__title">Job Training (dipicu di sesi ini)</h2>
+          <h2 className="training-models-section__title">Riwayat Training</h2>
           <button type="button" onClick={() => setShowStartDialog(true)}>
             Mulai Training
           </button>
         </div>
-        <p className="training-models-section__hint">
-          Daftar ini HANYA berisi job yang dipicu dari browser ini (tersimpan di localStorage) —
-          BUKAN riwayat lengkap dari server, karena backend belum menyediakan endpoint daftar
-          training job (lihat catatan gap FE-09 / calon BE-15).
-        </p>
-        <SessionJobsTable jobs={sessionJobs} />
+        {jobsQuery.isLoading && <p style={{ color: 'var(--text-secondary)' }}>Memuat data...</p>}
+        {jobsQuery.isError && (
+          <p role="alert" style={{ color: 'var(--danger)' }}>
+            {describeApiError(jobsQuery.error)}
+          </p>
+        )}
+        {!jobsQuery.isLoading && !jobsQuery.isError && (
+          <TrainingJobsTable jobs={jobsQuery.data?.items ?? []} />
+        )}
       </section>
 
       {showStartDialog && (

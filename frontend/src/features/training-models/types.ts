@@ -49,6 +49,14 @@ export interface TrainingJobResponse {
   mlflow_run_id: string | null
 }
 
+/** `GET /training/jobs` (BE-15) — server-side history, newest first. */
+export interface TrainingJobListResponse {
+  items: TrainingJobResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface CreateTrainingJobBody {
   model_version: string
   benchmark_id: string
@@ -65,19 +73,4 @@ export interface ModelPromoteResponse {
   stage: ModelStage
   promoted_by: string
   promoted_at: string
-}
-
-/**
- * One entry in the browser-local "jobs triggered in this session" list.
- *
- * GAP (documented in full in `sessionJobs.ts`): BE-13 has no
- * `GET /training/jobs` list endpoint, only `GET /training/jobs/{id}` by id,
- * so there is no way to fetch a server-side training-run history. This
- * shape is what gets persisted to `localStorage` instead.
- */
-export interface SessionTrainingJob {
-  id: string
-  model_version: string
-  benchmark_id: string
-  created_at: string
 }
