@@ -33,6 +33,12 @@ from ai_training.db.enrollment_repo import (
     get_user_id,
     guarded_transition,
 )
+from ai_training.db.training_job_repo import (
+    mark_job_failed,
+    mark_job_running,
+    mark_job_succeeded,
+    upsert_model_metrics,
+)
 from ai_training.embedding.embedder import build_embedder
 from ai_training.embedding.extractor import extract_gallery_embeddings
 from ai_training.quality.pipeline import run_quality_check
@@ -374,6 +380,142 @@ def run_enrollment_qc(self: Task, session_id: str) -> str:
     try:
         with conn.cursor() as cursor:
             outcome = run_enrollment_qc_core(cursor, settings, session_id)
+        conn.commit()
+        return outcome
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# --- run_training_evaluation_job (BE-13, FR-TRN-02/03) ---------------------
+#
+# Registered under the exact task name backend's
+# `app/services/training_queue.py` dispatches
+# (`app.worker.tasks.run_training_evaluation_job`) — same cross-project
+# wiring as `run_enrollment_qc` above (see `celery_app.py`'s module
+# docstring). backend/app/worker/tasks.py ALSO registers a task under this
+# same name, but only as a name-only proxy that always raises — see its
+# docstring for why: unlike `run_enrollment_qc`'s BE-07-stub-then-TR-02
+# history, there never was (and never will be) a legitimate backend-side
+# implementation, since `evaluate_candidate` needs ML dependencies backend
+# doesn't carry. THIS is the only implementation meant to actually run.
+TRAINING_JOB_ACTOR = "system:ai-training-worker"
+
+
+def run_training_evaluation_job_core(
+    cursor: Cursor,
+    settings: Settings,
+    job_id: str,
+    model_version: str,
+    benchmark_id: str,
+) -> str:
+    """Core logic, DB-cursor-injected for unit testing without a Celery task
+    context (same split as `run_enrollment_qc_core`). Returns a short
+    outcome string (`"succeeded"` / `"failed"`) purely so tests can assert
+    on it.
+
+    No idempotency short-circuit on job status here (unlike
+    `run_enrollment_qc_core`'s "already past QC_RUNNING" check) — a
+    `training_jobs` row is created fresh per POST /training/jobs request and
+    is not expected to receive duplicate `.delay()` dispatches the way an
+    enrollment session's QC job can; a duplicate delivery would simply
+    re-run the (expensive but side-effect-idempotent-at-the-DB-row-level)
+    evaluation and overwrite the same job row with the same-shaped result.
+
+    Never lets an `evaluate_candidate` exception propagate: this task is
+    NOT registered with `autoretry_for` (retrying a failed evaluation run —
+    e.g. a bad `benchmark_id`, a missing S3 object, a misconfigured embedder
+    — will not fix it), so an uncaught exception here would otherwise go
+    straight to `DeadLetterTask.on_failure` and leave `training_jobs.status`
+    stuck at RUNNING forever. Catching it and writing FAILED explicitly is
+    what makes `GET /training/jobs/{id}` observable either way.
+    """
+    mark_job_running(cursor, job_id)
+    insert_audit_log(
+        cursor,
+        actor=TRAINING_JOB_ACTOR,
+        action="training.job_running",
+        entity=f"training_job:{job_id}",
+        payload={"model_version": model_version, "benchmark_id": benchmark_id},
+    )
+
+    try:
+        from ai_training.evaluation.metrics import evaluate_candidate
+
+        report = evaluate_candidate(settings, model_version, benchmark_id)
+    except Exception as exc:  # noqa: BLE001 - a failed evaluation is a normal outcome to record
+        error_message = str(exc)
+        mark_job_failed(cursor, job_id, error_message=error_message)
+        insert_audit_log(
+            cursor,
+            actor=TRAINING_JOB_ACTOR,
+            action="training.job_failed",
+            entity=f"training_job:{job_id}",
+            payload={
+                "model_version": model_version,
+                "benchmark_id": benchmark_id,
+                "error": error_message,
+            },
+        )
+        return "failed"
+
+    upsert_model_metrics(
+        cursor,
+        version=model_version,
+        mlflow_run_id=report.mlflow_run_id,
+        recall=report.recall,
+        f1=report.f1,
+        precision=report.precision,
+        latency_ms_p95=report.latency_ms_p95,
+    )
+    mark_job_succeeded(cursor, job_id, mlflow_run_id=report.mlflow_run_id)
+    insert_audit_log(
+        cursor,
+        actor=TRAINING_JOB_ACTOR,
+        action="training.job_succeeded",
+        entity=f"training_job:{job_id}",
+        payload={
+            "model_version": model_version,
+            "benchmark_id": benchmark_id,
+            "recall": report.recall,
+            "f1": report.f1,
+            "precision": report.precision,
+            "latency_ms_p95": report.latency_ms_p95,
+            "mlflow_run_id": report.mlflow_run_id,
+        },
+    )
+    return "succeeded"
+
+
+@celery_app.task(
+    name="app.worker.tasks.run_training_evaluation_job",
+    base=DeadLetterTask,
+    bind=True,
+)
+def run_training_evaluation_job(
+    self: Task, job_id: str, model_version: str, benchmark_id: str
+) -> str:
+    """Real implementation (BE-13) of the training-evaluation job backend's
+    `app/services/training_queue.py` dispatches by name. Runs
+    `ai_training.evaluation.metrics.evaluate_candidate` (TR-07) and writes
+    the outcome back to `training_jobs` + `models` — see
+    `run_training_evaluation_job_core` for the full logic.
+
+    Deliberately NOT given `autoretry_for`: see
+    `run_training_evaluation_job_core`'s docstring for why retrying a failed
+    evaluation is not the right default here (unlike `run_enrollment_qc`,
+    whose retryable exceptions are transient infra blips, not evaluation
+    failures).
+    """
+    settings = get_settings()
+    conn = get_connection(settings.db.dsn)
+    try:
+        with conn.cursor() as cursor:
+            outcome = run_training_evaluation_job_core(
+                cursor, settings, job_id, model_version, benchmark_id
+            )
         conn.commit()
         return outcome
     except Exception:

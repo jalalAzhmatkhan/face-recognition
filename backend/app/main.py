@@ -23,6 +23,7 @@ from app.routers import (
     enrollments,
     health,
     observability,
+    training,
     users,
 )
 
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(devices.router, prefix=settings.api_v1_prefix)
     app.include_router(access_policies.router, prefix=settings.api_v1_prefix)
     app.include_router(access_events.router, prefix=settings.api_v1_prefix)
+    app.include_router(training.router, prefix=settings.api_v1_prefix)
 
     # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set and the `otel` extra is installed.
     setup_tracing(app, settings.app_name)

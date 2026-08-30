@@ -98,6 +98,14 @@ class Settings(BaseSettings):
     retention_backfill_interval_seconds: int = 60 * 60  # hourly
     retention_purge_interval_seconds: int = 6 * 60 * 60  # every 6 hours
 
+    # Model promotion gate (BE-13, FR-TRN-05, NFR-PRF-01): a CANDIDATE model
+    # may only be promoted to PRODUCTION if its measured p95 inference
+    # latency (ai_training.evaluation.metrics.EvalReport.latency_ms_p95) is
+    # at/under this budget, in milliseconds. Config-able per task
+    # instructions, but 300ms is the NFR-PRF-01 default and should not be
+    # loosened without a documented NFR change.
+    promotion_latency_budget_ms: int = 300
+
     @property
     def cors_allow_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]

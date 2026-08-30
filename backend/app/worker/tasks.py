@@ -435,3 +435,45 @@ def purge_expired_media_task(self: Task) -> dict[str, int]:
         return {"purged": result.purged, "failed": result.failed}
     finally:
         db.close()
+
+
+# --- run_training_evaluation_job (BE-13, FR-TRN-02/03) ---------------------
+#
+# This is a NAME-ONLY registration, not a real implementation — same wiring
+# trick as `run_enrollment_qc` (see that task's docstring + this project's
+# ai_training/worker/celery_app.py docstring for the full mechanics of two
+# separate Celery apps sharing one Redis broker and routing purely by task
+# name). The difference from `run_enrollment_qc`'s history: THAT task had a
+# legitimate interim BE-07 stub before TR-02 replaced it. There is no
+# equivalent legitimate backend-side implementation here to begin with —
+# `ai_training.evaluation.metrics.evaluate_candidate` needs PyTorch/ML
+# dependencies backend never carries, so this body must never actually run.
+#
+# It exists only so `app/services/training_queue.py` has a real task object
+# to call `.delay()` on. If this body executes, it means backend's own
+# Celery worker (not ai-training's) picked up the job — an ops/deployment
+# error (both workers consuming the same "frac_default" queue, or
+# ai-training's worker not running at all), not a code path to make
+# correct. It fails loudly and immediately (no autoretry — retrying can't
+# fix a missing implementation) so `DeadLetterTask.on_failure` records it in
+# `audit_logs` rather than the job silently staying RUNNING forever.
+@celery_app.task(
+    name="app.worker.tasks.run_training_evaluation_job",
+    base=DeadLetterTask,
+    bind=True,
+)
+def run_training_evaluation_job(
+    self: Task, job_id: str, model_version: str, benchmark_id: str
+) -> str:
+    """Proxy registration ONLY — see the module comment directly above.
+
+    The real implementation is `ai_training.worker.tasks.run_training_evaluation_job`
+    (registered under this exact same task name), which is the only process
+    that should ever be subscribed to consume it.
+    """
+    raise RuntimeError(
+        "run_training_evaluation_job must be executed by the ai-training worker "
+        "(ai_training.worker.tasks.run_training_evaluation_job), not backend's — "
+        "check that ai-training's Celery worker is running and consuming the "
+        "'frac_default' queue."
+    )

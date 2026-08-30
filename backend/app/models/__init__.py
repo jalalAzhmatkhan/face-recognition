@@ -16,6 +16,7 @@ from app.models.face_embedding import EMBEDDING_DIM, FaceEmbedding
 from app.models.media_object import MediaObject
 from app.models.model_registry import ModelVersion
 from app.models.staff_account import StaffAccount
+from app.models.training_job import TrainingJob
 from app.models.user import User
 
 __all__ = [
@@ -31,5 +32,6 @@ __all__ = [
     "MediaObject",
     "ModelVersion",
     "StaffAccount",
+    "TrainingJob",
     "User",
 ]
