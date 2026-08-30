@@ -14,6 +14,7 @@ app/
   models/         # SQLAlchemy 2.x ORM models, satu module per tabel TSD §4 (BE-02)
   db/             # engine/session (BE-02)
   core/           # config (pydantic-settings), structured logging, RFC 9457 errors, JWT+hashing (`security.py`, BE-03)
+  worker/         # Celery app + tasks — retry/idempotency/dead-letter infra (BE-07)
   cli.py          # perintah ops satu-kali tanpa endpoint HTTP (mis. `create_admin`, BE-03)
 migrations/       # alembic (BE-02, BE-03)
 tests/            # pytest
@@ -198,6 +199,105 @@ di-override ke repo in-memory palsu.
 > - `POST /auth/login` dengan kredensial admin tsb di server yang jalan (`uv run
 >   uvicorn app.main:app`) benar-benar mengembalikan token yang valid untuk
 >   `GET /auth/me`, dan `POST /auth/refresh` dengan refresh token-nya berhasil.
+
+## Celery worker infra (BE-07)
+
+NFR-OPS-02 (FSD-AI.md): "Training and enrollment-processing are async and
+retryable (idempotent jobs, dead-letter handling)." `app/worker/` implements
+the generic worker infra (retry/idempotency/dead-letter) — it does **not**
+implement the real QC/embedding logic, which is TR-02/TR-03 (`ai-training/`,
+ai-engineer) scope.
+
+```
+app/worker/
+  celery_app.py   # Celery instance — broker/backend = Settings.redis_url (XC-02, reused, no separate config)
+  tasks.py        # DeadLetterTask base class + run_enrollment_qc (BE-07 stub, TR-02 replaces its body)
+```
+
+### Job semantics
+
+- **Retry**: every task is declared with `autoretry_for=(...)`,
+  `retry_backoff=True`, `retry_jitter=True`, `max_retries=5` (see
+  `run_enrollment_qc`). This is stock Celery — exponential backoff with
+  jitter, capped by `retry_backoff_max`.
+- **Idempotency**: state-machine-driven, not a separate idempotency-key
+  table. `run_enrollment_qc(session_id)` only does work if
+  `enrollment_session.state == QC_RUNNING`; a duplicate delivery after the
+  session has already moved on (`QC_PASSED`, `REJECTED_QUALITY`,
+  `CANCELLED`, ...) is a no-op (logged as `audit_logs` action
+  `job.qc_stub_skipped`). This mirrors
+  `app/services/enrollment_state_machine.py`'s existing pattern instead of
+  introducing a second mechanism.
+- **Dead-letter handling**: no separate DLQ table/queue — `DeadLetterTask`
+  (the `base=` for every task) writes one `audit_logs` row with
+  `action="job.dead_letter"` from its `on_failure` hook, which Celery calls
+  once a task fails *permanently* (for an `autoretry_for` task: after
+  `max_retries` is exhausted). Observe the DLQ with:
+
+  ```sql
+  SELECT * FROM audit_logs
+  WHERE action = 'job.dead_letter'
+  ORDER BY at DESC;
+  ```
+
+  `payload` carries `{task, task_id, args, kwargs, exception_type,
+  exception_message}`.
+
+### `run_enrollment_qc` — BE-07 stub, NOT the real QC pipeline
+
+`app/worker/tasks.py::run_enrollment_qc` (and its inner
+`_run_enrollment_qc_stub`) checks idempotency, writes an `audit_logs` entry
+(`action="job.qc_stub_executed"`, payload notes "real QC pipeline: TR-02"),
+and returns — it never transitions the session to `QC_PASSED` /
+`REJECTED_QUALITY` (that's an AI-model decision, TR-02's job, not BE-07's).
+TR-02 replaces this task's **body only**; its name/signature/decorator stay
+the same so `app/services/qc_queue.py` (BE-06's integration seam,
+`enqueue_qc_job(session_id)`) never has to change again.
+
+`enqueue_qc_job` dispatches with `run_enrollment_qc.delay(str(session_id))`
+and swallows/logs any broker-connection error — dispatch is best-effort so
+`POST /enrollments/{id}/complete` (BE-06) always still returns 200 even if
+Redis is down; the session then simply stays `QC_RUNNING` until the job is
+(re)dispatched.
+
+### Running the worker
+
+```bash
+# local (needs REDIS_URL / DATABASE_URL, e.g. via docker compose up postgres redis)
+uv run celery -A app.worker.celery_app worker --loglevel=info
+
+# or, via docker compose (root repo) — starts `backend` + `celery-worker` +
+# infra (postgres/redis/minio/mlflow) together:
+docker compose -f docker-compose.dev.yml --profile app up
+```
+
+### Test (`tests/test_worker_tasks.py`)
+
+Pure unit tests — no live Redis/Postgres:
+`celery_app.conf.task_always_eager = True` runs tasks synchronously
+in-process (Celery's real retry/`on_failure` machinery still executes, just
+without a broker round-trip); the DB layer is faked (`FakeEnrollmentRepo`/
+`FakeAuditRepo`/`_FakeDbSession`, same style as `tests/test_media_service.py`).
+Covers: idempotency skip (session already past `QC_RUNNING`), successful
+stub execution + audit entry, retry config assertions
+(`autoretry_for`/`retry_backoff`/`max_retries`), and a simulated
+always-fails task proving a `job.dead_letter` audit entry is written once
+retries are exhausted.
+
+> **Yang WAJIB diverifikasi manual oleh siapa pun yang punya Redis+Postgres
+> live** (lihat instruksi di laporan task BE-07) sebelum menganggap dead-letter
+> handling teruji end-to-end sungguhan (bukan cuma eager-mode unit test):
+> - jalankan `docker compose -f docker-compose.dev.yml up postgres redis` lalu
+>   `uv run celery -A app.worker.celery_app worker --loglevel=info` di satu
+>   terminal,
+> - di terminal lain, `uv run python -c "from app.worker.tasks import
+>   run_enrollment_qc; run_enrollment_qc.delay('<uuid-sesi-QC_RUNNING>')"`
+>   untuk memicu job sungguhan lewat Redis broker,
+> - untuk memicu dead-letter sungguhan: enqueue job dengan `session_id` yang
+>   membuat lookup DB gagal berulang (mis. matikan Postgres sesaat setelah
+>   dispatch) atau tempel sementara `raise ConnectionError(...)` di awal
+>   `_run_enrollment_qc_stub` lalu jalankan — tunggu backoff 5x retry, lalu
+>   cek `SELECT * FROM audit_logs WHERE action = 'job.dead_letter'`.
 
 ## Konfigurasi
 
