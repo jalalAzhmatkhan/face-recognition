@@ -17,6 +17,19 @@ if TYPE_CHECKING:
     from ai_training.embedding.extractor import PoseBucketEmbedding
 
 
+def has_embeddings_for_model(cursor: Cursor, *, session_id: str, model_version: str) -> bool:
+    """TR-08 idempotency check: has this session already been re-embedded
+    under `model_version`? Lets `run_gallery_reembed_job` skip work already
+    done on a re-run (retried/resumed job, or the same model promoted a
+    second time) instead of paying for a redundant download+detect+align+
+    embed pass for every already-processed session."""
+    cursor.execute(
+        "SELECT 1 FROM face_embeddings WHERE session_id = %s AND model_version = %s LIMIT 1",
+        (session_id, model_version),
+    )
+    return cursor.fetchone() is not None
+
+
 def upsert_embeddings(
     cursor: Cursor,
     *,

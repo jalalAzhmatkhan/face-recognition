@@ -27,7 +27,7 @@ from app.models.training_job import TrainingJob
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.model_versions import ModelVersionRepository
 from app.repositories.training_jobs import TrainingJobRepository
-from app.services import training_queue
+from app.services import gallery_queue, training_queue
 
 
 class TrainingJobNotFoundError(Exception):
@@ -143,6 +143,14 @@ def promote_model(
     most one PRODUCTION model at a time). Both writes happen before the
     audit log entry, mirroring app/services/access_policy_service.py's
     write-then-audit ordering.
+
+    TR-08 (FR-TRN-06): after the promotion itself commits, this dispatches
+    the async gallery re-embedding job (`gallery_queue.enqueue_gallery_reembed`)
+    so the gallery gets embeddings under the new production version without
+    blocking this HTTP response on a full re-embed pass. The dispatch is
+    best-effort (a broker outage never undoes the already-successful
+    promotion) and fires AFTER the audit log write below, not before —
+    the promotion itself is the fact that must be durable first.
     """
     if not confirm:
         raise ConfirmationRequiredError(
@@ -201,9 +209,6 @@ def promote_model(
     candidate.promoted_at = now
     candidate = model_repo.update(candidate)
 
-    # FR-TRN-06 (re-extract gallery embeddings with the new model version) is
-    # explicitly NOT triggered here — that is TR-08, a separate follow-up
-    # task. Nothing in this function queues, stubs, or pretends to start it.
     audit_repo.record(
         actor=str(actor),
         action="model.promoted",
@@ -220,4 +225,10 @@ def promote_model(
             "first_promotion": is_first_promotion,
         },
     )
+
+    # FR-TRN-06 (TR-08): dispatch gallery re-embedding for the newly
+    # PRODUCTION version. Fires after the promotion + audit write above are
+    # already durable — best-effort, never undoes the promotion itself.
+    gallery_queue.enqueue_gallery_reembed(candidate.version)
+
     return candidate
