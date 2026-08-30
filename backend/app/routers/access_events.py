@@ -12,18 +12,22 @@ for a different device's door (see app/dependencies/device_auth.py).
 monitoring/audit data (FR-MON-01), not a sensitive administrative action, so
 VIEWER is included here unlike the stricter device-registry endpoints.
 
-`GET /stream/access-events` (SSE) is explicitly OUT OF SCOPE for BE-10 — see
-BE-11. The schemas here (`AccessEventResponse`) are shaped so BE-11 can
-reuse them for the stream payload without changes.
+`GET /stream/access-events` (SSE, BE-11) shares the same staff-read RBAC as
+`GET /access-events` and reuses `AccessEventResponse`'s JSON shape for the
+stream payload (see `access_event_service._publish_access_event`). Its
+generator logic lives in `app/services/access_event_stream.py` rather than
+inline here, so it can be unit tested directly against a fake async Redis
+client (see that module's docstring for why).
 """
 
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.redis_client import get_redis_client
+from app.core.redis_client import get_async_redis_client, get_redis_client
 from app.db.session import get_db
 from app.dependencies.auth import CurrentStaff, require_role
 from app.dependencies.device_auth import get_current_device
@@ -39,6 +43,7 @@ from app.schemas.access_events import (
     AccessEventResponse,
 )
 from app.services import access_event_service
+from app.services.access_event_stream import stream_access_events
 
 router = APIRouter(tags=["access-events"])
 
@@ -116,4 +121,31 @@ def list_access_events(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/stream/access-events")
+def stream_access_events_endpoint(
+    request: Request,
+    device_id: uuid.UUID | None = Query(None),
+    decision: AccessDecision | None = Query(None),
+    current: CurrentStaff = Depends(require_role(*READ_ROLES)),
+    async_redis_client=Depends(get_async_redis_client),
+) -> StreamingResponse:
+    """SSE live feed of access events (BE-11, FR-MON-01), same RBAC and
+    filters as `GET /access-events`. See `app/services/access_event_stream.py`
+    for the generator itself."""
+    generator = stream_access_events(
+        async_redis_client, request, device_id=device_id, decision=decision
+    )
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Prevents an intermediate Nginx proxy from buffering the SSE
+            # stream, which would defeat the point of "live".
+            "X-Accel-Buffering": "no",
+        },
     )

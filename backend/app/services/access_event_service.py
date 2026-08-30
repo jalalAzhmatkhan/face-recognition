@@ -32,6 +32,7 @@ a DB read before deciding would defeat the entire point of caching, which
 is resilience when the DB is slow/down (see app/services/policy_cache.py).
 """
 
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -46,6 +47,41 @@ from app.services import policy_cache
 from app.services.policy_cache import PolicySnapshot, PolicySnapshotEntry, RedisLike
 
 logger = logging.getLogger(__name__)
+
+# Redis pub/sub channel the SSE live-stream endpoint subscribes to
+# (BE-11, FR-MON-01). Kept as a module-level constant so the ingest
+# publisher and the stream subscriber can never drift apart.
+ACCESS_EVENTS_CHANNEL = "access-events"
+
+
+def _publish_access_event(redis_client: RedisLike, event: AccessEvent) -> None:
+    """Best-effort publish to the live-stream pub/sub channel (BE-11).
+
+    Deliberately mirrors the "cache-refresh failure isolation" pattern used
+    for the lazy policy-cache refresh above and for `refresh_cache` in
+    policy_cache.py: the `access_events` row is the audit source of truth
+    and MUST be persisted regardless of Redis's health, so a publish
+    failure (Redis down, connection error, etc) is logged and swallowed —
+    never allowed to fail the `POST /access-events` request. The live
+    stream is a "nice to have" on top of that persisted row, not a
+    dependency of it.
+    """
+    payload = {
+        "id": str(event.id),
+        "occurred_at": event.occurred_at.isoformat() if event.occurred_at else None,
+        "device_id": str(event.device_id),
+        "decision": event.decision.value,
+        "matched_user_id": str(event.matched_user_id) if event.matched_user_id else None,
+        "similarity": event.similarity,
+        "liveness_score": event.liveness_score,
+        "model_version": event.model_version,
+        "latency_ms": event.latency_ms,
+        "door_command_issued": event.door_command_issued,
+    }
+    try:
+        redis_client.publish(ACCESS_EVENTS_CHANNEL, json.dumps(payload))
+    except Exception:
+        logger.warning("access_event_publish_failed", extra={"event_id": str(event.id)})
 
 
 def dispatch_door_command(*, device_id: uuid.UUID, door_group: str) -> None:
@@ -131,6 +167,8 @@ def ingest_access_event(
 
     if door_command_issued:
         dispatch_door_command(device_id=device.id, door_group=device.door_group)
+
+    _publish_access_event(redis_client, event)
 
     return event
 
