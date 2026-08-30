@@ -155,6 +155,32 @@ class EmbedderSettings(BaseModel):
     adaface_weights_path: str = ""
 
 
+class EvaluationSettings(BaseModel):
+    """Open-set 1:N identification benchmark knobs (TR-07).
+
+    `fpir_budget` is the security budget from
+    `documentation/research/recommendations.md` SS5 ("Threshold Tuning"):
+    the operating threshold is the SMALLEST tau that keeps FPIR (impostor
+    probes wrongly accepted under any identity) at or below this fraction
+    - see `ai_training.evaluation.scoring.find_threshold_for_fpir_budget`.
+    Default 0.01 (<=1%) is a placeholder pending calibration against a real
+    frozen benchmark, same "tune later against real data" status as
+    `TrainingSettings.target_recall`/`max_far` above.
+
+    `gallery_media_per_identity` controls the TR-07 gallery/probe split
+    applied on top of a TR-04 dataset snapshot (see
+    `ai_training.evaluation.metrics` module docstring for the full split
+    rule): for an identity with >=2 media in the snapshot, this many of its
+    media (capped at len(media) - 1, so at least one always remains a
+    genuine probe) become gallery templates; the rest are genuine probes.
+    An identity with exactly 1 media becomes an impostor probe instead
+    (held out of the gallery entirely).
+    """
+
+    fpir_budget: float = 0.01
+    gallery_media_per_identity: int = 1
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TRN_", env_nested_delimiter="__", env_file=".env", extra="ignore"
@@ -166,6 +192,7 @@ class Settings(BaseSettings):
     training: TrainingSettings = TrainingSettings()
     qc: QCSettings = QCSettings()
     embedder: EmbedderSettings = EmbedderSettings()
+    evaluation: EvaluationSettings = EvaluationSettings()
     # Celery broker/result-backend (TR-02/TR-03 worker). Deliberately a
     # plain top-level field (mirrors backend's `Settings.redis_url`, see
     # backend/app/worker/celery_app.py) rather than nested under a `redis`

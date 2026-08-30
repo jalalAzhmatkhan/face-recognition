@@ -103,6 +103,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"eda report written: datasets/{args.snapshot_id}/eda_report.json and eda_report.md")
         return 0
 
+    if args.command == "evaluate":
+        from ai_training.evaluation.metrics import evaluate_candidate
+
+        settings = get_settings()
+        report = evaluate_candidate(settings, args.model_version, args.benchmark_id)
+        print(report.model_dump_json(indent=2))
+        return 0
+
     if args.command == "download-adaface-weights":
         from ai_training.download_adaface_weights import download_adaface_weights
 
