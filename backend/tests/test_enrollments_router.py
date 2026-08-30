@@ -95,6 +95,10 @@ class FakeUserRepository:
     def get(self, user_id: uuid.UUID) -> User | None:
         return self._by_id.get(user_id)
 
+    def update(self, user: User) -> User:
+        self._by_id[user.id] = user
+        return user
+
 
 class FakeAuditLogRepository:
     def __init__(self) -> None:
@@ -471,4 +475,82 @@ def test_cancel_denied_for_viewer(
 
 def test_cancel_returns_404_for_unknown_session(admin_client: TestClient) -> None:
     response = admin_client.post(f"/api/v1/enrollments/{uuid.uuid4()}/cancel")
+    assert response.status_code == 404
+
+
+# --- DELETE /enrollments/{id} (revoke, BE-08) ----------------------------
+#
+# Dispatch of the async cleanup job is NOT mocked here — same as
+# test_enrollments_media_router.py's complete_enrollment tests, which let
+# `qc_queue.enqueue_qc_job` attempt (and best-effort swallow the failure of)
+# a real Celery dispatch with no broker present in CI. See
+# app/services/revocation_queue.py for why that's safe.
+
+
+def test_revoke_succeeds_from_enrolled_admin_only(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    user_repo: FakeUserRepository,
+    audit_repo: FakeAuditLogRepository,
+    active_user: User,
+) -> None:
+    session = enrollment_repo.create(_make_session(active_user.id, EnrollmentState.ENROLLED))
+
+    response = admin_client.delete(f"/api/v1/enrollments/{session.id}")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body == {"id": str(session.id), "state": "REVOKED"}
+    assert enrollment_repo.get(session.id).state == EnrollmentState.REVOKED
+    assert user_repo.get(active_user.id).status == UserStatus.OFFBOARDED
+    assert any(e["action"] == "enrollment.revoke_initiated" for e in audit_repo.entries)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        EnrollmentState.CREATED,
+        EnrollmentState.CONSENTED,
+        EnrollmentState.CAPTURING,
+        EnrollmentState.CAPTURED,
+        EnrollmentState.QC_RUNNING,
+        EnrollmentState.REJECTED_QUALITY,
+        EnrollmentState.QC_PASSED,
+        EnrollmentState.EMBEDDING,
+        EnrollmentState.CANCELLED,
+        EnrollmentState.REVOKED,
+    ],
+)
+def test_revoke_rejected_unless_enrolled(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    active_user: User,
+    state: EnrollmentState,
+) -> None:
+    session = enrollment_repo.create(_make_session(active_user.id, state))
+    response = admin_client.delete(f"/api/v1/enrollments/{session.id}")
+    assert response.status_code == 409
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+def test_revoke_denied_for_operator(
+    operator_client: TestClient, enrollment_repo: FakeEnrollmentRepository, active_user: User
+) -> None:
+    """Revocation is stricter than every other write endpoint: ADMIN only,
+    OPERATOR excluded (unlike create/consent/transition/cancel)."""
+    session = enrollment_repo.create(_make_session(active_user.id, EnrollmentState.ENROLLED))
+    response = operator_client.delete(f"/api/v1/enrollments/{session.id}")
+    assert response.status_code == 403
+
+
+def test_revoke_denied_for_viewer(
+    viewer_client: TestClient, enrollment_repo: FakeEnrollmentRepository, active_user: User
+) -> None:
+    session = enrollment_repo.create(_make_session(active_user.id, EnrollmentState.ENROLLED))
+    response = viewer_client.delete(f"/api/v1/enrollments/{session.id}")
+    assert response.status_code == 403
+
+
+def test_revoke_returns_404_for_unknown_session(admin_client: TestClient) -> None:
+    response = admin_client.delete(f"/api/v1/enrollments/{uuid.uuid4()}")
     assert response.status_code == 404

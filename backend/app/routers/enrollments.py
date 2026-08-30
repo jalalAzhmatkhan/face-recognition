@@ -54,16 +54,22 @@ from app.schemas.enrollments import (
     EnrollmentCreateRequest,
     EnrollmentListResponse,
     EnrollmentResponse,
+    RevocationResponse,
     TransitionRequest,
 )
 from app.schemas.media import CompleteResponse, PresignRequest, PresignResponse
-from app.services import enrollment_service, media_service
+from app.services import enrollment_service, media_service, revocation_service
 from app.services import enrollment_state_machine as fsm
 
 router = APIRouter(prefix="/enrollments", tags=["enrollments"])
 
 READ_ROLES = (StaffRole.ADMIN, StaffRole.OPERATOR, StaffRole.VIEWER)
 WRITE_ROLES = (StaffRole.ADMIN, StaffRole.OPERATOR)
+# DELETE (revocation) is stricter than every other write endpoint: it is an
+# irreversible action against biometric data (FR-ENR-09, BE-08 task
+# instructions), so OPERATOR is deliberately excluded here even though it is
+# in WRITE_ROLES for everything else in this router.
+REVOKE_ROLES = (StaffRole.ADMIN,)
 
 # See module docstring: the only targets `/transition` is allowed to reach.
 # Every other legal state-machine edge is job-driven (BE-06/07) or handled
@@ -301,6 +307,40 @@ def transition_enrollment(
     except fsm.IllegalTransitionError as exc:
         raise _illegal_transition(exc) from exc
     return EnrollmentResponse.model_validate(session)
+
+
+@router.delete("/{session_id}", response_model=RevocationResponse, status_code=202)
+def revoke_enrollment(
+    session_id: uuid.UUID,
+    current: CurrentStaff = Depends(require_role(*REVOKE_ROLES)),
+    enrollment_repo: EnrollmentSessionRepository = Depends(get_enrollment_repository),
+    user_repo: UserRepository = Depends(get_user_repository_dep),
+    audit_repo: AuditLogRepository = Depends(get_audit_log_repository),
+) -> RevocationResponse:
+    """BE-08: revoke a completed enrollment (FR-ENR-09, NFR-SEC-03, ASM-12).
+
+    ADMIN only (see `REVOKE_ROLES` above). Only legal while the session is
+    ENROLLED (state-machine-enforced; any other current state -> 409). The
+    security-critical effects (ENROLLED -> REVOKED, `user.status =
+    OFFBOARDED`, audit entry) happen synchronously in
+    `revocation_service.revoke_enrollment` before this returns, so a
+    revoked user is unrecognized immediately — physical deletion of
+    embeddings/media and the user tombstone follow asynchronously (dispatched
+    by that same call), which is why this returns 202, not 200/204.
+    """
+    try:
+        session = revocation_service.revoke_enrollment(
+            enrollment_repo,
+            user_repo,
+            audit_repo,
+            session_id=session_id,
+            actor=str(current.id),
+        )
+    except enrollment_service.EnrollmentNotFoundError as exc:
+        raise _not_found(session_id) from exc
+    except fsm.IllegalTransitionError as exc:
+        raise _illegal_transition(exc) from exc
+    return RevocationResponse(id=session.id, state=session.state)
 
 
 @router.post("/{session_id}/media/presign", response_model=PresignResponse, status_code=201)

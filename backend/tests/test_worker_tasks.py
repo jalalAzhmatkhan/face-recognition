@@ -18,7 +18,10 @@ import pytest
 from celery import Task
 
 from app.models.enrollment_session import EnrollmentSession
-from app.models.enums import EnrollmentState
+from app.models.enums import EnrollmentState, UserStatus
+from app.models.face_embedding import FaceEmbedding
+from app.models.media_object import MediaObject
+from app.models.user import User
 from app.worker import tasks as worker_tasks
 from app.worker.celery_app import celery_app
 
@@ -209,4 +212,258 @@ def test_dead_letter_written_after_retries_exhausted(monkeypatch, eager_celery) 
     dead_letters = [e for e in audit_sink if e.action == worker_tasks.DEAD_LETTER_ACTION]
     assert len(dead_letters) == 1
     assert dead_letters[0].payload["task"] == "test.always_fails"
+    assert dead_letters[0].payload["exception_type"] == "ConnectionError"
+
+
+# --- revoke_enrollment_cleanup (BE-08, FR-ENR-09/NFR-SEC-03/ASM-12) --------
+
+
+class FakeUserRepo:
+    def __init__(self, user: User | None) -> None:
+        self._user = user
+        self.update_calls: list[User] = []
+
+    def get(self, user_id: uuid.UUID) -> User | None:
+        if self._user is None or user_id != self._user.id:
+            return None
+        return self._user
+
+    def update(self, user: User) -> User:
+        self.update_calls.append(user)
+        self._user = user
+        return user
+
+
+class FakeMediaRepo:
+    def __init__(self, media: list[MediaObject]) -> None:
+        self._media = list(media)
+        self.deleted: list[MediaObject] = []
+
+    def list_for_session(self, session_id: uuid.UUID) -> list[MediaObject]:
+        return [m for m in self._media if m.session_id == session_id]
+
+    def delete(self, media: MediaObject) -> None:
+        self._media = [m for m in self._media if m.id != media.id]
+        self.deleted.append(media)
+
+
+class FakeEmbeddingRepo:
+    def __init__(self, embeddings: list[FaceEmbedding]) -> None:
+        self._embeddings = list(embeddings)
+        self.delete_calls: list[uuid.UUID] = []
+
+    def list_for_session(self, session_id: uuid.UUID) -> list[FaceEmbedding]:
+        return [e for e in self._embeddings if e.session_id == session_id]
+
+    def delete_for_session(self, session_id: uuid.UUID) -> int:
+        self.delete_calls.append(session_id)
+        before = len(self._embeddings)
+        self._embeddings = [e for e in self._embeddings if e.session_id != session_id]
+        return before - len(self._embeddings)
+
+
+class FakeS3Client:
+    def __init__(self) -> None:
+        self.deleted_objects: list[tuple[str, str]] = []
+
+    def delete_object(self, *, Bucket: str, Key: str) -> dict:  # noqa: N803 - mirrors boto3's signature
+        self.deleted_objects.append((Bucket, Key))
+        return {}
+
+
+def _user(user_id: uuid.UUID, full_name: str = "Real Person") -> User:
+    now = datetime.now(UTC)
+    return User(
+        id=user_id,
+        external_ref=f"EMP-{uuid.uuid4().hex[:6]}",
+        full_name=full_name,
+        status=UserStatus.OFFBOARDED,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _media(session_id: uuid.UUID) -> MediaObject:
+    from app.models.enums import MediaKind, MediaObjectStatus
+
+    now = datetime.now(UTC)
+    return MediaObject(
+        id=uuid.uuid4(),
+        session_id=session_id,
+        kind=MediaKind.PHOTO,
+        s3_bucket="test-bucket",
+        s3_key=f"enrollment/{session_id}/photo_1.jpg",
+        checksum="a" * 64,
+        size=1024,
+        content_type="image/jpeg",
+        status=MediaObjectStatus.FINALIZED,
+        created_at=now,
+    )
+
+
+def _embedding(session_id: uuid.UUID, user_id: uuid.UUID) -> FaceEmbedding:
+    return FaceEmbedding(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        session_id=session_id,
+        model_version="v1",
+        pose_bucket="12",
+        vector=[0.0] * 512,
+        created_at=datetime.now(UTC),
+    )
+
+
+def test_revoke_cleanup_deletes_embeddings_media_and_tombstones_user() -> None:
+    session = _session(EnrollmentState.REVOKED)
+    user = _user(session.user_id)
+    media = [_media(session.id), _media(session.id)]
+    embeddings = [_embedding(session.id, session.user_id)]
+
+    enrollment_repo = FakeEnrollmentRepo(session)
+    user_repo = FakeUserRepo(user)
+    media_repo = FakeMediaRepo(media)
+    embedding_repo = FakeEmbeddingRepo(embeddings)
+    audit_repo = FakeAuditRepo()
+    s3_client = FakeS3Client()
+
+    outcome = worker_tasks._revoke_enrollment_cleanup_core(
+        enrollment_repo, user_repo, media_repo, embedding_repo, audit_repo, s3_client, session.id
+    )
+
+    assert outcome == "executed"
+    assert embedding_repo.delete_calls == [session.id]
+    assert len(media_repo.deleted) == 2
+    assert len(s3_client.deleted_objects) == 2
+    assert user.full_name == worker_tasks.TOMBSTONE_FULL_NAME
+    assert user_repo.update_calls == [user]
+
+    completed = [
+        e for e in audit_repo.entries if e["action"] == worker_tasks.REVOKE_COMPLETED_ACTION
+    ]
+    assert len(completed) == 1
+    assert completed[0]["payload"] == {"embeddings_deleted": 1, "media_deleted": 2}
+
+
+def test_revoke_cleanup_is_idempotent_on_second_call() -> None:
+    session = _session(EnrollmentState.REVOKED)
+    user = _user(session.user_id)
+    media = [_media(session.id)]
+    embeddings = [_embedding(session.id, session.user_id)]
+
+    enrollment_repo = FakeEnrollmentRepo(session)
+    user_repo = FakeUserRepo(user)
+    media_repo = FakeMediaRepo(media)
+    embedding_repo = FakeEmbeddingRepo(embeddings)
+    audit_repo = FakeAuditRepo()
+    s3_client = FakeS3Client()
+
+    first = worker_tasks._revoke_enrollment_cleanup_core(
+        enrollment_repo, user_repo, media_repo, embedding_repo, audit_repo, s3_client, session.id
+    )
+    second = worker_tasks._revoke_enrollment_cleanup_core(
+        enrollment_repo, user_repo, media_repo, embedding_repo, audit_repo, s3_client, session.id
+    )
+
+    assert first == "executed"
+    assert second == "executed"  # no-op, not an error
+    # Second run found nothing left to delete and the user already tombstoned.
+    completed = [
+        e for e in audit_repo.entries if e["action"] == worker_tasks.REVOKE_COMPLETED_ACTION
+    ]
+    assert len(completed) == 2
+    assert completed[1]["payload"] == {"embeddings_deleted": 0, "media_deleted": 0}
+    # user.update was only called once (first run) — second run saw it was
+    # already tombstoned and skipped the redundant write.
+    assert user_repo.update_calls == [user]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        EnrollmentState.ENROLLED,
+        EnrollmentState.CREATED,
+        EnrollmentState.CANCELLED,
+        EnrollmentState.QC_RUNNING,
+    ],
+)
+def test_revoke_cleanup_skips_when_session_not_revoked(state: EnrollmentState) -> None:
+    session = _session(state)
+    user = _user(session.user_id)
+    media = [_media(session.id)]
+    embeddings = [_embedding(session.id, session.user_id)]
+
+    enrollment_repo = FakeEnrollmentRepo(session)
+    user_repo = FakeUserRepo(user)
+    media_repo = FakeMediaRepo(media)
+    embedding_repo = FakeEmbeddingRepo(embeddings)
+    audit_repo = FakeAuditRepo()
+    s3_client = FakeS3Client()
+
+    outcome = worker_tasks._revoke_enrollment_cleanup_core(
+        enrollment_repo, user_repo, media_repo, embedding_repo, audit_repo, s3_client, session.id
+    )
+
+    assert outcome == "skipped_not_revoked"
+    assert embedding_repo.delete_calls == []
+    assert media_repo.deleted == []
+    assert s3_client.deleted_objects == []
+    assert user.full_name != worker_tasks.TOMBSTONE_FULL_NAME
+    skipped = [
+        e for e in audit_repo.entries if e["action"] == worker_tasks.REVOKE_CLEANUP_SKIPPED_ACTION
+    ]
+    assert len(skipped) == 1
+    assert skipped[0]["payload"]["reason"] == "not_revoked"
+
+
+def test_revoke_cleanup_skips_when_session_not_found() -> None:
+    enrollment_repo = FakeEnrollmentRepo(None)
+    user_repo = FakeUserRepo(None)
+    media_repo = FakeMediaRepo([])
+    embedding_repo = FakeEmbeddingRepo([])
+    audit_repo = FakeAuditRepo()
+    s3_client = FakeS3Client()
+    missing_id = uuid.uuid4()
+
+    outcome = worker_tasks._revoke_enrollment_cleanup_core(
+        enrollment_repo, user_repo, media_repo, embedding_repo, audit_repo, s3_client, missing_id
+    )
+
+    assert outcome == "skipped_not_found"
+    assert audit_repo.entries[0]["payload"]["reason"] == "session_not_found"
+
+
+def test_revoke_enrollment_cleanup_has_expected_retry_config() -> None:
+    task = celery_app.tasks["app.worker.tasks.revoke_enrollment_cleanup"]
+    assert task.autoretry_for == worker_tasks.RETRYABLE_EXCEPTIONS
+    assert task.retry_backoff is True
+    assert task.max_retries == 5
+    assert issubclass(task.__class__, worker_tasks.DeadLetterTask)
+
+
+def test_revoke_enrollment_cleanup_dead_letters_after_retries_exhausted(
+    monkeypatch, eager_celery
+) -> None:
+    """Same dead-letter guarantee as run_enrollment_qc (NFR-OPS-02), proven
+    against the actual `revoke_enrollment_cleanup` task this time — a
+    permanent failure (e.g. Postgres/S3 down for good) must not silently
+    disappear."""
+    audit_sink: list = []
+    monkeypatch.setattr(
+        worker_tasks, "get_sessionmaker", lambda: lambda: _FakeDbSession(audit_sink)
+    )
+
+    def _boom(*args, **kwargs):
+        raise ConnectionError("simulated permanent DB/S3 outage")
+
+    monkeypatch.setattr(worker_tasks, "EnrollmentSessionRepository", _boom)
+    monkeypatch.setattr(worker_tasks.celery_app.tasks[
+        "app.worker.tasks.revoke_enrollment_cleanup"
+    ], "max_retries", 1)
+
+    result = worker_tasks.revoke_enrollment_cleanup.apply(args=[str(uuid.uuid4())])
+
+    assert result.state == "FAILURE"
+    dead_letters = [e for e in audit_sink if e.action == worker_tasks.DEAD_LETTER_ACTION]
+    assert len(dead_letters) == 1
+    assert dead_letters[0].payload["task"] == "app.worker.tasks.revoke_enrollment_cleanup"
     assert dead_letters[0].payload["exception_type"] == "ConnectionError"

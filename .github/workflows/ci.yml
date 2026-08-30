@@ -57,6 +57,17 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check .
       - name: Test (pytest)
+        # Tests never open a real DB connection (repos are overridden with
+        # fakes/mocks), but SQLAlchemy's engine construction still needs a
+        # syntactically valid DATABASE_URL to exist -- without it, endpoints
+        # that declare a `db: Session = Depends(get_db)` param raise a
+        # RuntimeError before the auth dependency ever gets to return 401,
+        # turning "requires authentication" tests into 500s. A committed
+        # backend/.env would mask this locally (pydantic-settings auto-loads
+        # it); CI has no .env, so these must be set explicitly here.
+        env:
+          DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/ci
+          JWT_SECRET_KEY: ci-test-secret-not-for-real-use-0123456789
         run: uv run pytest -q
 
   frontend:
