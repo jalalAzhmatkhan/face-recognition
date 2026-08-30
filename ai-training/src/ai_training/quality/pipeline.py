@@ -98,7 +98,9 @@ def extract_frames(video_bytes: bytes, *, fps_sample: float = 6.0) -> list[Any]:
 
 
 def _evaluate_frame(frame: Any, settings: QCSettings) -> FrameQuality | None:
-    detection = detect_face_and_landmarks(frame)
+    detection = detect_face_and_landmarks(
+        frame, model_path=settings.face_landmarker_model_path or None
+    )
     if detection is None:
         return None
 

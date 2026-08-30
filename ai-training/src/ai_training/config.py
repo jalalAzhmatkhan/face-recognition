@@ -111,6 +111,17 @@ class QCSettings(BaseModel):
     # camera/lighting variance without a hard all-12-or-nothing gate. Tune
     # once real capture data exists.
     min_pass_ratio: float = 0.75
+    # Path to the official MediaPipe Face Landmarker `.task` model bundle
+    # (Apache-2.0, published by Google at
+    # https://storage.googleapis.com/mediapipe-models/face_landmarker/...)
+    # -- unrelated to the SCRFD/AdaFace/MiniFASNet licensing question
+    # (documentation/research/recommendations.md): this is a generic
+    # landmark detector, not a proprietary face-recognition embedding
+    # model, and Google explicitly distributes it for free reuse. Default
+    # assumes the repo-relative `ai-training/models/face_landmarker.task`
+    # this project bundles (self-hosted, no runtime download -- same
+    # pattern as FE-04's self-hosted face-api weights).
+    face_landmarker_model_path: str = ""
 
 
 class EmbedderSettings(BaseModel):

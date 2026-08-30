@@ -90,17 +90,42 @@ def nearest_clock_position(
 # at the nose tip) used for `cv2.solvePnP`. These are widely-published
 # approximate anthropometric constants (not a trained/licensed model
 # artifact — plain geometry), the same set commonly used for OpenCV
-# head-pose-estimation tutorials.
-_GENERIC_3D_FACE_MODEL = np.array(
-    [
-        [0.0, 0.0, 0.0],  # nose tip
-        [0.0, -63.6, -12.5],  # chin
-        [-43.3, 32.7, -26.0],  # left eye outer corner
-        [43.3, 32.7, -26.0],  # right eye outer corner
-        [-28.9, -28.9, -24.1],  # left mouth corner
-        [28.9, -28.9, -24.1],  # right mouth corner
-    ],
-    dtype=np.float64,
+# head-pose-estimation tutorials, in their ORIGINAL Y-up/Z-toward-viewer
+# convention (chin/mouth at negative Y = "below" in a Y-up frame; eyes/
+# mouth at negative Z = "toward the viewer" relative to the nose tip).
+#
+# That convention does not match this module's 2D side: `_px()` returns
+# pixel coordinates where Y increases DOWNWARD (image convention), and
+# `cv2.solvePnP`'s camera model has Z increasing AWAY from the camera.
+# Feeding the original Y-up/Z-toward-viewer points straight into solvePnP
+# alongside Y-down pixel coordinates introduces a constant ~180-degree
+# bias on the extracted pitch specifically (confirmed live, 2026-08-30,
+# against a real portrait via all three solvePnP methods tried
+# (ITERATIVE/EPNP/SQPNP): yaw and roll came out correct (~0 deg for a
+# frontal face) but pitch was ~-155 deg instead of the expected ~0-25 deg
+# range -- i.e. off by very close to 180 deg). This had never been caught
+# because `estimate_pose_from_landmarks` was never actually exercised
+# against a real frame before mediapipe's Solutions-API-to-Tasks-API
+# migration (TR-02 was written and merged before face/landmark detection
+# could run at all in this environment, see `detect_face_and_landmarks`).
+#
+# Fix: negate Y and Z so the model is expressed in the same Y-down/
+# Z-away-from-camera frame solvePnP's other inputs already use. Verified
+# live: pitch changed from -155.7 to +24.3 deg on the same real portrait
+# (yaw/roll unchanged, as expected -- only Y/Z were negated, not X).
+_GENERIC_3D_FACE_MODEL = (
+    np.array(
+        [
+            [0.0, 0.0, 0.0],  # nose tip
+            [0.0, -63.6, -12.5],  # chin
+            [-43.3, 32.7, -26.0],  # left eye outer corner
+            [43.3, 32.7, -26.0],  # right eye outer corner
+            [-28.9, -28.9, -24.1],  # left mouth corner
+            [28.9, -28.9, -24.1],  # right mouth corner
+        ],
+        dtype=np.float64,
+    )
+    * np.array([1.0, -1.0, -1.0])  # flip Y and Z into image/camera convention; X unchanged
 )
 
 # MediaPipe FaceMesh landmark indices for the 6 solvePnP points. The same
@@ -161,6 +186,33 @@ def _require_mediapipe() -> Any:
     return mp
 
 
+def _default_face_landmarker_model_path() -> str:
+    """`<ai-training project root>/models/face_landmarker.task`.
+
+    `pose.py` lives at `src/ai_training/quality/pose.py`; `parents[3]` from
+    there is the `ai-training/` project root (quality -> ai_training -> src
+    -> ai-training), sibling to `models/`.
+    """
+    from pathlib import Path
+
+    return str(Path(__file__).resolve().parents[3] / "models" / "face_landmarker.task")
+
+
+def _resolve_face_landmarker_model_path(model_path: str | None) -> str:
+    resolved = model_path or _default_face_landmarker_model_path()
+    from pathlib import Path
+
+    if not Path(resolved).is_file():
+        raise RuntimeError(
+            f"MediaPipe Face Landmarker model not found at '{resolved}'. Download the official "
+            "Apache-2.0 model bundle from "
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/"
+            "float16/1/face_landmarker.task and place it there (or set "
+            "TRN_QC__FACE_LANDMARKER_MODEL_PATH)."
+        )
+    return resolved
+
+
 def _require_cv2() -> Any:
     try:
         import cv2
@@ -171,27 +223,50 @@ def _require_cv2() -> Any:
     return cv2
 
 
-def detect_face_and_landmarks(frame_bgr: np.ndarray) -> FaceDetection | None:
+def detect_face_and_landmarks(
+    frame_bgr: np.ndarray, *, model_path: str | None = None
+) -> FaceDetection | None:
     """Detect the (single, largest) face in a BGR frame and return its
     landmarks in pixel coordinates, or `None` if no face is found.
 
-    Uses MediaPipe's legacy `solutions.face_mesh` API, whose model asset is
-    bundled inside the installed `mediapipe` package (no separate download
-    at runtime) — see the `ml` extra rationale in pyproject.toml.
+    **Migrated from the legacy `mp.solutions.face_mesh` API to MediaPipe's
+    Tasks API (`mediapipe.tasks.python.vision.FaceLandmarker`)**: found live
+    (TR-04/TR-05 verification, 2026-08-30) that `mp.solutions` does not
+    exist at all in any installable mediapipe wheel for Python 3.12 (tried
+    1.0.1 and 0.10.35 on Windows cp312 -- neither ships a `mediapipe.python`
+    submodule on disk; no `solutions`-era mediapipe release has a cp312
+    wheel to fall back to). MediaPipe deprecated the legacy Solutions API
+    project-wide in favour of Tasks in late 2023, so this was never going
+    to work on any platform for this Python version, not just locally.
+
+    `FaceLandmarker` uses the SAME 468-point face-mesh landmark topology as
+    the old `face_mesh` solution, so the `_MP_*` index constants below are
+    unchanged and still correct. It requires an explicit model asset (a
+    `.task` file) rather than a model bundled inside the pip wheel --
+    `model_path` defaults to the repo-bundled
+    `ai-training/models/face_landmarker.task` (official Apache-2.0 Google
+    asset, downloaded once and committed, not fetched at runtime) but can
+    be overridden (e.g. `QCSettings.face_landmarker_model_path`).
     """
     mp = _require_mediapipe()
+    from mediapipe.tasks.python import vision
+    from mediapipe.tasks.python.core.base_options import BaseOptions
+
+    resolved_model_path = _resolve_face_landmarker_model_path(model_path)
     h, w = frame_bgr.shape[:2]
-    with mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        refine_landmarks=False,
-        min_detection_confidence=0.5,
-    ) as face_mesh:
-        rgb = frame_bgr[:, :, ::-1]  # BGR -> RGB, mediapipe convention
-        result = face_mesh.process(rgb)
-        if not result.multi_face_landmarks:
+    options = vision.FaceLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=resolved_model_path),
+        running_mode=vision.RunningMode.IMAGE,
+        num_faces=1,
+        min_face_detection_confidence=0.5,
+    )
+    with vision.FaceLandmarker.create_from_options(options) as landmarker:
+        rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])  # BGR -> RGB, mediapipe convention
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = landmarker.detect(mp_image)
+        if not result.face_landmarks:
             return None
-        landmarks = result.multi_face_landmarks[0].landmark
+        landmarks = result.face_landmarks[0]
 
         def _px(idx: int) -> tuple[float, float]:
             lm = landmarks[idx]
