@@ -43,6 +43,18 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--model-version", required=True)
     evaluate.add_argument("--benchmark-id", required=True)
 
+    download_weights = sub.add_parser(
+        "download-adaface-weights",
+        help="Download + normalize the AdaFace pretrained checkpoint (TR-06). "
+        "Requires the 'ml' extra (gdown, torch).",
+    )
+    download_weights.add_argument(
+        "--arch", default="ir_101", help="AdaFace arch tag, e.g. ir_101 (default) or ir_50."
+    )
+    download_weights.add_argument(
+        "--output", default=None, help="Override the default ai-training/models/... output path."
+    )
+
     return parser
 
 
@@ -91,7 +103,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"eda report written: datasets/{args.snapshot_id}/eda_report.json and eda_report.md")
         return 0
 
-    # Stage stubs: implemented by TR-06/TR-07.
+    if args.command == "download-adaface-weights":
+        from ai_training.download_adaface_weights import download_adaface_weights
+
+        try:
+            destination = download_adaface_weights(arch=args.arch, output_path=args.output)
+        except (RuntimeError, ValueError) as exc:
+            print(f"download-adaface-weights: {exc}", file=sys.stderr)
+            return 2
+        print(f"AdaFace weights downloaded: {destination}")
+        return 0
+
+    # Stage stubs: implemented by TR-07.
     print(f"'{args.command}' is not implemented yet (scaffold TR-01).", file=sys.stderr)
     return 2
 

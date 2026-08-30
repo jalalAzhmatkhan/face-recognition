@@ -57,6 +57,13 @@ ml = [
     # all, so face/landmark detection failed at import time with a real
     # video. Pin below 1.0 until pose.py is migrated to the Tasks API.
     "mediapipe>=0.10,<1.0",
+    # AdaFace pretrained weights (TR-06) are hosted on Google Drive by
+    # upstream (github.com/mk-minchul/adaface), not in their GitHub repo.
+    # `gdown` handles Drive's "file too large to virus-scan, download
+    # anyway?" confirmation-page redirect for these ~100-250MB checkpoints
+    # transparently (a plain `requests.get` would just fetch the HTML
+    # confirmation page instead of the file).
+    "gdown>=5.2",
 ]
 
 [project.scripts]
