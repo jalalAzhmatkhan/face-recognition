@@ -1,0 +1,402 @@
+/* S-50/S-51/S-52 Training & Model Management — plain CSS per project
+ * convention (see `device-management/DeviceManagement.css`), uses
+ * tokens.css vars. */
+
+.training-models-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.training-models-page__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.training-models-page__screen-id {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.training-models-denied {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-8);
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.training-models-denied__title {
+  margin: 0;
+  font: var(--text-h3);
+  color: var(--text-primary);
+}
+
+.training-models-card {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.training-models-card--empty {
+  align-items: flex-start;
+  color: var(--text-secondary);
+}
+
+.training-models-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.training-models-card__title {
+  margin: 0;
+  font: var(--text-h3);
+}
+
+.training-models-card__empty-hint {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.training-models-card__version {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.training-models-card__recall {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.training-models-card__recall-value {
+  font: var(--text-display);
+  color: var(--success);
+}
+
+.training-models-card__recall-label {
+  color: var(--text-secondary);
+  font: var(--text-small);
+}
+
+.training-models-card__metrics {
+  margin: 0;
+  display: flex;
+  gap: var(--space-6);
+  flex-wrap: wrap;
+}
+
+.training-models-card__metrics div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.training-models-card__metrics dt {
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.training-models-card__metrics dd {
+  margin: 0;
+  font: var(--text-h3);
+}
+
+.training-models-card__promoted {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-small);
+}
+
+.training-models-section {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.training-models-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.training-models-section__title {
+  margin: 0;
+  font: var(--text-h3);
+}
+
+.training-models-section__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-small);
+}
+
+.training-models-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-16) var(--space-4);
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.training-models-empty__title {
+  margin: 0;
+  font: var(--text-h3);
+  color: var(--text-primary);
+}
+
+.training-models-empty__hint {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.training-models-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.training-models-table th,
+.training-models-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.training-models-table thead tr {
+  border-bottom: var(--border-w) solid var(--border-default);
+}
+
+.training-models-table tbody tr {
+  border-bottom: var(--border-w) solid var(--border-default);
+}
+
+/* Dialogs (StartTrainingDialog, PromoteConfirmDialog) */
+
+.training-models-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.training-models-dialog {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-6);
+  max-width: 520px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.training-models-dialog__title {
+  margin: 0;
+  font: var(--text-h3);
+}
+
+.training-models-dialog__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font: var(--text-small);
+}
+
+.training-models-dialog__notes {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+}
+
+.training-models-dialog__notes-warning {
+  color: var(--warning);
+}
+
+.training-models-dialog__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.training-models-dialog__form input[type='text'],
+.training-models-dialog__form input:not([type]) {
+  min-height: var(--touch-target);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--border-default);
+}
+
+.training-models-dialog__checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font: var(--text-small);
+  color: var(--text-secondary);
+}
+
+.training-models-dialog__error {
+  margin: 0;
+  color: var(--danger);
+  font: var(--text-small);
+}
+
+.training-models-dialog__actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* S-51 job header */
+
+.training-models-job-header {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-left: 4px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.training-models-job-header--pending,
+.training-models-job-header--running {
+  border-left-color: var(--info);
+}
+
+.training-models-job-header--succeeded {
+  border-left-color: var(--success);
+}
+
+.training-models-job-header--failed {
+  border-left-color: var(--danger);
+}
+
+.training-models-job-header__meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.training-models-job-header__meta dt {
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.training-models-job-header__meta dd {
+  margin: 0;
+}
+
+.training-models-job-header__mlflow-note {
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.training-models-metrics-hierarchy {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.training-models-metrics-hierarchy__primary dd {
+  font: var(--text-display);
+  color: var(--success);
+  margin: 0;
+}
+
+.training-models-log-tail pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-sunken);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+/* S-52 gate checklist */
+
+.training-models-gate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.training-models-gate-item {
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.training-models-gate-item--pass {
+  background: var(--success-subtle-bg);
+  color: var(--success);
+}
+
+.training-models-gate-item--fail {
+  background: var(--danger-subtle-bg);
+  color: var(--danger);
+}
+
+.training-models-gate-item__label {
+  font-weight: 600;
+}
+
+.training-models-gate-item__note {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font: var(--text-small);
+}
+
+.training-models-server-reasons {
+  background: var(--danger-subtle-bg);
+  color: var(--danger);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.training-models-server-reasons ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+.training-models-success-banner {
+  background: var(--success-subtle-bg);
+  color: var(--success);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-6);
+}

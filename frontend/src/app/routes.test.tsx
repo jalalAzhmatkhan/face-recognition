@@ -59,8 +59,23 @@ describe('routing shell', () => {
     ['/users', 'Users'],
     ['/enrollments', 'Enrollment'],
     ['/devices', 'Devices'],
-    ['/models', 'Models & Training'],
   ])('renders placeholder screen at %s', (path, heading) => {
+    renderAt(path)
+    expect(
+      screen.getByRole('heading', { level: 1, name: heading }),
+    ).toBeInTheDocument()
+  })
+
+  // FE-09: /models is a real implementation now (not a placeholder), and
+  // has two nested detail routes (S-51/S-52). All three are ADMIN-only —
+  // see `features/training-models/roleGating.ts` — and the fake token here
+  // carries role ADMIN, so these smoke-test that each route renders its own
+  // heading rather than falling through to 404.
+  it.each([
+    ['/models', 'Models & Training'],
+    ['/models/jobs/some-job-id', 'Training Job Detail'],
+    ['/models/some-version/promote', 'Promotion Review'],
+  ])('renders the FE-09 training/models screen at %s', (path, heading) => {
     renderAt(path)
     expect(
       screen.getByRole('heading', { level: 1, name: heading }),
