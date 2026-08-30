@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     # never a permissive "*" fallback. Comma-separated list of exact origins.
     cors_allow_origins: str = ""
 
+    # Device heartbeat staleness (BE-09, FR-USR-04). v1 simplification: there
+    # is no Celery-beat/scheduled-task infra yet (app/worker/ only has
+    # on-demand tasks — see app/worker/tasks.py) to auto-transition a
+    # stale device's `status` row to OFFLINE, so `GET /devices` instead
+    # computes an `is_stale` field per-response by comparing
+    # `last_heartbeat_at` against this threshold "now". A real
+    # auto-transition (heartbeat monitor job flipping ONLINE -> OFFLINE) is
+    # a follow-up once scheduled-task infra exists.
+    device_heartbeat_stale_after_seconds: int = 90
+
     @property
     def cors_allow_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]

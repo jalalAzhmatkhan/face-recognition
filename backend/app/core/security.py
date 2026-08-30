@@ -11,6 +11,7 @@ Library choices (documented per task instructions):
   needed here.
 """
 
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -48,6 +49,61 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
         return _hasher.verify(password_hash, plain_password)
     except (VerifyMismatchError, VerificationError, InvalidHashError):
         return False
+
+
+def hash_secret(plain_secret: str) -> str:
+    """Alias of `hash_password` for non-password secrets (BE-09 device
+    credentials). Argon2id has no reason to differ by "kind" of secret —
+    kept as a distinct name at call sites purely for readability."""
+    return _hasher.hash(plain_secret)
+
+
+def verify_secret(plain_secret: str, secret_hash: str) -> bool:
+    """Alias of `verify_password` for non-password secrets (BE-09)."""
+    return verify_password(plain_secret, secret_hash)
+
+
+def generate_device_credential() -> tuple[str, str, str]:
+    """Generate a new per-device token credential (BE-09, NFR-SEC-04).
+
+    Returns `(credential_id, plaintext_secret, plaintext_token)`:
+    - `credential_id`: short, non-secret, URL/DB-safe identifier used to
+      look a device up by presented token (stored in
+      `devices.auth_credential_ref`, UNIQUE).
+    - `plaintext_secret`: the actual high-entropy secret. Only its Argon2id
+      hash (`hash_secret`) is ever persisted (`devices.credential_hash`).
+    - `plaintext_token`: `f"{credential_id}.{plaintext_secret}"` — the
+      single string returned to the API caller exactly once (POST
+      /devices or POST /devices/{id}/rotate-credential response body) and
+      never stored anywhere in plaintext. The device presents this same
+      string as its bearer token on subsequent calls (e.g. heartbeat).
+
+    Design note: this is a simpler, non-mTLS substitute for the "per-device
+    credential / mTLS token" NFR-SEC-04 calls for — same simplification
+    philosophy as staff JWT auth standing in for full OIDC (see
+    app/core/security.py module docstring). Real X.509/mTLS device
+    provisioning is out of scope for v1 (BE-09 task instructions).
+    """
+    credential_id = secrets.token_hex(8)  # 16 hex chars — non-secret lookup key
+    plaintext_secret = secrets.token_urlsafe(32)  # ~256 bits of entropy
+    plaintext_token = format_device_token(credential_id, plaintext_secret)
+    return credential_id, plaintext_secret, plaintext_token
+
+
+def format_device_token(credential_id: str, plaintext_secret: str) -> str:
+    return f"{credential_id}.{plaintext_secret}"
+
+
+def parse_device_token(token: str) -> tuple[str, str] | None:
+    """Split a presented device bearer token into `(credential_id, secret)`.
+
+    Returns `None` (never raises) for any malformed token — callers must
+    treat that identically to "credential not found" so a malformed vs.
+    unknown token can't be distinguished by an attacker (NFR-SEC-04)."""
+    credential_id, sep, secret = token.partition(".")
+    if not sep or not credential_id or not secret:
+        return None
+    return credential_id, secret
 
 
 def _encode(
