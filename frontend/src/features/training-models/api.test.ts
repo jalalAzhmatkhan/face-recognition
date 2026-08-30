@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   buildModelsQuery,
+  buildTrainingJobsQuery,
   createTrainingJob,
   describeApiError,
   getTrainingJob,
   listModels,
+  listTrainingJobs,
   promoteModel,
   promotionGateReasons,
 } from './api'
@@ -46,6 +48,22 @@ describe('buildModelsQuery', () => {
   })
 })
 
+describe('buildTrainingJobsQuery', () => {
+  it('always includes limit/offset with defaults', () => {
+    expect(buildTrainingJobsQuery({})).toBe('limit=20&offset=0')
+  })
+
+  it('includes status and model_version when provided', () => {
+    expect(buildTrainingJobsQuery({ status: 'FAILED', model_version: 'facenet-v2' })).toBe(
+      'status=FAILED&model_version=facenet-v2&limit=20&offset=0',
+    )
+  })
+
+  it('honors an explicit limit/offset', () => {
+    expect(buildTrainingJobsQuery({ limit: 5, offset: 10 })).toBe('limit=5&offset=10')
+  })
+})
+
 describe('authenticated training-models requests', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
@@ -83,6 +101,19 @@ describe('authenticated training-models requests', () => {
     expect(url).toContain('/api/v1/training/jobs/job-1')
     expect(init.method ?? 'GET').toBe('GET')
     expect(result.status).toBe('PENDING')
+  })
+
+  it('listTrainingJobs GETs /training/jobs with the built query string', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ items: [sampleJob], total: 1, limit: 20, offset: 0 }), {
+        status: 200,
+      }),
+    )
+    const result = await listTrainingJobs({ status: 'PENDING' })
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/api/v1/training/jobs?status=PENDING&limit=20&offset=0')
+    expect(result.total).toBe(1)
+    expect(result.items).toHaveLength(1)
   })
 
   it('createTrainingJob POSTs {model_version, benchmark_id} to /training/jobs', async () => {

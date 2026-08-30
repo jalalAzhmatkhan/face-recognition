@@ -4,7 +4,9 @@ import type {
   ModelPromoteResponse,
   ModelStage,
   ModelVersionListResponse,
+  TrainingJobListResponse,
   TrainingJobResponse,
+  TrainingJobStatus,
 } from './types'
 import { getAccessToken, refreshAccessToken } from '../../lib/authToken'
 
@@ -86,15 +88,41 @@ export async function listModels(
   return (await response.json()) as ModelVersionListResponse
 }
 
-/** `GET /training/jobs/{id}` — ADMIN/OPERATOR at the backend. There is
- * deliberately NO `listTrainingJobs` export here: BE-13
- * (`backend/app/routers/training.py`) does not expose a list endpoint, only
- * single-job lookup by id. See `sessionJobs.ts` for how the UI works around
- * this (GAP — candidate follow-up task "BE-15: GET /training/jobs list
- * endpoint"). */
+/** `GET /training/jobs/{id}` — ADMIN/OPERATOR at the backend. */
 export async function getTrainingJob(id: string): Promise<TrainingJobResponse> {
   const response = await authFetch(`/api/v1/training/jobs/${encodeURIComponent(id)}`)
   return (await response.json()) as TrainingJobResponse
+}
+
+export interface ListTrainingJobsParams {
+  status?: TrainingJobStatus
+  model_version?: string
+  limit?: number
+  offset?: number
+}
+
+/** Exported separately so the query-string building is testable without
+ * mocking fetch, mirrors `buildModelsQuery`/`device-management`'s
+ * `buildListQuery`. */
+export function buildTrainingJobsQuery(params: ListTrainingJobsParams): string {
+  const search = new URLSearchParams()
+  if (params.status) search.set('status', params.status)
+  if (params.model_version) search.set('model_version', params.model_version)
+  search.set('limit', String(params.limit ?? 20))
+  search.set('offset', String(params.offset ?? 0))
+  return search.toString()
+}
+
+/** `GET /training/jobs` (BE-15) — ADMIN/OPERATOR, newest first. Closes the
+ * gap FE-09 originally worked around with a browser-localStorage-only list
+ * (see git history / task-breakdown.md's BE-15 entry) — this is now the
+ * real server-side training-run history. */
+export async function listTrainingJobs(
+  params: ListTrainingJobsParams = {},
+): Promise<TrainingJobListResponse> {
+  const query = buildTrainingJobsQuery(params)
+  const response = await authFetch(`/api/v1/training/jobs?${query}`)
+  return (await response.json()) as TrainingJobListResponse
 }
 
 /** `POST /training/jobs` — ADMIN only (FR-TRN-02, manual trigger). */

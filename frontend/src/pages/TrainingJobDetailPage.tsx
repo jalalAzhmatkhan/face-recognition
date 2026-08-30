@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import PagePlaceholder from './PagePlaceholder'
 import {
   createTrainingJob,
@@ -11,7 +11,6 @@ import {
 import { canAccessTrainingModels } from '../features/training-models/roleGating'
 import { getCurrentRole } from '../lib/authToken'
 import JobStatusBadge from '../features/training-models/JobStatusBadge'
-import { addSessionTrainingJob } from '../features/training-models/sessionJobs'
 import { IN_FLIGHT_JOB_STATUSES } from '../features/training-models/types'
 import type { TrainingJobStatus } from '../features/training-models/types'
 import '../features/training-models/TrainingModels.css'
@@ -51,6 +50,7 @@ export default function TrainingJobDetailPage() {
   const role = getCurrentRole()
   const allowed = canAccessTrainingModels(role)
   const [retriedJobId, setRetriedJobId] = useState<string | null>(null)
+  const queryClient = useQueryClient()
 
   const jobQuery = useQuery({
     queryKey: ['training-job', id],
@@ -76,13 +76,8 @@ export default function TrainingJobDetailPage() {
         benchmark_id: job?.benchmark_id ?? '',
       }),
     onSuccess: (newJob) => {
-      addSessionTrainingJob({
-        id: newJob.id,
-        model_version: newJob.model_version ?? '',
-        benchmark_id: newJob.benchmark_id,
-        created_at: newJob.created_at,
-      })
       setRetriedJobId(newJob.id)
+      void queryClient.invalidateQueries({ queryKey: ['training-jobs', 'list'] })
     },
   })
 
