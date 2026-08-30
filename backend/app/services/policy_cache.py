@@ -61,6 +61,8 @@ class RedisLike(Protocol):
 
     def delete(self, name: str) -> object: ...
 
+    def publish(self, channel: str, message: str) -> object: ...
+
 
 class PolicySnapshotEntry(BaseModel):
     door_group: str

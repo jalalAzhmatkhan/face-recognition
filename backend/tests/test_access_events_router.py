@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.redis_client import get_redis_client
+from app.core.redis_client import get_async_redis_client, get_redis_client
 from app.dependencies.auth import CurrentStaff, get_current_staff
 from app.dependencies.device_auth import get_device_repository as get_device_repository_auth
 from app.main import create_app
@@ -130,6 +130,7 @@ class FakeUserRepository:
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
+        self.published: list[tuple[str, str]] = []
 
     def get(self, name: str):
         return self.store.get(name)
@@ -140,6 +141,42 @@ class FakeRedis:
 
     def delete(self, name: str):
         return 1 if self.store.pop(name, None) is not None else 0
+
+    def publish(self, channel: str, message: str):
+        self.published.append((channel, message))
+        return 1
+
+
+class FailingPublishRedis(FakeRedis):
+    """A FakeRedis whose `publish` always raises, to exercise the
+    best-effort/non-fatal publish path in `ingest_access_event` (BE-11)."""
+
+    def publish(self, channel: str, message: str):
+        raise ConnectionError("simulated Redis outage on publish")
+
+
+class _NullAsyncPubSub:
+    """Minimal async pubsub stand-in for router-level smoke tests of the
+    SSE endpoint (media_type/RBAC) that never need a real message —
+    see tests/test_access_event_stream.py for the generator's real
+    fake-pubsub-driven behavior tests."""
+
+    async def subscribe(self, channel: str) -> None:
+        return None
+
+    async def unsubscribe(self, channel: str | None = None) -> None:
+        return None
+
+    async def get_message(self, ignore_subscribe_messages: bool = True, timeout: float = 1.0):
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+class NullAsyncRedis:
+    def pubsub(self) -> _NullAsyncPubSub:
+        return _NullAsyncPubSub()
 
 
 def _make_device(door_group: str = "main-entrance") -> Device:
@@ -241,6 +278,7 @@ def _client(
     policy_repo: FakeAccessPolicyRepository,
     redis_client: FakeRedis,
     staff_role: StaffRole | None = None,
+    async_redis_client: object | None = None,
 ) -> TestClient:
     app = create_app()
     app.dependency_overrides[get_device_repository_auth] = lambda: device_repo
@@ -250,6 +288,9 @@ def _client(
     app.dependency_overrides[get_user_repository] = lambda: user_repo
     app.dependency_overrides[get_access_policy_repository] = lambda: policy_repo
     app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_async_redis_client] = lambda: (
+        async_redis_client if async_redis_client is not None else NullAsyncRedis()
+    )
     if staff_role is not None:
         app.dependency_overrides[get_current_staff] = lambda: CurrentStaff(
             id=uuid.uuid4(), email=f"{staff_role.value.lower()}@example.com", role=staff_role
@@ -562,6 +603,60 @@ def test_ingest_device_id_always_comes_from_token_not_body(
     assert event_repo.events[0].device_id != uuid.UUID(other_device_id)
 
 
+def test_ingest_publishes_event_to_redis_after_persisting(
+    device_repo, event_repo, user_repo, policy_repo, redis_client, device, device_credential
+) -> None:
+    """BE-11: after the access_events row is saved, the same event is
+    published (JSON) to the `access-events` Redis pub/sub channel for the
+    SSE live-stream endpoint to pick up."""
+    import json
+
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+    )
+    response = client.post(
+        "/api/v1/access-events",
+        json={"decision": "DENIED"},
+        headers=_auth_headers(device_credential),
+    )
+    assert response.status_code == 201
+    assert len(redis_client.published) == 1
+    channel, message = redis_client.published[0]
+    assert channel == "access-events"
+    payload = json.loads(message)
+    assert payload["id"] == str(event_repo.events[0].id)
+    assert payload["decision"] == "DENIED"
+    assert payload["device_id"] == str(device.id)
+    assert payload["door_command_issued"] is False
+
+
+def test_ingest_publish_failure_does_not_fail_the_request(
+    device_repo, event_repo, user_repo, policy_repo, device, device_credential
+) -> None:
+    """A Redis outage on the publish call must never fail ingestion — the
+    access_events row is the audit source of truth (see
+    access_event_service._publish_access_event's docstring)."""
+    redis_client = FailingPublishRedis()
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+    )
+    response = client.post(
+        "/api/v1/access-events",
+        json={"decision": "DENIED"},
+        headers=_auth_headers(device_credential),
+    )
+    assert response.status_code == 201
+    assert len(event_repo.events) == 1
+
+
 def test_ingest_disabled_device_is_403(
     device_repo, event_repo, user_repo, policy_repo, redis_client, device, device_credential
 ) -> None:
@@ -731,3 +826,62 @@ def test_list_orders_newest_first(
     items = response.json()["items"]
     assert items[0]["id"] == str(newer.id)
     assert items[1]["id"] == str(older.id)
+
+
+# --- GET /stream/access-events (SSE live feed) ------------------------------
+#
+# These are router-level smoke tests only (media_type + RBAC wiring). The
+# generator's actual message/filter/keep-alive/cleanup behavior is unit
+# tested directly against a fake async Redis client in
+# tests/test_access_event_stream.py — see that module's docstring for why a
+# full HTTP round trip is a poor fit for testing a stream that runs
+# "forever".
+
+
+def test_stream_requires_authentication(
+    device_repo, event_repo, user_repo, policy_repo, redis_client
+) -> None:
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+    )
+    response = client.get("/api/v1/stream/access-events")
+    assert response.status_code == 401
+
+
+def test_stream_allowed_for_viewer_returns_event_stream_media_type(
+    device_repo, event_repo, user_repo, policy_repo, redis_client, monkeypatch
+) -> None:
+    """The real `stream_access_events` generator runs until the client
+    disconnects — which a synchronous in-process `TestClient` (no real ASGI
+    server/transport doing a real disconnect) cannot reliably signal without
+    flaky, timing-dependent plumbing. So this test monkeypatches the
+    router's `stream_access_events` with a FINITE fake (one chunk, then
+    done) to verify the router wires up the right `media_type`/headers/RBAC
+    via a normal, fully-consumed HTTP response — the real generator's
+    message/filter/keep-alive/disconnect-cleanup behavior is covered
+    directly in tests/test_access_event_stream.py."""
+    import app.routers.access_events as access_events_router
+
+    async def fake_stream_access_events(*_args, **_kwargs):
+        yield "data: {}\n\n"
+
+    monkeypatch.setattr(access_events_router, "stream_access_events", fake_stream_access_events)
+
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+        staff_role=StaffRole.VIEWER,
+    )
+    response = client.get("/api/v1/stream/access-events")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.text == "data: {}\n\n"
