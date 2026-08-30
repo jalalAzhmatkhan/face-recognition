@@ -76,6 +76,26 @@ def guarded_transition(
     return cursor.rowcount == 1
 
 
+def list_enrolled_sessions(cursor: Cursor) -> list[tuple[str, str]]:
+    """Return `(session_id, user_id)` for every session currently `ENROLLED`
+    (TR-08, FR-TRN-06). This is the universe the gallery re-embed job walks
+    — a session that never reached ENROLLED never had gallery embeddings to
+    begin with, and REVOKED/CANCELLED sessions must not be re-added to the
+    gallery (their embeddings were already hard-deleted by BE-08's
+    revocation cleanup, or never existed).
+
+    Explicit `str(...)` coercion: found live — psycopg returns native
+    `uuid.UUID` objects for UUID columns, not strings, which crashed
+    `QCReport` pydantic validation (it requires `session_id: str`) the
+    first time this ran against real Postgres. Same class of bug as the
+    UUID-coercion fix in `dataset_repo.py` (TR-04/05) — not caught by any
+    mocked test because a `FakeCursor` naturally hands back whatever
+    Python type the test itself put in.
+    """
+    cursor.execute("SELECT id, user_id FROM enrollment_sessions WHERE state = 'ENROLLED'")
+    return [(str(row[0]), str(row[1])) for row in cursor.fetchall()]
+
+
 def get_latest_finalized_video(cursor: Cursor, session_id: str) -> tuple[str, str] | None:
     """Return `(s3_bucket, s3_key)` of the most recent FINALIZED video
     media object for this session, or `None` if there isn't one yet."""

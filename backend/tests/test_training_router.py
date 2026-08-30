@@ -26,7 +26,7 @@ from app.routers.training import (
     get_model_version_repository,
     get_training_job_repository,
 )
-from app.services import training_queue
+from app.services import gallery_queue, training_queue
 
 
 class FakeTrainingJobRepository:
@@ -136,6 +136,19 @@ def _no_real_celery_dispatch(monkeypatch: pytest.MonkeyPatch):
         )
 
     monkeypatch.setattr(training_queue, "enqueue_training_job", _fake_enqueue)
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def _no_real_gallery_dispatch(monkeypatch: pytest.MonkeyPatch):
+    """Never touch a real Redis broker for the TR-08 gallery-reembed dispatch
+    either — same rationale as `_no_real_celery_dispatch` above."""
+    calls: list[str] = []
+
+    def _fake_enqueue(model_version):
+        calls.append(model_version)
+
+    monkeypatch.setattr(gallery_queue, "enqueue_gallery_reembed", _fake_enqueue)
     return calls
 
 
@@ -523,3 +536,27 @@ def test_promote_succeeds_and_retires_previous_production(
     assert model_repo._by_version["v1"].stage == ModelStage.RETIRED
     promoted_entry = next(e for e in audit_repo.entries if e["action"] == "model.promoted")
     assert promoted_entry["payload"]["retired_version"] == "v1"
+
+
+def test_promote_dispatches_gallery_reembed_on_success(
+    admin_client: TestClient,
+    model_repo: FakeModelVersionRepository,
+    _no_real_gallery_dispatch,
+) -> None:
+    """TR-08/FR-TRN-06: a successful promotion must dispatch gallery
+    re-embedding for the newly-PRODUCTION version."""
+    model_repo._by_version["v1"] = _make_model("v1", recall=0.9, latency_ms_p95=100)
+    response = admin_client.post("/api/v1/models/v1/promote", json={"confirm": True})
+    assert response.status_code == 200
+    assert _no_real_gallery_dispatch == ["v1"]
+
+
+def test_promote_does_not_dispatch_gallery_reembed_when_gate_fails(
+    admin_client: TestClient,
+    model_repo: FakeModelVersionRepository,
+    _no_real_gallery_dispatch,
+) -> None:
+    model_repo._by_version["v1"] = _make_model("v1", recall=0.5, latency_ms_p95=500)
+    response = admin_client.post("/api/v1/models/v1/promote", json={"confirm": True})
+    assert response.status_code == 409
+    assert _no_real_gallery_dispatch == []

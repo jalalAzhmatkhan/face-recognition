@@ -25,13 +25,14 @@ from celery import Task
 from ai_training.config import Settings, get_settings
 from ai_training.db.audit_repo import insert_audit_log
 from ai_training.db.connection import get_connection
-from ai_training.db.embedding_repo import upsert_embeddings
+from ai_training.db.embedding_repo import has_embeddings_for_model, upsert_embeddings
 from ai_training.db.enrollment_repo import (
     Cursor,
     get_latest_finalized_video,
     get_state,
     get_user_id,
     guarded_transition,
+    list_enrolled_sessions,
 )
 from ai_training.db.training_job_repo import (
     mark_job_failed,
@@ -518,6 +519,166 @@ def run_training_evaluation_job(
             )
         conn.commit()
         return outcome
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+GALLERY_REEMBED_ACTOR = "system:ai-training-worker"
+
+
+def run_gallery_reembed_job_core(
+    cursor: Cursor,
+    settings: Settings,
+    model_version: str,
+    *,
+    downloader: Any = _default_download_video,
+) -> dict[str, int]:
+    """TR-08 core logic: re-extract gallery embeddings for every ENROLLED
+    session under `model_version`, DB-cursor-injected for unit testing
+    (same split as `run_enrollment_qc_core`/`run_training_evaluation_job_core`).
+
+    **Blue/green via coexistence, not a flag** (see module/task docstring
+    below for the full rationale): this NEVER deletes an existing session's
+    embeddings for any OTHER model_version — `embedding_repo.upsert_embeddings`
+    only ever touches rows matching `(session_id, model_version)`. A
+    promoted-then-rolled-back model therefore always has a fully intact
+    gallery to roll back to, with no separate "restore" step.
+
+    **Idempotent**: `has_embeddings_for_model` skips a session that was
+    already re-embedded under this exact `model_version` (a retried/resumed
+    job, or the same model promoted twice, does not redo the work).
+
+    **Per-session failure isolation**: one session's video being missing,
+    undecodable, or briefly unreachable in S3 does not abort the whole
+    batch — it's counted as failed/skipped and the job moves on, mirroring
+    `retention_service.purge_expired_media`'s per-item try/except.
+
+    Returns counts (`processed`, `skipped_already_done`, `skipped_no_video`,
+    `failed`) for the audit log entry / Celery task result — there is no
+    dedicated job-status table for this yet (unlike `training_jobs` for
+    BE-13); see the Celery task's docstring for why that is an accepted
+    scope cut for TR-08's first version.
+    """
+    embedder = build_embedder(settings)
+    counts = {"processed": 0, "skipped_already_done": 0, "skipped_no_video": 0, "failed": 0}
+
+    for session_id, user_id in list_enrolled_sessions(cursor):
+        try:
+            if has_embeddings_for_model(cursor, session_id=session_id, model_version=model_version):
+                counts["skipped_already_done"] += 1
+                continue
+
+            media = get_latest_finalized_video(cursor, session_id)
+            if media is None:
+                counts["skipped_no_video"] += 1
+                continue
+            bucket, key = media
+            video_bytes = downloader(bucket, key, settings)
+
+            try:
+                _report, frames_by_position = run_quality_check(
+                    video_bytes, session_id=session_id, settings=settings.qc
+                )
+            except RuntimeError:
+                # Same "content problem, not a worker fault" classification
+                # as run_enrollment_qc_core's identical guard -- the video
+                # already passed QC once at enrollment time, so a decode
+                # failure here means the stored object itself is now bad
+                # (corrupted/replaced), not something a retry fixes.
+                logger.warning(
+                    "ai_training.worker.gallery_reembed_video_undecodable "
+                    "session_id=%s bucket=%s key=%s",
+                    session_id,
+                    bucket,
+                    key,
+                )
+                counts["failed"] += 1
+                continue
+
+            templates = extract_gallery_embeddings(frames_by_position, embedder)
+            upsert_embeddings(
+                cursor,
+                user_id=user_id,
+                session_id=session_id,
+                model_version=embedder.model_version,
+                embeddings=templates,
+            )
+            counts["processed"] += 1
+        except Exception:  # noqa: BLE001 - one session must never sink the whole batch
+            logger.exception(
+                "ai_training.worker.gallery_reembed_session_failed session_id=%s", session_id
+            )
+            counts["failed"] += 1
+
+    insert_audit_log(
+        cursor,
+        actor=GALLERY_REEMBED_ACTOR,
+        action="gallery.reembed_completed",
+        entity=f"model:{model_version}",
+        payload={"model_version": model_version, **counts},
+    )
+    return counts
+
+
+@celery_app.task(
+    name="app.worker.tasks.run_gallery_reembed_job",
+    base=DeadLetterTask,
+    bind=True,
+)
+def run_gallery_reembed_job(self: Task, model_version: str) -> dict[str, int]:
+    """FR-TRN-06: re-extract every ENROLLED session's gallery embeddings
+    under the just-promoted `model_version`. Dispatched by backend's
+    `app/services/gallery_queue.py` right after a successful
+    `POST /models/{version}/promote` (BE-13/TR-08), registered under the
+    identical task name — see `run_training_evaluation_job`'s docstring for
+    why backend's own copy of that name must never actually execute.
+
+    **Embedder note (same limitation as TR-03/TR-07)**: this uses whatever
+    embedder `build_embedder(settings)` resolves to from THIS worker's own
+    configuration (`TRN_EMBEDDER__BACKEND`/`TRN_EMBEDDER__ADAFACE_ARCH`) --
+    there is no dynamic per-model-version weight-loading registry anywhere
+    in this codebase yet. Operationally, whoever promotes a new model
+    version must first point the ai-training worker's config at that
+    model's weights; `model_version` here is used to LABEL the resulting
+    `face_embeddings` rows (and to look them up for the idempotency check),
+    not to select which weights get loaded.
+
+    **"Atomic switch" / "no mixed-version matching" (FR-TRN-06) note**:
+    this job does not need a separate "activate gallery version" step or an
+    `is_active` flag anywhere. `face_embeddings.model_version` already
+    exists as an indexed column (BE-02) -- once IN-07 (ai-inference's
+    model+gallery switch, not yet built) queries the gallery filtered by
+    the CURRENT PRODUCTION `models.version`, matching against a stale
+    model's embeddings becomes structurally impossible: the query itself
+    only ever sees rows tagged with the version it asks for. This job's
+    entire job is to make sure that query returns a POPULATED result the
+    moment a new version goes to PRODUCTION.
+
+    **No job-status table / progress API for this** (accepted scope cut):
+    unlike BE-13's `training_jobs`, there is nothing yet exposing "is the
+    gallery re-embed for version X done?" via HTTP -- progress is only
+    observable via the `gallery.reembed_completed` audit log entry (with
+    per-outcome counts) this task's core function writes. A dedicated
+    status API is a reasonable follow-up if this needs to be surfaced in
+    FE-09/S-52's promotion flow, same spirit as the BE-15 follow-up FE-09
+    itself produced.
+
+    **Scale target (task-breakdown.md: "≤ 5k user selesai dalam menit")**:
+    not load-tested here -- there is no 5k-real-enrollment dataset in this
+    environment to test against. Functional correctness is verified live
+    and by unit test; validating the throughput target at that scale is
+    QA-08's (load testing) job, not this task's.
+    """
+    settings = get_settings()
+    conn = get_connection(settings.db.dsn)
+    try:
+        with conn.cursor() as cursor:
+            counts = run_gallery_reembed_job_core(cursor, settings, model_version)
+        conn.commit()
+        return counts
     except Exception:
         conn.rollback()
         raise

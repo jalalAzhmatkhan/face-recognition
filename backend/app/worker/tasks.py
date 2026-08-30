@@ -477,3 +477,30 @@ def run_training_evaluation_job(
         "check that ai-training's Celery worker is running and consuming the "
         "'frac_default' queue."
     )
+
+
+# --- run_gallery_reembed_job (TR-08, FR-TRN-06) -----------------------------
+#
+# Same name-only-proxy wiring as run_training_evaluation_job directly above —
+# the real implementation is ai_training.worker.tasks.run_gallery_reembed_job,
+# which needs the same PyTorch/ML dependencies backend never carries. This
+# body must never actually run; it only exists so
+# app/services/gallery_queue.py has a real task object to call `.delay()` on.
+@celery_app.task(
+    name="app.worker.tasks.run_gallery_reembed_job",
+    base=DeadLetterTask,
+    bind=True,
+)
+def run_gallery_reembed_job(self: Task, model_version: str) -> dict:
+    """Proxy registration ONLY — see the module comment directly above.
+
+    The real implementation is `ai_training.worker.tasks.run_gallery_reembed_job`
+    (registered under this exact same task name), which is the only process
+    that should ever be subscribed to consume it.
+    """
+    raise RuntimeError(
+        "run_gallery_reembed_job must be executed by the ai-training worker "
+        "(ai_training.worker.tasks.run_gallery_reembed_job), not backend's — "
+        "check that ai-training's Celery worker is running and consuming the "
+        "'frac_default' queue."
+    )
