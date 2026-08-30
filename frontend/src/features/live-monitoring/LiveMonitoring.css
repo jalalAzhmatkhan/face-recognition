@@ -1,0 +1,316 @@
+/* S-40 Live Monitoring — plain CSS per project convention (see
+ * `enrollment-capture/EnrollmentCapturePage.css`), uses tokens.css vars. */
+
+.live-monitoring-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.live-monitoring-page__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.live-monitoring-page__screen-id {
+  margin: 0;
+  font: var(--text-caption);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.live-monitoring-page__body {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 1023px) {
+  .live-monitoring-page__body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.live-monitoring-page__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Filter bar */
+
+.live-monitoring-filterbar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+}
+
+.live-monitoring-filterbar__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font: var(--text-caption);
+  color: var(--text-secondary);
+}
+
+.live-monitoring-filterbar__field select {
+  min-height: var(--touch-target);
+  padding: 0 var(--space-3);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: var(--text-body);
+}
+
+.live-monitoring-filterbar__spacer {
+  flex: 1;
+}
+
+/* Connection indicator dot */
+
+.live-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.live-dot--pulsing {
+  animation: live-dot-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-dot-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+  50% { opacity: 0.55; }
+}
+
+/* Banners */
+
+.alert-banner {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font: var(--text-small);
+  border: var(--border-w-strong) solid transparent;
+}
+
+.alert-banner--danger {
+  background: var(--danger-subtle-bg);
+  border-color: var(--danger);
+  color: var(--text-primary);
+}
+
+.alert-banner--warning {
+  background: var(--warning-subtle-bg);
+  border-color: var(--warning);
+  color: var(--text-primary);
+}
+
+/* Feed */
+
+.access-event-feed-wrap {
+  position: relative;
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.access-event-feed__catch-up {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  border: none;
+  background: var(--accent);
+  color: var(--text-inverse);
+  box-shadow: var(--shadow-md);
+  font: var(--text-caption);
+}
+
+.access-event-feed {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 640px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.access-event-item {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-slow) var(--ease-standard),
+    transform var(--dur-base) var(--ease-decelerate), opacity var(--dur-base) var(--ease-standard);
+}
+
+.access-event-item--new {
+  animation: access-event-slide-in var(--dur-base) var(--ease-decelerate);
+}
+
+@keyframes access-event-slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.access-event-item--skeleton {
+  height: 44px;
+  background: var(--bg-sunken);
+  opacity: 0.6;
+}
+
+.access-event-item__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font: var(--text-small);
+}
+
+.access-event-item__time {
+  color: var(--text-muted);
+  min-width: 5.5em;
+}
+
+.access-event-item__device {
+  color: var(--text-secondary);
+  min-width: 8em;
+}
+
+.access-event-item__decision {
+  font-weight: 600;
+  min-width: 9em;
+}
+
+.access-event-item__user {
+  flex: 1;
+  min-width: 6em;
+}
+
+.access-event-item__metrics {
+  color: var(--text-muted);
+  font-size: 0.8em;
+}
+
+.access-event-item__spoof-action {
+  margin-top: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-caption);
+}
+
+.access-event-item__spoof-action button {
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--danger);
+  background: var(--bg-surface);
+  color: var(--danger);
+}
+
+.access-event-item__reviewed-note {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.access-event-feed-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-16) var(--space-4);
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.access-event-feed-empty__title {
+  font: var(--text-h3);
+  margin: 0;
+}
+
+.access-event-feed-empty__hint {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/* Side panels */
+
+.side-panel {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.side-panel h3 {
+  margin-bottom: var(--space-3);
+}
+
+.side-panel__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-small);
+}
+
+.today-summary {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.today-summary__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font: var(--text-small);
+}
+
+.today-summary__row dt {
+  font-weight: 500;
+}
+
+.today-summary__row dd {
+  margin: 0;
+}
+
+.device-status-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.device-status-list__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-small);
+}
+
+.device-status-list__name {
+  flex: 1;
+}
+
+.device-status-list__heartbeat {
+  color: var(--text-muted);
+  font-size: 0.8em;
+}

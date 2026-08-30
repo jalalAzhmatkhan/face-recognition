@@ -58,13 +58,28 @@ describe('routing shell', () => {
   it.each([
     ['/users', 'Users'],
     ['/enrollments', 'Enrollment'],
-    ['/monitoring', 'Monitoring'],
     ['/devices', 'Devices'],
     ['/models', 'Models & Training'],
   ])('renders placeholder screen at %s', (path, heading) => {
     renderAt(path)
     expect(
       screen.getByRole('heading', { level: 1, name: heading }),
+    ).toBeInTheDocument()
+  })
+
+  // FE-06: /monitoring has no screen of its own (S-42 Access Log isn't
+  // built yet) — it redirects to S-40's official path, /monitoring/live.
+  it('redirects /monitoring to /monitoring/live (S-40)', () => {
+    renderAt('/monitoring')
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Live Monitoring' }),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the live monitoring screen at /monitoring/live', () => {
+    renderAt('/monitoring/live')
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Live Monitoring' }),
     ).toBeInTheDocument()
   })
 

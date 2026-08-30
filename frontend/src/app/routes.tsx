@@ -9,6 +9,7 @@ import EnrollmentsPage from '../pages/EnrollmentsPage'
 import EnrollmentDetailPage from '../pages/EnrollmentDetailPage'
 import EnrollmentCapturePage from '../features/enrollment-capture/EnrollmentCapturePage'
 import MonitoringPage from '../pages/MonitoringPage'
+import LiveMonitoringPage from '../features/live-monitoring/LiveMonitoringPage'
 import DevicesPage from '../pages/DevicesPage'
 import ModelsPage from '../pages/ModelsPage'
 import NotFoundPage from '../pages/NotFoundPage'
@@ -39,6 +40,7 @@ export const routes: RouteObject[] = [
           { path: 'enrollments', element: <EnrollmentsPage /> },
           { path: 'enrollments/:id', element: <EnrollmentDetailPage /> },
           { path: 'monitoring', element: <MonitoringPage /> },
+          { path: 'monitoring/live', element: <LiveMonitoringPage /> },
           { path: 'devices', element: <DevicesPage /> },
           { path: 'models', element: <ModelsPage /> },
           { path: '*', element: <NotFoundPage /> },
