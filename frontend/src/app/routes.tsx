@@ -4,6 +4,7 @@ import LoginPage from '../pages/LoginPage'
 import DashboardPage from '../pages/DashboardPage'
 import UsersPage from '../pages/UsersPage'
 import EnrollmentsPage from '../pages/EnrollmentsPage'
+import EnrollmentDetailPage from '../pages/EnrollmentDetailPage'
 import EnrollmentCapturePage from '../features/enrollment-capture/EnrollmentCapturePage'
 import MonitoringPage from '../pages/MonitoringPage'
 import DevicesPage from '../pages/DevicesPage'
@@ -28,6 +29,7 @@ export const routes: RouteObject[] = [
       { index: true, element: <DashboardPage /> },
       { path: 'users', element: <UsersPage /> },
       { path: 'enrollments', element: <EnrollmentsPage /> },
+      { path: 'enrollments/:id', element: <EnrollmentDetailPage /> },
       { path: 'monitoring', element: <MonitoringPage /> },
       { path: 'devices', element: <DevicesPage /> },
       { path: 'models', element: <ModelsPage /> },
