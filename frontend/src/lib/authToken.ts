@@ -14,12 +14,56 @@
  */
 
 const ACCESS_TOKEN_KEY = 'frac_access_token'
+const REFRESH_TOKEN_KEY = 'frac_refresh_token'
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
 export function getAccessToken(): string | null {
   try {
     return window.localStorage.getItem(ACCESS_TOKEN_KEY)
   } catch {
     return null
+  }
+}
+
+export function getRefreshToken(): string | null {
+  try {
+    return window.localStorage.getItem(REFRESH_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+function setAccessToken(token: string): void {
+  try {
+    window.localStorage.setItem(ACCESS_TOKEN_KEY, token)
+  } catch {
+    /* localStorage unavailable (private mode / SSR) — nothing we can do */
+  }
+}
+
+export interface TokenPair {
+  access_token: string
+  refresh_token: string
+}
+
+/** Persists both tokens after a successful `/auth/login` (FE-02). */
+export function setTokens(tokens: TokenPair): void {
+  setAccessToken(tokens.access_token)
+  try {
+    window.localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token)
+  } catch {
+    /* localStorage unavailable */
+  }
+}
+
+/** Wipes both tokens — used on logout and whenever refresh fails. */
+export function clearTokens(): void {
+  try {
+    window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+    window.localStorage.removeItem(REFRESH_TOKEN_KEY)
+  } catch {
+    /* localStorage unavailable */
   }
 }
 
@@ -70,4 +114,118 @@ export function getCurrentRole(): StaffRole | null {
   if (!token) return null
   const payload = decodeJwtPayload(token)
   return isStaffRole(payload?.role) ? payload.role : null
+}
+
+/**
+ * Whether the currently stored access token is missing, malformed, or
+ * expired (optionally treating a token as expired `bufferSeconds` before
+ * its actual `exp`, e.g. to leave headroom for in-flight requests).
+ *
+ * This is used for the FE-02 page-level route guard (`AuthGuard.tsx`) to
+ * decide, at navigation time, whether the console should even try to show
+ * a shell route. It is NOT how individual API calls decide whether to
+ * refresh — see the "reactive vs proactive" note on `refreshAccessToken`
+ * below for why per-request refresh is handled differently.
+ */
+export function isAccessTokenExpired(bufferSeconds = 0): boolean {
+  const token = getAccessToken()
+  if (!token) return true
+  const payload = decodeJwtPayload(token)
+  if (typeof payload?.exp !== 'number') return true
+  const nowSeconds = Date.now() / 1000
+  return payload.exp <= nowSeconds + bufferSeconds
+}
+
+/**
+ * Calls `POST /auth/refresh` with the stored refresh token and, on
+ * success, overwrites the stored access token. The refresh token itself
+ * is NOT rotated by the backend (BE-03), so it is left untouched.
+ *
+ * Returns the new access token on success, or `null` on any failure
+ * (missing refresh token, network error, 401 because the refresh token is
+ * invalid/expired/wrong-type) — and clears both stored tokens in that
+ * failure case, since a refresh token that the backend rejects can never
+ * succeed later either.
+ *
+ * Strategy note (proactive vs reactive refresh): this app uses REACTIVE
+ * refresh — callers invoke this only after a request already came back
+ * 401 (see the `authFetch` helpers in enrollment-capture/apiClient.ts,
+ * enrollment-management/api.ts and user-management/api.ts, plus the
+ * route guard's expired-token path). We picked reactive over proactively
+ * refreshing a few minutes before `exp` because it needs no background
+ * timer/interceptor plumbing, can't race a proactive refresh against a
+ * request that's already in flight, and degrades safely: worst case is
+ * one extra round trip (the 401) before the retry, which is cheap given
+ * how infrequently access tokens expire (15 min).
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) {
+    clearTokens()
+    return null
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    if (!response.ok) {
+      clearTokens()
+      return null
+    }
+    const data = (await response.json()) as { access_token: string }
+    setAccessToken(data.access_token)
+    return data.access_token
+  } catch {
+    clearTokens()
+    return null
+  }
+}
+
+export interface LoginCredentials {
+  email: string
+  password: string
+}
+
+/** Thrown by `login()`. `message` is always the generic, non-leaking copy
+ * NFR-SEC-04 / FR-USR-02 call for ("don't reveal which part was wrong"). */
+export class LoginError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'LoginError'
+    this.status = status
+  }
+}
+
+/** `POST /auth/login`. On success, stores both tokens via `setTokens` and
+ * resolves with nothing further to do (caller just navigates on). On
+ * failure, throws `LoginError` with a message safe to show as-is. */
+export async function login({ email, password }: LoginCredentials): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+  } catch {
+    throw new LoginError('Tidak dapat terhubung ke server. Coba lagi.', 0)
+  }
+
+  if (!response.ok) {
+    // 401 message is intentionally generic — never hints at which field
+    // (email vs password) was wrong, or whether the account exists.
+    const message =
+      response.status === 401
+        ? 'Email atau password salah.'
+        : 'Gagal login, silakan coba lagi.'
+    throw new LoginError(message, response.status)
+  }
+
+  const data = (await response.json()) as TokenPair
+  setTokens(data)
 }

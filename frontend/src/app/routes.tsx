@@ -1,5 +1,6 @@
 import type { RouteObject } from 'react-router-dom'
 import AppLayout from './AppLayout'
+import AuthGuard from './AuthGuard'
 import LoginPage from '../pages/LoginPage'
 import DashboardPage from '../pages/DashboardPage'
 import UsersPage from '../pages/UsersPage'
@@ -25,17 +26,24 @@ export const routes: RouteObject[] = [
   { path: '/enrollments/:id/capture', element: <EnrollmentCapturePage /> },
   {
     path: '/',
-    element: <AppLayout />,
+    // FE-02: every route in the shell requires a valid session; see
+    // AuthGuard.tsx for why this is login-only, not role-based.
+    element: <AuthGuard />,
     children: [
-      { index: true, element: <DashboardPage /> },
-      { path: 'users', element: <UsersPage /> },
-      { path: 'users/:id', element: <UserDetailPage /> },
-      { path: 'enrollments', element: <EnrollmentsPage /> },
-      { path: 'enrollments/:id', element: <EnrollmentDetailPage /> },
-      { path: 'monitoring', element: <MonitoringPage /> },
-      { path: 'devices', element: <DevicesPage /> },
-      { path: 'models', element: <ModelsPage /> },
-      { path: '*', element: <NotFoundPage /> },
+      {
+        element: <AppLayout />,
+        children: [
+          { index: true, element: <DashboardPage /> },
+          { path: 'users', element: <UsersPage /> },
+          { path: 'users/:id', element: <UserDetailPage /> },
+          { path: 'enrollments', element: <EnrollmentsPage /> },
+          { path: 'enrollments/:id', element: <EnrollmentDetailPage /> },
+          { path: 'monitoring', element: <MonitoringPage /> },
+          { path: 'devices', element: <DevicesPage /> },
+          { path: 'models', element: <ModelsPage /> },
+          { path: '*', element: <NotFoundPage /> },
+        ],
+      },
     ],
   },
 ]
