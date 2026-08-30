@@ -1,0 +1,27 @@
+# Contoh nilai variabel — salin ke terraform.tfvars (sudah di-.gitignore
+# lewat pola *.tfvars di root .gitignore; JANGAN commit terraform.tfvars).
+# TIDAK ADA kredensial AWS di sini — auth Terraform dilakukan lewat
+# credential chain standar AWS CLI (env vars / `aws configure` / SSO / role),
+# bukan lewat variabel di file ini.
+
+aws_region  = "ap-southeast-1"
+environment = "dev" # atau "staging" / "prod"
+
+bucket_name   = "frac-media"
+kms_key_alias = "alias/frac-media"
+
+raw_media_retention_days          = 90 # ASM-10
+event_frame_retention_days        = 30
+noncurrent_version_retention_days = 30
+
+# Isi HANYA setelah execution role masing-masing service benar-benar ada
+# (ECS task role / k8s IRSA role / EC2 instance profile — keputusan infra
+# prod belum final, lihat TSD SS10). Kosongkan (default []) kalau belum ada.
+backend_execution_role_names     = []
+ai_training_execution_role_names = []
+worker_execution_role_names      = []
+
+tags = {
+  Owner   = "backend-engineer"
+  Project = "face-recognition"
+}

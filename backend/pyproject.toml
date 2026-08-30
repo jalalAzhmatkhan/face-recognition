@@ -9,6 +9,16 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "uvicorn[standard]>=0.32",
+    "prometheus-client>=0.20",
+]
+
+[project.optional-dependencies]
+# OTel tracing is fully optional/lazy (app/core/tracing.py): the service
+# stays runnable in dev/CI without a collector or these packages installed.
+otel = [
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
 ]
 
 [dependency-groups]

@@ -47,7 +47,18 @@ wandb/
 # Env & secrets
 .env
 .env.*
+!**/.env.example
 *.pem
+
+# Terraform (infra/terraform/): never commit state or real tfvars, only the
+# *.tfvars.example template (XC-03)
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
 
 # OS/IDE
 .DS_Store

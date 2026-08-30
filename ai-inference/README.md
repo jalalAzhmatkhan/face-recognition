@@ -27,3 +27,8 @@ uv sync --extra ml
 ## Configuration
 
 Env vars with prefix `INF_` (see `src/ai_inference/config.py`), e.g. `INF_MLFLOW_TRACKING_URI`, `INF_MODEL_LOADER=stub|mlflow`, `INF_MODEL_STAGE_OR_VERSION`. No credentials in code.
+
+## Observability (XC-04)
+
+- **Metrics**: `GET /metrics` (see above) — already existed from IN-01, per-stage latency histograms live in `src/ai_inference/metrics.py`.
+- **Tracing (opsional/lazy)**: OTel, off by default. `uv sync --extra otel` + set `OTEL_EXPORTER_OTLP_ENDPOINT` (e.g. `http://localhost:4317`) to enable; otherwise `setup_tracing()` in `src/ai_inference/tracing.py` is a no-op so the service stays runnable in dev/CI without a collector.

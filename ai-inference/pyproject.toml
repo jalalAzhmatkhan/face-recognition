@@ -21,6 +21,13 @@ ml = [
     "mlflow>=2.14",
     "onnxruntime>=1.18",
 ]
+# OTel tracing is fully optional/lazy (src/ai_inference/tracing.py): the
+# service stays runnable in dev/CI without a collector or these packages.
+otel = [
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+]
 
 [dependency-groups]
 dev = [

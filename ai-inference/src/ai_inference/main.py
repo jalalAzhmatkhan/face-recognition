@@ -16,6 +16,7 @@ from ai_inference import __version__
 from ai_inference.config import Settings, get_settings
 from ai_inference.metrics import model_loads_total, registry
 from ai_inference.models import ModelKind, build_model_loader
+from ai_inference.tracing import setup_tracing
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -47,6 +48,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/metrics")
     async def metrics() -> Response:
         return Response(content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
+
+    # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set and the `otel` extra is installed.
+    setup_tracing(app, settings.service_name)
 
     return app
 
