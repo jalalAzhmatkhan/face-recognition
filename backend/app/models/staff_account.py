@@ -15,7 +15,14 @@ class StaffAccount(UUIDPKMixin, CreatedAtMixin, Base):
     role: Mapped[StaffRole] = mapped_column(
         Enum(StaffRole, name="staff_role", native_enum=True), nullable=False
     )
-    oidc_sub: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    # OIDC federation is a future phase (not BE-03 scope) — nullable so local
+    # password-auth accounts (BE-03) can exist without an external subject.
+    oidc_sub: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True, index=True
+    )
+    # BE-03: local email+password auth. Nullable so an account created only
+    # for future OIDC federation (no local password) remains representable.
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"StaffAccount(id={self.id!r}, email={self.email!r}, role={self.role!r})"

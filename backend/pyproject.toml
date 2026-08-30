@@ -14,6 +14,9 @@ dependencies = [
     "alembic>=1.13",
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",
+    "pyjwt>=2.9",
+    "argon2-cffi>=23.1",
+    "email-validator>=2.2",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +49,14 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's `Depends(...)` as a parameter default is the framework's own
+# idiom (it is evaluated once per-request by Starlette's DI, not at import
+# time) — B008 exists for the general "don't call functions in defaults"
+# footgun and doesn't special-case this, so silence it where Depends is used.
+"app/dependencies/*.py" = ["B008"]
+"app/routers/*.py" = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

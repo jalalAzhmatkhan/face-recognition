@@ -7,12 +7,15 @@ FastAPI + Pydantic v2, dimanage dengan [`uv`](https://docs.astral.sh/uv/). Pytho
 ```
 app/
   routers/        # HTTP layer (FastAPI routers) — deny-by-default auth deps mulai BE-03
-  services/       # Business logic / orchestration
+  dependencies/   # FastAPI DI: auth/RBAC (`get_current_staff`, `require_role`) — BE-03
+  services/       # Business logic / orchestration (mis. `auth_service.py`, BE-03)
+  schemas/        # Pydantic request/response contracts, terpisah dari ORM models — BE-03
   repositories/   # Data access — query helpers atas app/models (BE-02: contoh `users.py`)
   models/         # SQLAlchemy 2.x ORM models, satu module per tabel TSD §4 (BE-02)
   db/             # engine/session (BE-02)
-  core/           # config (pydantic-settings), structured logging, RFC 9457 errors
-migrations/       # alembic (BE-02)
+  core/           # config (pydantic-settings), structured logging, RFC 9457 errors, JWT+hashing (`security.py`, BE-03)
+  cli.py          # perintah ops satu-kali tanpa endpoint HTTP (mis. `create_admin`, BE-03)
+migrations/       # alembic (BE-02, BE-03)
 tests/            # pytest
 ```
 
@@ -124,6 +127,77 @@ Gunakan `DATABASE_URL_RO` untuk query dataset (tanpa risiko baca embeddings),
 dan `DATABASE_URL_EMBEDDINGS_WRITE` khusus untuk job yang meng-upsert
 `face_embeddings`. JANGAN memberi role ini `LOGIN`/password lewat migration —
 itu harus lewat mekanisme secret yang sama dengan kredensial lain (NFR-OPS-03).
+
+## AuthN/AuthZ staff (BE-03)
+
+Login staff (console web) memakai **JWT lokal berbasis email+password** terhadap
+tabel `staff_accounts`, bukan OIDC eksternal — TSD §6 hanya menyebut "staff OIDC +
+RBAC" tanpa memilih IdP konkret, jadi fase ini mengimplementasikan jalur password
+sebagai v1. Kolom `oidc_sub` tetap ada di skema (sekarang nullable, lihat migration
+`48b08e41d49a`) sebagai penyiapan federasi OIDC eksternal di fase mendatang — belum
+dipakai oleh kode ini.
+
+**Pilihan library** (didokumentasikan sesuai keputusan teknis task):
+- **Password hashing: `argon2-cffi`** (Argon2id) — direkomendasikan OWASP saat ini,
+  tidak punya batas 72-byte seperti bcrypt, dan menghindari masalah kompatibilitas
+  versi `passlib`+`bcrypt`. Dipakai langsung (bukan lewat `passlib`) di
+  `app/core/security.py`.
+- **JWT: `PyJWT`** — API lebih sederhana dan lebih aktif dimaintain dibanding
+  `python-jose` untuk kebutuhan HS256 saja. Signing key dari `Settings.jwt_secret_key`
+  (env `JWT_SECRET_KEY`, **wajib** diganti per-lingkungan; placeholder di
+  `.env.example` bukan untuk dipakai di luar dev lokal).
+
+**Endpoint** (`app/routers/auth.py`, mount di `{API_V1_PREFIX}/auth`):
+
+| Method & path | Body | Response | Catatan |
+|---|---|---|---|
+| `POST /auth/login` | `{email, password}` | 200 `{access_token, refresh_token, token_type, expires_in}` | 401 problem+json generik pada kredensial invalid — akun tidak ada vs password salah menghasilkan response identik (NFR-SEC-04, no user enumeration) |
+| `POST /auth/refresh` | `{refresh_token}` | 200 `{access_token, token_type, expires_in}` | 401 pada token invalid/expired/salah tipe/akun sudah tidak ada. Rotasi minimal: refresh token TIDAK dirotasi (tetap valid sampai expiry-nya sendiri), hanya access token baru yang diterbitkan |
+| `GET /auth/me` | — (Bearer token) | 200 `{id, email, role}` | Contoh endpoint terproteksi (`get_current_staff`, role apa saja) |
+| `GET /auth/admin-only-example` | — (Bearer token) | 200/403 | Contoh RBAC (`require_role(StaffRole.ADMIN)`) — endpoint dummy untuk membuktikan pola, bukan endpoint bisnis |
+
+Access token default 15 menit, refresh token default 7 hari — konfigurable via
+`ACCESS_TOKEN_EXPIRE_MINUTES` / `REFRESH_TOKEN_EXPIRE_MINUTES`.
+
+**RBAC deny-by-default**: `app/dependencies/auth.py` menyediakan `get_current_staff`
+(401 jika token tidak ada/invalid/expired) dan `require_role(*roles)` (403 jika role
+staff tidak termasuk yang diizinkan; SELALU resolve `get_current_staff` dulu, jadi
+token invalid tetap 401 bukan 403). Tidak ada middleware global yang memberi akses —
+setiap router bisnis baru (BE-04 dst.) WAJIB memasang salah satu dependency ini
+secara eksplisit per-endpoint; endpoint yang lupa memasangnya otomatis terbuka tanpa
+auth, jadi ini harus jadi bagian dari code review checklist.
+
+**Bootstrap admin pertama**: tidak ada endpoint signup publik (staff account dibuat
+oleh ADMIN lain lewat API BE-04 nanti). Untuk membuat ADMIN pertama di lingkungan
+dev/staging, pakai CLI (butuh `DATABASE_URL` yang hidup — TIDAK dijalankan oleh test
+suite):
+
+```bash
+uv run python -m app.cli create_admin --email admin@example.com
+# akan prompt password interaktif (getpass, tidak masuk shell history);
+# atau non-interaktif: --password 'S0meStrongPass!'
+```
+
+Idempotent: menjalankan ulang untuk email yang sama tidak membuat duplikat atau
+menimpa akun yang sudah ada.
+
+**Test** (`tests/test_security.py`, `tests/test_auth_service.py`,
+`tests/test_auth_router.py`) murni unit/in-memory — tidak butuh Postgres live:
+hashing, encode/decode JWT (termasuk expired & wrong-secret), `authenticate`/
+`refresh_access_token` dengan fake repository, dan endpoint HTTP lewat
+`TestClient` dengan `app.dependency_overrides[get_staff_account_repository]`
+di-override ke repo in-memory palsu.
+
+> **Yang WAJIB diverifikasi manual oleh siapa pun yang punya Postgres live**
+> sebelum menganggap BE-03 selesai secara penuh:
+> - `uv run alembic upgrade head` (migration `48b08e41d49a`) sukses menambah
+>   `password_hash` dan melonggarkan `oidc_sub` jadi nullable pada `staff_accounts`
+>   sungguhan (sudah diverifikasi via `--sql` dry-run di sini, belum terhadap DB nyata),
+> - `uv run python -m app.cli create_admin --email ... --password ...` benar-benar
+>   membuat baris di `staff_accounts` dengan `role=ADMIN` dan `password_hash` terisi,
+> - `POST /auth/login` dengan kredensial admin tsb di server yang jalan (`uv run
+>   uvicorn app.main:app`) benar-benar mengembalikan token yang valid untuk
+>   `GET /auth/me`, dan `POST /auth/refresh` dengan refresh token-nya berhasil.
 
 ## Konfigurasi
 
