@@ -14,7 +14,7 @@ from app.core.logging import setup_logging
 from app.core.metrics import http_request_duration_seconds, http_requests_total
 from app.core.problem import register_exception_handlers
 from app.core.tracing import setup_tracing
-from app.routers import auth, health, observability, users
+from app.routers import auth, enrollments, health, observability, users
 
 
 def create_app() -> FastAPI:
@@ -57,6 +57,7 @@ def create_app() -> FastAPI:
     # every other router mounted here must declare its own auth dependency.
     app.include_router(auth.router, prefix=settings.api_v1_prefix)
     app.include_router(users.router, prefix=settings.api_v1_prefix)
+    app.include_router(enrollments.router, prefix=settings.api_v1_prefix)
 
     # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set and the `otel` extra is installed.
     setup_tracing(app, settings.app_name)
