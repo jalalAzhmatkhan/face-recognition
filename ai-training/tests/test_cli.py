@@ -59,6 +59,42 @@ def test_main_snapshot_propagates_unsupported_filter_key_as_error(
     assert "unsupported filter" in capsys.readouterr().err
 
 
+def test_main_evaluate_invokes_evaluate_candidate_and_prints_report(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from ai_training.evaluation.metrics import EvalReport
+
+    calls: dict[str, str] = {}
+    fake_report = EvalReport(
+        recall=0.99,
+        f1=0.95,
+        precision=0.92,
+        latency_ms_p95=12.3,
+        far=0.005,
+        model_version="adaface-ir101-webface12m",
+        benchmark_id="snap-xyz",
+    )
+
+    def _fake_evaluate_candidate(settings: object, model_version: str, benchmark_id: str) -> object:
+        calls["model_version"] = model_version
+        calls["benchmark_id"] = benchmark_id
+        return fake_report
+
+    monkeypatch.setattr(
+        "ai_training.evaluation.metrics.evaluate_candidate", _fake_evaluate_candidate
+    )
+
+    exit_code = cli.main(
+        ["evaluate", "--model-version", "adaface-ir101-webface12m", "--benchmark-id", "snap-xyz"]
+    )
+
+    assert exit_code == 0
+    assert calls == {"model_version": "adaface-ir101-webface12m", "benchmark_id": "snap-xyz"}
+    out = capsys.readouterr().out
+    assert "snap-xyz" in out
+    assert "0.99" in out
+
+
 def test_main_eda_invokes_build_eda_report_with_snapshot_id(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
