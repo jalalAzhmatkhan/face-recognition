@@ -14,7 +14,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class S3Settings(BaseModel):
-    """S3 access (media + dataset manifests + MLflow artifacts). TSD SS4."""
+    """S3 access (media + dataset manifests + MLflow artifacts). TSD SS4.
+
+    The bucket is provisioned MANUALLY by a human (see
+    infra/terraform/README.md) — this service only reads config, it never
+    provisions anything. `bucket`/`region` here are the ai-training-side
+    equivalent of the root/backend `AWS_S3_BUCKET_NAME`/`AWS_REGION` env
+    vars, just TRN_-namespaced (`TRN_S3__BUCKET`, `TRN_S3__REGION`).
+    Credentials are NOT duplicated here on purpose: boto3 picks up
+    `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` from the standard credential
+    chain (plain env vars, no `TRN_` prefix) rather than pydantic-settings,
+    so secrets never round-trip through this Settings object/logs.
+    """
 
     bucket: str = "frac-media"
     region: str = "ap-southeast-1"

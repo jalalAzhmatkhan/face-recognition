@@ -1,7 +1,24 @@
-# Docker Compose — development skeleton (task XC-01).
-# NOTE: Infra lengkap (PostgreSQL 16 + pgvector, Redis 7, MLflow self-hosted)
-# adalah scope task XC-02. File ini baru kerangka service aplikasi.
-# Konfigurasi via env vars; JANGAN commit secret (gunakan .env lokal, sudah di-.gitignore).
+# Docker Compose — development environment.
+#
+# XC-01 laid the app-service skeleton (backend/frontend/ai-inference/ai-training,
+# profile "app" — opt-in until Dockerfiles land).
+# XC-02 adds the infra services below (default profile — `docker compose up`
+# brings these up without needing `--profile app`): PostgreSQL 16 + pgvector,
+# Redis 7, MinIO (S3-compatible, dev-only), MLflow (self-hosted).
+#
+# MLflow artifact store decision (dev): MinIO, not a bare local path.
+#   - TSD SS3 mandates AWS S3 (real S3 in staging/prod) and the project rule
+#     "media tidak boleh disimpan lokal" extends in spirit to MLflow artifacts.
+#   - ai-training's `S3Settings.endpoint_url` already documents "override for
+#     localstack/minio in dev" (see ai-training/src/ai_training/config.py),
+#     so MinIO keeps dev, CI, and prod on the same S3 API/boto3 code path
+#     instead of branching MLflow onto a local filesystem store.
+#   - Trade-off: one more container in dev vs. a plain volume; accepted
+#     because it removes a whole "works on filesystem, breaks on S3" class
+#     of bugs before it reaches staging.
+#
+# Config via env vars — copy `.env.example` (root) to `.env` and adjust.
+# JANGAN commit `.env` atau secret apa pun (nilai di sini hanyalah default dev).
 
 name: face-recognition-dev
 
@@ -15,6 +32,21 @@ services:
     environment:
       APP_ENV: dev
       LOG_LEVEL: DEBUG
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-frac}:${POSTGRES_PASSWORD:-frac_dev_password}@postgres:5432/${POSTGRES_DB:-frac}
+      REDIS_URL: redis://redis:6379/0
+      # AWS S3 (XC-03): bucket provisioned manually by a human — see
+      # infra/terraform/README.md. Left as .env-driven pass-through here
+      # (no dev default bucket/creds baked into compose).
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-}
+      AWS_S3_PREFIX: ${AWS_S3_PREFIX:-face-recognition/}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     profiles: ["app"]
 
   frontend:
@@ -31,6 +63,10 @@ services:
       - "8001:8001"
     environment:
       APP_ENV: dev
+      INF_MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      mlflow:
+        condition: service_healthy
     profiles: ["app"]
 
   ai-training:
@@ -38,9 +74,118 @@ services:
       context: ./ai-training
     environment:
       APP_ENV: dev
+      TRN_DB__DSN: postgresql://${POSTGRES_USER:-frac}:${POSTGRES_PASSWORD:-frac_dev_password}@postgres:5432/${POSTGRES_DB:-frac}
+      TRN_MLFLOW__TRACKING_URI: http://mlflow:5000
+      TRN_S3__BUCKET: ${S3_BUCKET:-frac-media}
+      TRN_S3__ENDPOINT_URL: http://minio:9000
+      TRN_S3__REGION: ${AWS_REGION:-ap-southeast-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     profiles: ["app"]
 
-  # --- XC-02 (placeholder, belum diaktifkan) ---
-  # postgres:  PostgreSQL 16 + pgvector
-  # redis:     Redis 7 (cache + Celery broker)
-  # mlflow:    MLflow self-hosted (artifacts -> S3)
+  # --- XC-02: infra dasar (default profile, tidak butuh --profile app) ---
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-frac}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-frac_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-frac}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the `mlflow` DB alongside `frac` and enables pgvector on both
+      # (BE-02 owns the real business schema/migrations via alembic).
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-frac} -d ${POSTGRES_DB:-frac}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # S3-compatible stand-in for dev/CI only. Staging/prod use real AWS S3
+  # (see infra/terraform/ — XC-03); ai-training's S3Settings.endpoint_url and
+  # MLflow's MLFLOW_S3_ENDPOINT_URL both just point at this instead.
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_dev_password}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: creates the `mlflow` bucket in MinIO before mlflow/ai-training need it.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin_dev_password} &&
+      mc mb --ignore-existing local/mlflow &&
+      mc mb --ignore-existing local/${S3_BUCKET:-frac-media}
+      "
+    restart: "no"
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.16.2
+    restart: unless-stopped
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        pip install --no-cache-dir boto3 psycopg2-binary >/tmp/pip-install.log 2>&1 &&
+        mlflow server \
+          --host 0.0.0.0 --port 5000 \
+          --backend-store-uri "${MLFLOW_BACKEND_STORE_URI:-postgresql://frac:frac_dev_password@postgres:5432/mlflow}" \
+          --artifacts-destination "${MLFLOW_ARTIFACT_ROOT:-s3://mlflow/}" \
+          --serve-artifacts
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL:-http://minio:9000}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin_dev_password}
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  minio_data:

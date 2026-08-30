@@ -5,12 +5,16 @@ All future business routers mount under `settings.api_v1_prefix` and MUST declar
 auth dependencies (deny-by-default, NFR-SEC-04) — added in task BE-03.
 """
 
-from fastapi import FastAPI
+import time
+
+from fastapi import FastAPI, Request
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
+from app.core.metrics import http_request_duration_seconds, http_requests_total
 from app.core.problem import register_exception_handlers
-from app.routers import health
+from app.core.tracing import setup_tracing
+from app.routers import health, observability
 
 
 def create_app() -> FastAPI:
@@ -24,8 +28,32 @@ def create_app() -> FastAPI:
     )
     register_exception_handlers(app)
 
-    # Health endpoints stay outside the versioned/authenticated prefix.
+    @app.middleware("http")
+    async def record_request_metrics(request: Request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration = time.perf_counter() - start
+
+        # Prefer the matched route's path template (e.g. "/users/{id}") over
+        # the raw URL so metric label cardinality stays bounded; fall back to
+        # the raw path for unmatched routes (404s).
+        route = request.scope.get("route")
+        route_path = route.path if route is not None else request.url.path
+
+        http_requests_total.labels(
+            method=request.method, route=route_path, status=str(response.status_code)
+        ).inc()
+        http_request_duration_seconds.labels(method=request.method, route=route_path).observe(
+            duration
+        )
+        return response
+
+    # Health & observability endpoints stay outside the versioned/authenticated prefix.
     app.include_router(health.router)
+    app.include_router(observability.router)
+
+    # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set and the `otel` extra is installed.
+    setup_tracing(app, settings.app_name)
 
     return app
 
