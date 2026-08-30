@@ -5,7 +5,7 @@ import type {
   UserResponse,
   UserStatus,
 } from './types'
-import { getAccessToken } from '../../lib/authToken'
+import { getAccessToken, refreshAccessToken } from '../../lib/authToken'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
@@ -21,13 +21,30 @@ export class ApiError extends Error {
   }
 }
 
-async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
+/**
+ * FE-02 note: on a 401 we make ONE reactive attempt to refresh the access
+ * token (see `lib/authToken.ts::refreshAccessToken` for why reactive was
+ * chosen over proactive) and retry the original request ONCE with the new
+ * token. If refresh also fails, the original 401 propagates unchanged so
+ * existing callers/tests see the same behavior as before this was added.
+ */
+async function authFetch(
+  path: string,
+  init: RequestInit = {},
+  isRetry = false,
+): Promise<Response> {
   const token = getAccessToken()
   const headers = new Headers(init.headers)
   headers.set('Accept', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+
+  if (response.status === 401 && !isRetry) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) return authFetch(path, init, true)
+  }
+
   if (!response.ok) {
     let body: unknown = null
     try {

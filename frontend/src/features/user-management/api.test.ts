@@ -126,6 +126,32 @@ describe('authenticated user-management requests', () => {
       { status: 409 },
     )
   })
+
+  it('FE-02: on a 401, refreshes once and retries the original request', async () => {
+    window.localStorage.setItem('frac_refresh_token', 'ref-1')
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'expired' }), { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: 'fresh-token' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(sampleUser), { status: 200 }))
+
+    const result = await getUser('user-1')
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    const refreshCall = fetchMock.mock.calls[1]
+    expect(refreshCall[0]).toContain('/api/v1/auth/refresh')
+    const retryCall = fetchMock.mock.calls[2]
+    expect(retryCall[0]).toContain('/api/v1/users/user-1')
+    expect(retryCall[1].headers.get('Authorization')).toBe('Bearer fresh-token')
+    expect(result.id).toBe('user-1')
+    window.localStorage.removeItem('frac_refresh_token')
+  })
+
+  it('FE-02: propagates the original 401 when refresh also fails', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ detail: 'expired' }), { status: 401 }))
+    await expect(getUser('user-1')).rejects.toMatchObject({ status: 401 })
+  })
 })
 
 describe('describeApiError', () => {

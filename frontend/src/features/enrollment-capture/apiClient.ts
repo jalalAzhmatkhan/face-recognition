@@ -4,13 +4,13 @@ import type {
   PresignRequestBody,
   PresignResponse,
 } from './types'
+import { refreshAccessToken } from '../../lib/authToken'
 
 /**
  * No shared API client/auth-header convention exists yet elsewhere in the
- * app (FE-02 login is still a placeholder). This module establishes a
- * minimal one for FE-04's own needs: a bearer token is read from
- * localStorage under `frac_access_token` (the same key name FE-02 should
- * write to once real login lands) and attached to every request.
+ * app (FE-04 note, now historical: FE-02 has since landed real login,
+ * writing to this same localStorage key). A bearer token is read from
+ * localStorage under `frac_access_token` and attached to every request.
  */
 const ACCESS_TOKEN_KEY = 'frac_access_token'
 
@@ -36,13 +36,30 @@ export class ApiError extends Error {
   }
 }
 
-async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
+/**
+ * FE-02 note: on a 401 we make ONE reactive attempt to refresh the access
+ * token (see `lib/authToken.ts::refreshAccessToken` for why reactive was
+ * chosen over proactive) and retry the original request ONCE with the new
+ * token. If refresh also fails, the original 401 propagates unchanged so
+ * existing callers/tests see the same behavior as before this was added.
+ */
+async function authFetch(
+  path: string,
+  init: RequestInit = {},
+  isRetry = false,
+): Promise<Response> {
   const token = getAccessToken()
   const headers = new Headers(init.headers)
   headers.set('Accept', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+
+  if (response.status === 401 && !isRetry) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) return authFetch(path, init, true)
+  }
+
   if (!response.ok) {
     let body: unknown = null
     try {

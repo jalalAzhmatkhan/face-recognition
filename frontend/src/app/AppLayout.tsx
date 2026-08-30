@@ -1,5 +1,6 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useTheme } from './useTheme'
+import { clearTokens } from '../lib/authToken'
 import './AppLayout.css'
 
 /**
@@ -18,6 +19,12 @@ const NAV_ITEMS = [
 
 export default function AppLayout() {
   const { toggle } = useTheme()
+  const navigate = useNavigate()
+
+  function handleLogout() {
+    clearTokens()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <div className="app-shell">
@@ -51,6 +58,13 @@ export default function AppLayout() {
             aria-label="Ganti tema terang/gelap"
           >
             Ganti tema
+          </button>
+          <button
+            type="button"
+            className="app-theme-toggle"
+            onClick={handleLogout}
+          >
+            Keluar
           </button>
         </div>
       </aside>
