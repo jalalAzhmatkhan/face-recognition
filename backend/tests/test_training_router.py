@@ -42,6 +42,34 @@ class FakeTrainingJobRepository:
         self._by_id[job.id] = job
         return job
 
+    def _filtered(
+        self,
+        *,
+        status: TrainingJobStatus | None = None,
+        model_version: str | None = None,
+    ) -> list[TrainingJob]:
+        items = sorted(self._by_id.values(), key=lambda j: j.created_at, reverse=True)
+        if status is not None:
+            items = [j for j in items if j.status == status]
+        if model_version is not None:
+            items = [j for j in items if j.model_version == model_version]
+        return items
+
+    def list(
+        self,
+        *,
+        status: TrainingJobStatus | None = None,
+        model_version: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[TrainingJob]:
+        return self._filtered(status=status, model_version=model_version)[offset : offset + limit]
+
+    def count(
+        self, *, status: TrainingJobStatus | None = None, model_version: str | None = None
+    ) -> int:
+        return len(self._filtered(status=status, model_version=model_version))
+
 
 class FakeModelVersionRepository:
     def __init__(self, models: list[ModelVersion] | None = None) -> None:
@@ -256,6 +284,125 @@ def test_get_job_exposes_error_message_when_failed(
     response = admin_client.get(f"/api/v1/training/jobs/{job.id}")
     assert response.status_code == 200
     assert response.json()["error_message"] == "benchmark snapshot not found"
+
+
+# --- GET /training/jobs (BE-15) ---------------------------------------------
+
+
+def test_list_jobs_newest_first_for_operator(
+    operator_client: TestClient, job_repo: FakeTrainingJobRepository
+) -> None:
+    older = job_repo.create(
+        TrainingJob(
+            model_version="adaface-v1",
+            benchmark_id="snap-1",
+            status=TrainingJobStatus.SUCCEEDED,
+            triggered_by=uuid.uuid4(),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    newer = job_repo.create(
+        TrainingJob(
+            model_version="adaface-v2",
+            benchmark_id="snap-2",
+            status=TrainingJobStatus.RUNNING,
+            triggered_by=uuid.uuid4(),
+            created_at=datetime(2026, 6, 1, tzinfo=UTC),
+        )
+    )
+    response = operator_client.get("/api/v1/training/jobs")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert [item["id"] for item in body["items"]] == [str(newer.id), str(older.id)]
+
+
+def test_list_jobs_filters_by_status(
+    admin_client: TestClient, job_repo: FakeTrainingJobRepository
+) -> None:
+    job_repo.create(
+        TrainingJob(
+            model_version="adaface-v1",
+            benchmark_id="snap-1",
+            status=TrainingJobStatus.FAILED,
+            triggered_by=uuid.uuid4(),
+        )
+    )
+    succeeded = job_repo.create(
+        TrainingJob(
+            model_version="adaface-v2",
+            benchmark_id="snap-2",
+            status=TrainingJobStatus.SUCCEEDED,
+            triggered_by=uuid.uuid4(),
+        )
+    )
+    response = admin_client.get("/api/v1/training/jobs", params={"status": "SUCCEEDED"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == str(succeeded.id)
+
+
+def test_list_jobs_filters_by_model_version(
+    admin_client: TestClient, job_repo: FakeTrainingJobRepository
+) -> None:
+    job_repo.create(
+        TrainingJob(
+            model_version="adaface-v1",
+            benchmark_id="snap-1",
+            status=TrainingJobStatus.SUCCEEDED,
+            triggered_by=uuid.uuid4(),
+        )
+    )
+    target = job_repo.create(
+        TrainingJob(
+            model_version="adaface-v2",
+            benchmark_id="snap-2",
+            status=TrainingJobStatus.SUCCEEDED,
+            triggered_by=uuid.uuid4(),
+        )
+    )
+    response = admin_client.get(
+        "/api/v1/training/jobs", params={"model_version": "adaface-v2"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == str(target.id)
+
+
+def test_list_jobs_respects_limit_and_offset(
+    admin_client: TestClient, job_repo: FakeTrainingJobRepository
+) -> None:
+    for i in range(5):
+        job_repo.create(
+            TrainingJob(
+                model_version=f"adaface-v{i}",
+                benchmark_id="snap",
+                status=TrainingJobStatus.SUCCEEDED,
+                triggered_by=uuid.uuid4(),
+                created_at=datetime(2026, 1, i + 1, tzinfo=UTC),
+            )
+        )
+    response = admin_client.get("/api/v1/training/jobs", params={"limit": 2, "offset": 1})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 5
+    assert body["limit"] == 2
+    assert body["offset"] == 1
+    assert len(body["items"]) == 2
+
+
+def test_list_jobs_denied_for_viewer(viewer_client: TestClient) -> None:
+    response = viewer_client.get("/api/v1/training/jobs")
+    assert response.status_code == 403
+
+
+def test_list_jobs_requires_authentication() -> None:
+    app = create_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/api/v1/training/jobs")
+    assert response.status_code == 401
 
 
 # --- GET /models -------------------------------------------------------------

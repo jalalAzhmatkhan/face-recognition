@@ -91,6 +91,21 @@ def get_training_job(job_repo: TrainingJobRepository, job_id: uuid.UUID) -> Trai
     return job
 
 
+def list_training_jobs(
+    job_repo: TrainingJobRepository,
+    *,
+    status: TrainingJobStatus | None = None,
+    model_version: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[TrainingJob], int]:
+    """BE-15: server-side history, replacing FE-09's localStorage-only
+    workaround (see task-breakdown.md BE-15 note)."""
+    jobs = job_repo.list(status=status, model_version=model_version, limit=limit, offset=offset)
+    total = job_repo.count(status=status, model_version=model_version)
+    return jobs, total
+
+
 def list_models(
     model_repo: ModelVersionRepository, *, stage: ModelStage | None = None
 ) -> list[ModelVersion]:

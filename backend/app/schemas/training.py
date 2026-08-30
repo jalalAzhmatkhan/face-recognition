@@ -28,6 +28,13 @@ class TrainingJobResponse(BaseModel):
     mlflow_run_id: str | None
 
 
+class TrainingJobListResponse(BaseModel):
+    items: list[TrainingJobResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class ModelVersionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

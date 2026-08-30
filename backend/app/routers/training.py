@@ -22,7 +22,7 @@ from app.core.config import Settings, get_settings
 from app.core.problem import ProblemError
 from app.db.session import get_db
 from app.dependencies.auth import CurrentStaff, require_role
-from app.models.enums import ModelStage, StaffRole
+from app.models.enums import ModelStage, StaffRole, TrainingJobStatus
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.model_versions import ModelVersionRepository
 from app.repositories.training_jobs import TrainingJobRepository
@@ -32,6 +32,7 @@ from app.schemas.training import (
     ModelVersionListResponse,
     ModelVersionResponse,
     TrainingJobCreateRequest,
+    TrainingJobListResponse,
     TrainingJobResponse,
 )
 from app.services import training_service
@@ -85,6 +86,29 @@ def create_training_job(
         actor=current.id,
     )
     return TrainingJobResponse.model_validate(job)
+
+
+@router.get("/training/jobs", response_model=TrainingJobListResponse)
+def list_training_jobs(
+    status: TrainingJobStatus | None = Query(None),
+    model_version: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current: CurrentStaff = Depends(require_role(*JOB_READ_ROLES)),
+    job_repo: TrainingJobRepository = Depends(get_training_job_repository),
+) -> TrainingJobListResponse:
+    """BE-15: server-side training-job history (newest first), closing the
+    gap FE-09 documented (it fell back to a browser-localStorage-only list
+    because this endpoint didn't exist yet)."""
+    jobs, total = training_service.list_training_jobs(
+        job_repo, status=status, model_version=model_version, limit=limit, offset=offset
+    )
+    return TrainingJobListResponse(
+        items=[TrainingJobResponse.model_validate(j) for j in jobs],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/training/jobs/{job_id}", response_model=TrainingJobResponse)
