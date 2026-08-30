@@ -8,6 +8,7 @@ auth dependencies (deny-by-default, NFR-SEC-04) — added in task BE-03.
 import time
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
@@ -27,6 +28,20 @@ def create_app() -> FastAPI:
         description="Core API — Face Recognition Access Control",
     )
     register_exception_handlers(app)
+
+    # Deny-by-default: only add CORS middleware when origins are explicitly
+    # configured (never a permissive "*" fallback). Credentials are allowed
+    # since the frontend sends the bearer token, not cookies, but keeping
+    # allow_credentials scoped to an explicit origin list (never "*") avoids
+    # the browser-rejected "wildcard + credentials" combination.
+    if settings.cors_allow_origins_list:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_allow_origins_list,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.middleware("http")
     async def record_request_metrics(request: Request, call_next):

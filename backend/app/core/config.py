@@ -49,6 +49,16 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_minutes: int = 60 * 24 * 7  # 7 days
 
+    # CORS (frontend runs on a different origin, e.g. http://localhost:5173
+    # in dev). Deny-by-default (NFR-SEC-04): empty by default, so CORS
+    # middleware is only added at all when this is explicitly configured —
+    # never a permissive "*" fallback. Comma-separated list of exact origins.
+    cors_allow_origins: str = ""
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:
