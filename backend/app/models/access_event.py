@@ -10,7 +10,16 @@ not here; SQLAlchemy only needs to know about the parent table's shape.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, PrimaryKeyConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    PrimaryKeyConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,4 +58,12 @@ class AccessEvent(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     frame_media_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("media_objects.id", ondelete="SET NULL")
+    )
+    # BE-10 (FR-INF-05): the EFFECTIVE door decision after policy evaluation —
+    # distinct from `decision`, which is the raw inference result. A row can
+    # have decision=GRANTED yet door_command_issued=False (fail-secure: cache
+    # miss, SUSPENDED/OFFBOARDED user, no matching door_group policy, outside
+    # valid_from/valid_to window). See app/services/access_event_service.py.
+    door_command_issued: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
