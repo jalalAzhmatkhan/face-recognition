@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      ai-inference: ${{ steps.filter.outputs.ai-inference }}
+      ai-training: ${{ steps.filter.outputs.ai-training }}
+      qa: ${{ steps.filter.outputs.qa }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+            ai-inference:
+              - 'ai-inference/**'
+              - '.github/workflows/ci.yml'
+            ai-training:
+              - 'ai-training/**'
+              - '.github/workflows/ci.yml'
+            qa:
+              - 'qa/**'
+              - '.github/workflows/ci.yml'
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Lint (ruff)
+        run: uv run ruff check .
+      - name: Test (pytest)
+        run: uv run pytest -q
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Lint & test (skip until scaffold lands)
+        run: |
+          if [ -f package.json ]; then
+            npm ci
+            npm run lint --if-present
+            npm test --if-present
+          else
+            echo "frontend not scaffolded yet — skipping"
+          fi
+
+  ai-inference:
+    needs: changes
+    if: needs.changes.outputs.ai-inference == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-inference
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Lint & test (skip until scaffold lands)
+        run: |
+          if [ -f pyproject.toml ]; then
+            uv sync
+            uv run ruff check .
+            uv run pytest -q
+          else
+            echo "ai-inference not scaffolded yet — skipping"
+          fi
+
+  ai-training:
+    needs: changes
+    if: needs.changes.outputs.ai-training == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-training
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Lint & test (skip until scaffold lands)
+        run: |
+          if [ -f pyproject.toml ]; then
+            uv sync
+            uv run ruff check .
+            uv run pytest -q
+          else
+            echo "ai-training not scaffolded yet — skipping"
+          fi
+
+  qa:
+    needs: changes
+    if: needs.changes.outputs.qa == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qa
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Lint & test (skip until scaffold lands)
+        run: |
+          if [ -f pyproject.toml ]; then
+            uv sync
+            uv run ruff check .
+            uv run pytest -q
+          else
+            echo "qa not scaffolded yet — skipping"
+          fi

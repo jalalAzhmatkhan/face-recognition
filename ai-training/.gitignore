@@ -1,0 +1,3 @@
+# Root .gitignore ignores every "data/" directory (ML artifact rule).
+# Re-include the source *package* ai_training.data (code only, no datasets).
+!src/ai_training/data/

@@ -1,0 +1,106 @@
+/*
+ * tokens.css — Design tokens (documentation/uiux/design-tokens.md §9, DRAFT v0.1)
+ * Light default; dark via [data-theme="dark"] or prefers-color-scheme
+ * (with [data-theme="light"] override). Do NOT hand-edit values here without
+ * updating the design-tokens doc — this file mirrors it 1:1.
+ */
+
+:root {
+  /* background & text */
+  --bg-canvas: #F8FAFC;         --bg-surface: #FFFFFF;
+  --bg-surface-raised: #FFFFFF; --bg-sunken: #F1F5F9;
+  --text-primary: #0F172A;      --text-secondary: #475569;
+  --text-muted: #94A3B8;        --text-inverse: #FFFFFF;
+  --border-default: #E2E8F0;    --border-strong: #CBD5E1;
+  /* semantic */
+  --accent: #4F46E5;            --accent-hover: #4338CA;   --accent-subtle-bg: #EEF2FF;
+  --success: #059669;           --success-subtle-bg: #ECFDF5;
+  --danger: #DC2626;            --danger-subtle-bg: #FEF2F2;
+  --warning: #D97706;           --warning-subtle-bg: #FFFBEB;
+  --info: #0891B2;              --info-subtle-bg: #ECFEFF;
+  --ml: #7C3AED;
+  --focus-ring: #4F46E5;        --recording: #EF4444;
+  --overlay-scrim: #0F172ACC;
+  /* capture overlay (theme-invariant, drawn over video feed) */
+  --capture-sector-pending: #FFFFFF59; --capture-sector-active: #818CF8;
+  --capture-sector-done: #34D399;      --capture-sector-poor: #FBBF24;
+  --capture-frame-ok: #34D399;         --capture-frame-bad: #FBBF24;
+  --capture-scrim: #0F172A99;
+  /* typography */
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  --text-display: 700 2.25rem/2.75rem var(--font-sans);
+  --text-h1: 600 1.5rem/2rem var(--font-sans);
+  --text-h2: 600 1.25rem/1.75rem var(--font-sans);
+  --text-h3: 600 1.0625rem/1.5rem var(--font-sans);
+  --text-body: 400 0.9375rem/1.5rem var(--font-sans);
+  --text-small: 400 0.8125rem/1.25rem var(--font-sans);
+  --text-caption: 500 0.75rem/1rem var(--font-sans);
+  --text-consent-body: 400 1.0625rem/1.75rem var(--font-sans);
+  --text-capture-instruction: 600 1.75rem/2.25rem var(--font-sans);
+  /* spacing / radius / border */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+  --space-12: 48px; --space-16: 64px; --space-20: 80px;
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px;
+  --radius-xl: 24px; --radius-full: 9999px;
+  --border-w: 1px; --border-w-strong: 2px;
+  /* shadow */
+  --shadow-sm: 0 1px 2px #0F172A14;
+  --shadow-md: 0 4px 12px #0F172A1A;
+  --shadow-lg: 0 12px 32px #0F172A29;
+  --shadow-focus: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--focus-ring);
+  /* motion */
+  --dur-instant: 80ms; --dur-fast: 150ms; --dur-base: 240ms; --dur-slow: 400ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* layout */
+  --sidebar-w: 264px; --sidebar-w-collapsed: 72px;
+  --content-max: 1440px; --touch-target: 44px;
+}
+
+[data-theme="dark"] {
+  --bg-canvas: #0B1120;         --bg-surface: #111827;
+  --bg-surface-raised: #1F2937; --bg-sunken: #0F172A;
+  --text-primary: #F1F5F9;      --text-secondary: #94A3B8;
+  --text-muted: #64748B;        --text-inverse: #0F172A;
+  --border-default: #334155;    --border-strong: #475569;
+  --accent: #818CF8;            --accent-hover: #A5B4FC;   --accent-subtle-bg: #312E8140;
+  --success: #34D399;           --success-subtle-bg: #064E3B40;
+  --danger: #F87171;            --danger-subtle-bg: #7F1D1D40;
+  --warning: #FBBF24;           --warning-subtle-bg: #78350F40;
+  --info: #22D3EE;              --info-subtle-bg: #164E6340;
+  --ml: #A78BFA;
+  --focus-ring: #818CF8;
+  --overlay-scrim: #000000CC;
+  --shadow-sm: 0 1px 2px #00000066;
+  --shadow-md: 0 4px 12px #00000080;
+  --shadow-lg: 0 12px 32px #000000A6;
+}
+
+/* System preference: full copy of the dark block (CSS cannot alias selectors). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-canvas: #0B1120;         --bg-surface: #111827;
+    --bg-surface-raised: #1F2937; --bg-sunken: #0F172A;
+    --text-primary: #F1F5F9;      --text-secondary: #94A3B8;
+    --text-muted: #64748B;        --text-inverse: #0F172A;
+    --border-default: #334155;    --border-strong: #475569;
+    --accent: #818CF8;            --accent-hover: #A5B4FC;   --accent-subtle-bg: #312E8140;
+    --success: #34D399;           --success-subtle-bg: #064E3B40;
+    --danger: #F87171;            --danger-subtle-bg: #7F1D1D40;
+    --warning: #FBBF24;           --warning-subtle-bg: #78350F40;
+    --info: #22D3EE;              --info-subtle-bg: #164E6340;
+    --ml: #A78BFA;
+    --focus-ring: #818CF8;
+    --overlay-scrim: #000000CC;
+    --shadow-sm: 0 1px 2px #00000066;
+    --shadow-md: 0 4px 12px #00000080;
+    --shadow-lg: 0 12px 32px #000000A6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-instant: 0ms; --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
+}
