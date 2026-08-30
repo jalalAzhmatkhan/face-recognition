@@ -1,11 +1,13 @@
-"""Repository for `media_objects` (BE-06).
+"""Repository for `media_objects` (BE-06, BE-14).
 
 Mirrors the minimal get/list/create/update pattern established by
 `app/repositories/enrollments.py` — no business logic (presign validation,
-S3 HEAD verification) here, just data access.
+S3 HEAD verification, retention-window math) here, just data access.
 """
 
 import uuid
+from collections.abc import Iterable
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,3 +56,24 @@ class MediaObjectRepository:
     def delete(self, media: MediaObject) -> None:
         self._session.delete(media)
         self._session.commit()
+
+    def list_finalized_without_retention(
+        self, *, kinds: Iterable[MediaKind]
+    ) -> list[MediaObject]:
+        """FINALIZED rows of the given kind(s) that don't have
+        `retention_expires_at` set yet (BE-14 backfill target set)."""
+        stmt = (
+            select(MediaObject)
+            .where(MediaObject.status == MediaObjectStatus.FINALIZED)
+            .where(MediaObject.retention_expires_at.is_(None))
+            .where(MediaObject.kind.in_(list(kinds)))
+        )
+        return list(self._session.scalars(stmt))
+
+    def list_expired(self, *, now: datetime) -> list[MediaObject]:
+        """Rows whose retention window has passed (BE-14 purge target set)."""
+        stmt = select(MediaObject).where(
+            MediaObject.retention_expires_at.is_not(None),
+            MediaObject.retention_expires_at <= now,
+        )
+        return list(self._session.scalars(stmt))

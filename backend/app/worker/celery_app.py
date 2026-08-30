@@ -20,6 +20,21 @@ from app.core.config import get_settings
 
 _DEFAULT_DEV_REDIS_URL = "redis://localhost:6379/0"
 
+# --- Celery Beat (BE-14) -----------------------------------------------
+# This is the FIRST task to add a Celery Beat schedule to this project —
+# every task before BE-07/BE-08/BE-09 was on-demand only (`.delay(...)`
+# dispatched from a request handler). Beat entries below are inert unless a
+# SEPARATE `celery beat` process is actually running:
+#
+#   uv run celery -A app.worker.celery_app beat --loglevel=info
+#
+# This is a DIFFERENT process from `celery -A app.worker.celery_app worker
+# --loglevel=info` (see backend/README.md "Running the worker") — beat only
+# enqueues jobs on schedule, it does not execute them; you still need at
+# least one worker running to actually process what beat enqueues. Forgetting
+# to start beat is exactly how a schedule becomes silent dead code, so this
+# is called out again in backend/README.md under "Retention automation".
+
 
 def _redis_url() -> str:
     settings = get_settings()
@@ -44,3 +59,20 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
 )
+
+_settings = get_settings()
+
+# BE-14 retention automation: two scheduled jobs, both defined as regular
+# tasks in app/worker/tasks.py (`backfill_retention_expiry_task` /
+# `purge_expired_media_task`) so they share the same DeadLetterTask
+# retry/idempotency/audit infra as every on-demand task in this module.
+celery_app.conf.beat_schedule = {
+    "backfill-retention-expiry": {
+        "task": "app.worker.tasks.backfill_retention_expiry_task",
+        "schedule": _settings.retention_backfill_interval_seconds,
+    },
+    "purge-expired-media": {
+        "task": "app.worker.tasks.purge_expired_media_task",
+        "schedule": _settings.retention_purge_interval_seconds,
+    },
+}

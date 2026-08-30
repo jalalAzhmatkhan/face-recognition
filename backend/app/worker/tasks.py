@@ -43,6 +43,7 @@ from typing import Any
 from celery import Task
 
 from app.core.aws import get_s3_client
+from app.core.config import get_settings
 from app.db.session import get_sessionmaker
 from app.models.enums import EnrollmentState
 from app.repositories.audit_logs import AuditLogRepository
@@ -50,6 +51,7 @@ from app.repositories.enrollments import EnrollmentSessionRepository
 from app.repositories.face_embeddings import FaceEmbeddingRepository
 from app.repositories.media_objects import MediaObjectRepository
 from app.repositories.users import UserRepository
+from app.services import retention_service
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -358,5 +360,78 @@ def revoke_enrollment_cleanup(self: Task, session_id: str) -> str:
             s3_client,
             uuid.UUID(session_id),
         )
+    finally:
+        db.close()
+
+
+# --- Retention automation (BE-14, ASM-10, NFR-SEC-03) ----------------------
+#
+# Two scheduled jobs (see app/worker/celery_app.py's `beat_schedule`) that
+# wrap app/services/retention_service.py — that module has the full design
+# rationale (anchor timestamps, idempotency, why a per-item failure doesn't
+# sink the batch). These tasks are thin wrappers, same shape as every other
+# task in this file: open a DB session, build repos, call the core service
+# function, close the session.
+#
+# Deliberately NOT using `autoretry_for`/`DeadLetterTask`'s retry machinery
+# here the way `run_enrollment_qc`/`revoke_enrollment_cleanup` do: both
+# retention jobs are periodic (beat re-dispatches them every interval
+# regardless), and both are already internally retry-safe per-item (a
+# transient S3/DB blip on one media row is caught, logged, and picked up
+# again on the *next* scheduled run rather than needing Celery-level retry
+# of the whole batch). They still use `DeadLetterTask` as their base so a
+# task-level catastrophic failure (e.g. the DB is down for the whole run)
+# is still recorded in `audit_logs` the same way as every other task's
+# dead-letter path.
+
+
+@celery_app.task(
+    name="app.worker.tasks.backfill_retention_expiry_task",
+    base=DeadLetterTask,
+    bind=True,
+)
+def backfill_retention_expiry_task(self: Task) -> dict[str, int]:
+    """Scheduled job (hourly by default): set `retention_expires_at` on any
+    FINALIZED media that doesn't have it yet. See
+    `retention_service.backfill_retention_expiry` for the full logic."""
+    settings = get_settings()
+    session_factory = get_sessionmaker()
+    db = session_factory()
+    try:
+        media_repo = MediaObjectRepository(db)
+        enrollment_repo = EnrollmentSessionRepository(db)
+        result = retention_service.backfill_retention_expiry(
+            media_repo,
+            enrollment_repo,
+            raw_media_days=settings.retention_raw_media_days,
+            event_frame_days=settings.retention_event_frame_days,
+        )
+        return {
+            "raw_media_set": result.raw_media_set,
+            "event_frame_set": result.event_frame_set,
+            "skipped_not_enrolled": result.skipped_not_enrolled,
+        }
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="app.worker.tasks.purge_expired_media_task",
+    base=DeadLetterTask,
+    bind=True,
+)
+def purge_expired_media_task(self: Task) -> dict[str, int]:
+    """Scheduled job (every few hours by default): hard-delete every
+    `media_objects` row (+ its S3 object) whose `retention_expires_at` has
+    passed, auditing each deletion. See
+    `retention_service.purge_expired_media` for the full logic."""
+    session_factory = get_sessionmaker()
+    db = session_factory()
+    try:
+        media_repo = MediaObjectRepository(db)
+        audit_repo = AuditLogRepository(db)
+        s3_client = get_s3_client()
+        result = retention_service.purge_expired_media(media_repo, audit_repo, s3_client)
+        return {"purged": result.purged, "failed": result.failed}
     finally:
         db.close()
