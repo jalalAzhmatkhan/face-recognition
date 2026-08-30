@@ -14,7 +14,7 @@ from app.core.logging import setup_logging
 from app.core.metrics import http_request_duration_seconds, http_requests_total
 from app.core.problem import register_exception_handlers
 from app.core.tracing import setup_tracing
-from app.routers import health, observability
+from app.routers import auth, health, observability
 
 
 def create_app() -> FastAPI:
@@ -51,6 +51,11 @@ def create_app() -> FastAPI:
     # Health & observability endpoints stay outside the versioned/authenticated prefix.
     app.include_router(health.router)
     app.include_router(observability.router)
+
+    # Versioned/authenticated business API (BE-03+). auth.router itself hosts
+    # the only unauthenticated endpoints under this prefix (login/refresh);
+    # every other router mounted here must declare its own auth dependency.
+    app.include_router(auth.router, prefix=settings.api_v1_prefix)
 
     # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set and the `otel` extra is installed.
     setup_tracing(app, settings.app_name)

@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     aws_access_key_id: str | None = None
     aws_secret_access_key: SecretStr | None = None
 
+    # Staff AuthN/AuthZ (BE-03, NFR-SEC-04). Local email+password JWT auth
+    # against `staff_accounts` — `oidc_sub` stays in the schema (nullable) as
+    # prep for a future external-OIDC federation phase, but is NOT used here.
+    # `jwt_secret_key` MUST be overridden per-environment via env/secret
+    # manager; the value in `.env.example` is a placeholder only.
+    jwt_secret_key: SecretStr = SecretStr("changeme-generate-a-real-secret")
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_minutes: int = 60 * 24 * 7  # 7 days
+
 
 @lru_cache
 def get_settings() -> Settings:
