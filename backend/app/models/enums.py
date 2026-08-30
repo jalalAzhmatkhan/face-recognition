@@ -46,6 +46,24 @@ class MediaKind(enum.StrEnum):
     EVENT_FRAME = "event_frame"
 
 
+class MediaObjectStatus(enum.StrEnum):
+    """Lifecycle of a `media_objects` row across the presign/complete flow
+    (BE-06, FR-ENR-04/05).
+
+    A row is created as `PENDING` the moment a presigned upload URL is
+    issued (it records what the client *claims* it will upload — kind,
+    content-type, size, checksum — before any bytes exist in S3). It only
+    becomes `FINALIZED` once `POST /enrollments/{id}/complete` confirms via
+    S3 HEAD that the object actually exists and the claimed metadata is
+    truthful (see app/services/media_service.py). A `PENDING` row with no
+    matching S3 object is exactly what `/complete` treats as "media
+    missing" (422) — it never transitions the session's state.
+    """
+
+    PENDING = "PENDING"
+    FINALIZED = "FINALIZED"
+
+
 class ModelStage(enum.StrEnum):
     CANDIDATE = "CANDIDATE"
     PRODUCTION = "PRODUCTION"

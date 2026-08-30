@@ -33,10 +33,13 @@ Transition-endpoint design decision (documented per task BE-05 instructions):
 """
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.aws import get_s3_client
+from app.core.config import Settings, get_settings
 from app.core.problem import ProblemError
 from app.db.session import get_db
 from app.dependencies.auth import CurrentStaff, require_role
@@ -44,6 +47,7 @@ from app.models.enums import EnrollmentState, StaffRole
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.consents import ConsentRepository
 from app.repositories.enrollments import EnrollmentSessionRepository
+from app.repositories.media_objects import MediaObjectRepository
 from app.repositories.users import UserRepository
 from app.schemas.enrollments import (
     ConsentRequest,
@@ -52,7 +56,8 @@ from app.schemas.enrollments import (
     EnrollmentResponse,
     TransitionRequest,
 )
-from app.services import enrollment_service
+from app.schemas.media import CompleteResponse, PresignRequest, PresignResponse
+from app.services import enrollment_service, media_service
 from app.services import enrollment_state_machine as fsm
 
 router = APIRouter(prefix="/enrollments", tags=["enrollments"])
@@ -84,6 +89,26 @@ def get_user_repository_dep(db: Session = Depends(get_db)) -> UserRepository:
 
 def get_audit_log_repository(db: Session = Depends(get_db)) -> AuditLogRepository:
     return AuditLogRepository(db)
+
+
+def get_media_object_repository(db: Session = Depends(get_db)) -> MediaObjectRepository:
+    """Separate dependency (mirrors the other `get_*_repository` functions)
+    so tests can override it with an in-memory fake (BE-06, see
+    backend/tests/test_enrollments_media_router.py)."""
+    return MediaObjectRepository(db)
+
+
+def get_settings_dependency() -> Settings:
+    """Thin wrapper around `get_settings()` so tests can override the S3
+    bucket/prefix config independently of real env vars (BE-06)."""
+    return get_settings()
+
+
+def get_s3_client_dependency() -> Any:
+    """Thin wrapper around `get_s3_client()` so tests can override it with a
+    mock/fake boto3 client — no real AWS/MinIO call is ever made from
+    automated tests (BE-06)."""
+    return get_s3_client()
 
 
 def _not_found(session_id: uuid.UUID) -> ProblemError:
@@ -135,6 +160,31 @@ def _illegal_transition(exc: fsm.IllegalTransitionError) -> ProblemError:
         title="Conflict",
         detail=f"Cannot transition enrollment session from {exc.current} to {exc.target}.",
         extra={"current_state": exc.current.value, "target_state": exc.target.value},
+    )
+
+
+def _session_not_capturing(exc: media_service.SessionNotCapturingError) -> ProblemError:
+    return ProblemError(
+        status_code=409,
+        title="Conflict",
+        detail=(
+            f"Enrollment session '{exc.session_id}' is in state "
+            f"{exc.current_state.value}; this operation is only allowed while the "
+            "session is CAPTURING."
+        ),
+    )
+
+
+def _media_validation_error(exc: media_service.MediaValidationError) -> ProblemError:
+    return ProblemError(status_code=422, title="Unprocessable Entity", detail=exc.detail)
+
+
+def _media_completion_error(exc: media_service.MediaCompletionError) -> ProblemError:
+    return ProblemError(
+        status_code=422,
+        title="Unprocessable Entity",
+        detail="Enrollment media could not be verified; see 'reasons' for details.",
+        extra={"reasons": exc.reasons},
     )
 
 
@@ -251,6 +301,76 @@ def transition_enrollment(
     except fsm.IllegalTransitionError as exc:
         raise _illegal_transition(exc) from exc
     return EnrollmentResponse.model_validate(session)
+
+
+@router.post("/{session_id}/media/presign", response_model=PresignResponse, status_code=201)
+def presign_enrollment_media(
+    session_id: uuid.UUID,
+    body: PresignRequest,
+    current: CurrentStaff = Depends(require_role(*WRITE_ROLES)),
+    enrollment_repo: EnrollmentSessionRepository = Depends(get_enrollment_repository),
+    media_repo: MediaObjectRepository = Depends(get_media_object_repository),
+    audit_repo: AuditLogRepository = Depends(get_audit_log_repository),
+    s3_client: Any = Depends(get_s3_client_dependency),
+    settings: Settings = Depends(get_settings_dependency),
+) -> PresignResponse:
+    """BE-06: issue a presigned S3 PUT URL (TSD §7). Media bytes never pass
+    through this backend (FR-ENR-04, NFR-PRF-03) — the frontend PUTs
+    directly to the returned `upload_url`."""
+    try:
+        result = media_service.request_presign(
+            enrollment_repo,
+            media_repo,
+            audit_repo,
+            s3_client,
+            settings,
+            session_id=session_id,
+            kind=body.kind,
+            content_type=body.content_type,
+            size=body.size,
+            sha256=body.sha256,
+            actor=str(current.id),
+        )
+    except enrollment_service.EnrollmentNotFoundError as exc:
+        raise _not_found(session_id) from exc
+    except media_service.SessionNotCapturingError as exc:
+        raise _session_not_capturing(exc) from exc
+    except media_service.MediaValidationError as exc:
+        raise _media_validation_error(exc) from exc
+    return PresignResponse(
+        upload_url=result.upload_url, s3_key=result.media.s3_key, expires_at=result.expires_at
+    )
+
+
+@router.post("/{session_id}/complete", response_model=CompleteResponse, status_code=202)
+def complete_enrollment_media(
+    session_id: uuid.UUID,
+    current: CurrentStaff = Depends(require_role(*WRITE_ROLES)),
+    enrollment_repo: EnrollmentSessionRepository = Depends(get_enrollment_repository),
+    media_repo: MediaObjectRepository = Depends(get_media_object_repository),
+    audit_repo: AuditLogRepository = Depends(get_audit_log_repository),
+    s3_client: Any = Depends(get_s3_client_dependency),
+) -> CompleteResponse:
+    """BE-06: validate uploaded media via S3 HEAD (never by trusting the
+    client) and, on success, transition CAPTURING -> CAPTURED -> QC_RUNNING
+    in one call (FR-ENR-05, TSD §7). On any validation failure the session
+    state is left untouched and a 422 problem+json lists every reason."""
+    try:
+        session = media_service.complete_enrollment(
+            enrollment_repo,
+            media_repo,
+            audit_repo,
+            s3_client,
+            session_id=session_id,
+            actor=str(current.id),
+        )
+    except enrollment_service.EnrollmentNotFoundError as exc:
+        raise _not_found(session_id) from exc
+    except media_service.SessionNotCapturingError as exc:
+        raise _session_not_capturing(exc) from exc
+    except media_service.MediaCompletionError as exc:
+        raise _media_completion_error(exc) from exc
+    return CompleteResponse(id=session.id, state=session.state)
 
 
 @router.post("/{session_id}/cancel", response_model=EnrollmentResponse)
