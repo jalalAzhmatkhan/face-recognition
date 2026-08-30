@@ -3,6 +3,7 @@ import AppLayout from './AppLayout'
 import LoginPage from '../pages/LoginPage'
 import DashboardPage from '../pages/DashboardPage'
 import UsersPage from '../pages/UsersPage'
+import UserDetailPage from '../pages/UserDetailPage'
 import EnrollmentsPage from '../pages/EnrollmentsPage'
 import EnrollmentDetailPage from '../pages/EnrollmentDetailPage'
 import EnrollmentCapturePage from '../features/enrollment-capture/EnrollmentCapturePage'
@@ -28,6 +29,7 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <DashboardPage /> },
       { path: 'users', element: <UsersPage /> },
+      { path: 'users/:id', element: <UserDetailPage /> },
       { path: 'enrollments', element: <EnrollmentsPage /> },
       { path: 'enrollments/:id', element: <EnrollmentDetailPage /> },
       { path: 'monitoring', element: <MonitoringPage /> },
