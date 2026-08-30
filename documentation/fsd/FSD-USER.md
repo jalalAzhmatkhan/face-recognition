@@ -18,7 +18,7 @@ Cara kerjanya seperti satpam digital yang sangat teliti:
 
 - Admin membuat sesi pendaftaran untuk seorang karyawan.
 - Karyawan menyetujui dulu (persetujuan/consent dicatat) karena data wajah adalah data pribadi yang sensitif.
-- Karyawan difoto, lalu **direkam video sambil berputar satu putaran penuh**: mulai menghadap arah jam 12, berputar searah jarum jam, sampai kembali menghadap jam 12. Tujuannya agar sistem mengenal wajah dari berbagai sudut, bukan hanya dari depan.
+- Karyawan difoto, lalu **direkam video sambil menggerakkan KEPALA** (badan tetap menghadap kamera, tidak berputar): mulai mendongak ke arah "jam 12", lalu bergerak searah jarum jam melalui posisi kepala lain (menoleh, menunduk, dst.) sampai kembali ke posisi "jam 12". Wajah tetap terlihat kamera sepanjang perekaman. Tujuannya agar sistem mengenal wajah dari berbagai sudut kepala, bukan hanya dari depan.
 - Aplikasi memandu selama perekaman: "wajah kurang terang", "putar lebih pelan", indikator arah yang sudah terekam, dan seterusnya.
 - Jika hasil rekaman kurang bagus (buram, gelap, sudut kurang lengkap), sistem meminta rekam ulang.
 - **Semua foto/video langsung dikirim ke penyimpanan cloud yang aman (AWS S3)** — tidak ada yang disimpan di komputer lokal. Ini aturan mutlak.
@@ -66,7 +66,7 @@ Jika sistem sedang gangguan, pintu **tidak** membuka otomatis (lebih aman gagal-
 ## 7. Hal yang Perlu Dikonfirmasi (asumsi kami)
 
 1. Pendaftaran dilakukan **di kantor, didampingi admin** (bukan mandiri dari rumah). Benar?
-2. "Berputar 360°" artinya **orangnya yang berputar badan/kepala satu putaran penuh** di depan kamera. Benar?
+2. ~~"Berputar 360°" artinya orangnya yang berputar badan/kepala satu putaran penuh di depan kamera.~~ **DIKOREKSI (2026-08-30):** yang bergerak adalah **orientasi KEPALA saja** (menengok/menunduk/mendongak mengikuti pola arah jam), badan tetap menghadap kamera dan wajah tetap terlihat kamera sepanjang waktu — bukan badan berputar dan bukan sampai membelakangi kamera.
 3. Skala awal: sampai ± 5.000 orang terdaftar dan ± 20 pintu, satu lokasi. Benar?
 4. Perangkat pintu: kamera + kunci elektrik yang bisa diperintah sistem — merek/model belum ditentukan?
 5. Masa simpan video mentah 90 hari setelah pendaftaran berhasil — setuju?
