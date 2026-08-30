@@ -45,10 +45,24 @@ class MLflowSettings(BaseModel):
 
 
 class DBSettings(BaseModel):
-    """Postgres access with the restricted ai-training role.
+    """Postgres access with the restricted ai-training role(s).
 
-    Read-only on business tables + write on ``face_embeddings`` (TSD SS4).
-    DSN is injected via ``TRN_DB__DSN`` - never committed.
+    TSD §4/§6 and backend/README.md describe TWO distinct Postgres roles for
+    ai-training: `ai_training_ro` (SELECT-only on business tables, no access
+    to `face_embeddings`/`audit_logs`) and `ai_training_embeddings_write`
+    (SELECT/INSERT/UPDATE on `face_embeddings` ONLY).
+
+    KNOWN GAP (documented, not silently worked around — see TR-02/TR-03
+    implementation notes in ai_training/worker/tasks.py): the enrollment QC
+    + embedding worker also needs to UPDATE
+    `enrollment_sessions.state`/`qc_report` and INSERT into `audit_logs`,
+    which neither existing role grants. A single `dsn` field is kept here
+    (rather than inventing a `dsn_ro`/`dsn_embeddings_write` split that
+    would still be incomplete) so the worker is fully wired end-to-end
+    today; the operator must point `TRN_DB__DSN` at a role with the
+    additional grants (or widen `ai_training_embeddings_write` in a future
+    backend migration — out of scope for this task, no migrations were run
+    here) before running this against a real database.
     """
 
     dsn: str = ""
@@ -66,6 +80,53 @@ class TrainingSettings(BaseModel):
     max_far: float = 0.001
 
 
+class QCSettings(BaseModel):
+    """Enrollment quality-check thresholds (TR-02, FR-ENR-06).
+
+    Defaults are placeholders pending calibration against real pilot
+    enrollment recordings (same "tune later against real data" status as
+    `TrainingSettings.target_recall`/`max_far` above) — they are chosen to
+    be plausible for a webcam-quality capture, not derived from a dataset.
+
+    Pose ranges implement the ASM-03 correction (2026-08-30, FSD-AI.md): the
+    enrollment motion is head yaw/pitch only, body+camera fixed, no
+    back-of-head segment. `yaw_range_deg`/`pitch_range_deg` are the
+    amplitude of the (yaw, pitch) sweep mapped onto the 12 clock positions
+    (see `ai_training.quality.pose`) — kept within the corrected "realistic
+    head turn" envelope (~30-45 deg yaw, ~20-30 deg pitch) rather than the
+    old (incorrect) full-profile 90 deg assumption.
+    """
+
+    sample_fps: float = 6.0
+    blur_variance_min: float = 80.0
+    brightness_min: float = 40.0
+    brightness_max: float = 215.0
+    face_ratio_min: float = 0.12
+    pose_tolerance_deg: float = 15.0
+    yaw_range_deg: float = 35.0
+    pitch_range_deg: float = 25.0
+    # Fraction of the 12 clock positions that must have >=1 passing frame
+    # for the session to be QC PASS. Not 100%: ASM-03 says every position
+    # should in principle show a valid face, but a small allowance covers
+    # camera/lighting variance without a hard all-12-or-nothing gate. Tune
+    # once real capture data exists.
+    min_pass_ratio: float = 0.75
+
+
+class EmbedderSettings(BaseModel):
+    """Selects the embedding backend (TR-03).
+
+    `backend="stub"` (default) is the ONLY supported option today —
+    AdaFace pretrained weights have not been procured (see
+    documentation/research/recommendations.md §2, a separate licensing
+    decision). `backend="adaface"` selects `AdaFaceEmbedder`, which is a
+    documented `NotImplementedError` skeleton, not a working embedder.
+    """
+
+    backend: str = "stub"
+    stub_version: str = "stub-v1"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TRN_", env_nested_delimiter="__", env_file=".env", extra="ignore"
@@ -75,6 +136,17 @@ class Settings(BaseSettings):
     mlflow: MLflowSettings = MLflowSettings()
     db: DBSettings = DBSettings()
     training: TrainingSettings = TrainingSettings()
+    qc: QCSettings = QCSettings()
+    embedder: EmbedderSettings = EmbedderSettings()
+    # Celery broker/result-backend (TR-02/TR-03 worker). Deliberately a
+    # plain top-level field (mirrors backend's `Settings.redis_url`, see
+    # backend/app/worker/celery_app.py) rather than nested under a `redis`
+    # block, so the analogy to backend's config is obvious at a glance.
+    # MUST be pointed at the SAME Redis instance as backend's `REDIS_URL`
+    # for `run_enrollment_qc.delay(...)` dispatches to reach this worker —
+    # there is no automatic sharing between the two separate projects/env
+    # namespaces (`TRN_REDIS_URL` here vs `REDIS_URL` in backend/).
+    redis_url: str = ""
 
 
 @lru_cache
