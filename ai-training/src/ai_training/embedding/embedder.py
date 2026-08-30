@@ -198,9 +198,14 @@ class AdaFaceEmbedder(EmbedderInterface):
         return model
 
     def embed(self, aligned_crop: Any) -> list[float]:
+        # `_get_model()` is what raises the actionable RuntimeError (missing
+        # 'ml' extra, or missing weights file) -- it must run BEFORE any
+        # unguarded `import torch` here, otherwise a bare environment
+        # without the 'ml' extra would surface a raw ModuleNotFoundError
+        # instead of that clear, actionable message.
+        model = self._get_model()
         import torch
 
-        model = self._get_model()
         input_array = preprocess_bgr_crop(aligned_crop)
         input_tensor = torch.from_numpy(input_array)
         with torch.no_grad():

@@ -92,6 +92,13 @@ def test_adaface_embedder_model_version_is_stable() -> None:
 
 
 def test_adaface_embedder_raises_actionable_error_when_weights_missing(tmp_path) -> None:
+    # This test is specifically about the "torch IS available but the
+    # checkpoint file is absent" path -- on base CI (no `ml` extra, no
+    # torch), `_get_model()` raises a DIFFERENT (still actionable) error
+    # first ("requires the 'ml' extra"). That path is covered instead by
+    # test_adaface_embedder_raises_actionable_error_when_ml_extra_missing
+    # below, which runs unconditionally.
+    pytest.importorskip("torch")
     missing_path = tmp_path / "does-not-exist.ckpt"
     settings = Settings(
         _env_file=None,
@@ -106,3 +113,22 @@ def test_adaface_embedder_raises_actionable_error_when_weights_missing(tmp_path)
     message = str(exc_info.value)
     assert str(missing_path) in message
     assert "download-adaface-weights" in message
+
+
+def test_adaface_embedder_raises_actionable_error_when_ml_extra_missing() -> None:
+    """Complements the test above for base CI (no `ml` extra, no torch
+    installed at all): `embed()` must still fail with an actionable
+    `RuntimeError` naming the missing extra, never a raw
+    `ModuleNotFoundError` leaking out of an unguarded `import torch`."""
+    try:
+        import torch  # noqa: F401
+
+        pytest.skip("torch is installed in this environment; see the test above instead")
+    except ImportError:
+        pass
+
+    settings = Settings(_env_file=None, embedder=EmbedderSettings(backend="adaface"))
+    embedder = AdaFaceEmbedder(settings)
+    crop = np.zeros((112, 112, 3), dtype=np.uint8)
+    with pytest.raises(RuntimeError, match="ml.*extra"):
+        embedder.embed(crop)

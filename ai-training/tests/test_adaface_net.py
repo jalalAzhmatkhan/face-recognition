@@ -8,9 +8,11 @@ wrong output_layer flatten size), so this is exactly what these tests
 guard against. Requires the `ml` extra (torch).
 """
 
-import torch
+import pytest
 
-from ai_training.embedding.adaface_net import build_model
+torch = pytest.importorskip("torch")
+
+from ai_training.embedding.adaface_net import build_model  # noqa: E402
 
 
 def test_ir50_forward_shape_and_normalization() -> None:
