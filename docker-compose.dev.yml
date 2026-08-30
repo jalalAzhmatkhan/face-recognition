@@ -1,0 +1,46 @@
+# Docker Compose — development skeleton (task XC-01).
+# NOTE: Infra lengkap (PostgreSQL 16 + pgvector, Redis 7, MLflow self-hosted)
+# adalah scope task XC-02. File ini baru kerangka service aplikasi.
+# Konfigurasi via env vars; JANGAN commit secret (gunakan .env lokal, sudah di-.gitignore).
+
+name: face-recognition-dev
+
+services:
+  backend:
+    build:
+      context: ./backend
+    # Dockerfile menyusul; sementara jalankan lokal: cd backend && uv run uvicorn app.main:app --reload
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: DEBUG
+    profiles: ["app"]
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    profiles: ["app"]
+
+  ai-inference:
+    build:
+      context: ./ai-inference
+    ports:
+      - "8001:8001"
+    environment:
+      APP_ENV: dev
+    profiles: ["app"]
+
+  ai-training:
+    build:
+      context: ./ai-training
+    environment:
+      APP_ENV: dev
+    profiles: ["app"]
+
+  # --- XC-02 (placeholder, belum diaktifkan) ---
+  # postgres:  PostgreSQL 16 + pgvector
+  # redis:     Redis 7 (cache + Celery broker)
+  # mlflow:    MLflow self-hosted (artifacts -> S3)
