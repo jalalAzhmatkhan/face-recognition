@@ -31,11 +31,12 @@ Aplikasi face recognition untuk otorisasi akses masuk gedung/kantor. Orang yang 
 ## Workflow Pengembangan (Git Flow)
 
 1. Buat branch dari `master`: `features/<nama_fitur>` (fitur) atau `bugfix/<nama_bug>` (bug).
-2. Implementasi di branch tersebut.
+2. Implementasi di branch tersebut. Commit dan push ke remote.
 3. QA harus PASSED sebelum buka Pull Request.
-4. Merge PR ke `master`, hapus branch yang tidak terpakai.
-5. Di `master` ter-update, jalankan `graphify update .`
-6. Terakhir: bump version + git tag.
+4. Buka Pull Request ke branch `master`.
+5. Pastikan CI passed, lalu merge PR ke `master`, hapus branch yang tidak terpakai.
+6. Di `master` ter-update, jalankan `graphify update .`
+7. Terakhir: bump version + git tag.
 
 ### Aturan Versioning (SemVer)
 
