@@ -86,6 +86,13 @@ class EvalReport(BaseModel):
     benchmark_id: str = ""
     fpir: float = 0.0
     fnir_at_fpir_budget: float = 0.0
+    # BE-13 addition (additive, defaults to ""): the MLflow run id created by
+    # `_log_to_mlflow`, so a caller (ai_training.worker.tasks.run_training_evaluation_job)
+    # can persist it onto `training_jobs.mlflow_run_id` / `models.mlflow_run_id`
+    # without re-deriving or guessing one. Stays "" when MLflow logging is
+    # unconfigured/unavailable/fails — see `_log_to_mlflow`'s best-effort
+    # contract, unchanged by this addition.
+    mlflow_run_id: str = ""
 
 
 def _split_gallery_and_probes(
@@ -179,17 +186,22 @@ def _log_to_mlflow(
     benchmark_id: str,
     threshold: float,
     report: EvalReport,
-) -> None:
+) -> str:
     """Best-effort MLflow run logging (FR-TRN-03 gap closed by TR-07 - see
     task brief). Never raises: a broken/unconfigured tracking backend must
     not prevent `evaluate_candidate` from returning a locally-useful
     `EvalReport`, same "best-effort, non-fatal" spirit as this project's
-    other secondary side effects (e.g. backend's SSE publish)."""
+    other secondary side effects (e.g. backend's SSE publish).
+
+    Returns the created MLflow run id, or "" whenever nothing was actually
+    logged (untracked/unconfigured/mlflow not installed/logging failed) -
+    BE-13 addition so `evaluate_candidate` can populate
+    `EvalReport.mlflow_run_id`."""
     if not settings.mlflow.tracking_uri:
         logger.warning(
             "evaluate_candidate: TRN_MLFLOW__TRACKING_URI not configured; skipping MLflow logging"
         )
-        return
+        return ""
     try:
         import mlflow
     except ImportError:
@@ -197,7 +209,7 @@ def _log_to_mlflow(
             "evaluate_candidate: mlflow not installed (uv sync --extra ml); "
             "skipping MLflow logging"
         )
-        return
+        return ""
 
     import json
     import sys
@@ -225,7 +237,8 @@ def _log_to_mlflow(
     try:
         mlflow.set_tracking_uri(settings.mlflow.tracking_uri)
         mlflow.set_experiment(settings.mlflow.experiment_name)
-        with mlflow.start_run():
+        with mlflow.start_run() as run:
+            run_id = run.info.run_id
             mlflow.log_params(
                 {
                     "benchmark_id": benchmark_id,
@@ -249,8 +262,10 @@ def _log_to_mlflow(
                 report_path = Path(tmp_dir) / "eval_report.json"
                 report_path.write_text(json.dumps(report.model_dump(), indent=2))
                 mlflow.log_artifact(str(report_path))
+        return run_id
     except Exception:  # noqa: BLE001 - tracking must never break evaluation
         logger.exception("evaluate_candidate: MLflow logging failed (non-fatal)")
+        return ""
 
 
 def evaluate_candidate(settings: Settings, model_version: str, benchmark_id: str) -> EvalReport:
@@ -334,7 +349,7 @@ def evaluate_candidate(settings: Settings, model_version: str, benchmark_id: str
         fnir_at_fpir_budget=id_metrics["fnir"],
     )
 
-    _log_to_mlflow(
+    report.mlflow_run_id = _log_to_mlflow(
         settings,
         model_version=model_version,
         benchmark_id=benchmark_id,

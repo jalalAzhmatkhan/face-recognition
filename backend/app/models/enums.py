@@ -70,6 +70,21 @@ class ModelStage(enum.StrEnum):
     RETIRED = "RETIRED"
 
 
+class TrainingJobStatus(enum.StrEnum):
+    """Lifecycle of a `training_jobs` row (BE-13, FR-TRN-02).
+
+    PENDING is set at creation time (before the Celery dispatch is even
+    attempted); RUNNING is set by the ai-training worker right after it
+    picks the job up; SUCCEEDED/FAILED are terminal. There is no CANCELLED
+    state in v1 — cancelling an in-flight evaluation job is out of scope.
+    """
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
 class DeviceStatus(enum.StrEnum):
     ONLINE = "ONLINE"
     OFFLINE = "OFFLINE"
