@@ -50,7 +50,13 @@ ml = [
     # SCRFD/AdaFace/MiniFASNet), and give real 3D-ish landmarks usable with
     # `cv2.solvePnP` for yaw/pitch head-pose estimation.
     "opencv-python-headless>=4.9",
-    "mediapipe>=0.10",
+    # Upper-bounded: mediapipe 1.0.0 removed the legacy `mp.solutions.*`
+    # namespace this codebase's quality/pose.py relies on (replaced by a
+    # different "Tasks" API) -- found live: `mediapipe>=0.10` with no
+    # ceiling resolved to 1.0.1, which has no `mp.solutions` attribute at
+    # all, so face/landmark detection failed at import time with a real
+    # video. Pin below 1.0 until pose.py is migrated to the Tasks API.
+    "mediapipe>=0.10,<1.0",
 ]
 
 [project.scripts]
