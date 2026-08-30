@@ -1,0 +1,78 @@
+# FSD-USER — Sistem Akses Gedung dengan Pengenalan Wajah
+
+> Dokumen spesifikasi fungsional versi bahasa awam.
+> Status: DRAF v0.1 — fase perencanaan (belum ada yang dibangun).
+> Versi teknis untuk tim: `FSD-AI.md` dan `TSD.md`.
+
+## 1. Apa yang Sedang Kita Bangun?
+
+Sebuah sistem yang membuka pintu gedung/kantor secara otomatis untuk orang yang **sudah terdaftar**, cukup dengan menunjukkan wajah ke kamera di pintu masuk. Orang yang tidak terdaftar tidak akan dibukakan pintu, dan setiap upaya masuk tercatat rapi.
+
+Cara kerjanya seperti satpam digital yang sangat teliti:
+
+1. **Pendaftaran (enrollment)** — wajah karyawan direkam sekali di awal.
+2. **Belajar (training)** — komputer "belajar" mengenali wajah-wajah yang terdaftar.
+3. **Penjagaan (inference)** — kamera di pintu mengenali wajah dalam waktu kurang dari sekejap dan memutuskan buka/tidak.
+
+## 2. Bagaimana Proses Pendaftarannya?
+
+- Admin membuat sesi pendaftaran untuk seorang karyawan.
+- Karyawan menyetujui dulu (persetujuan/consent dicatat) karena data wajah adalah data pribadi yang sensitif.
+- Karyawan difoto, lalu **direkam video sambil berputar satu putaran penuh**: mulai menghadap arah jam 12, berputar searah jarum jam, sampai kembali menghadap jam 12. Tujuannya agar sistem mengenal wajah dari berbagai sudut, bukan hanya dari depan.
+- Aplikasi memandu selama perekaman: "wajah kurang terang", "putar lebih pelan", indikator arah yang sudah terekam, dan seterusnya.
+- Jika hasil rekaman kurang bagus (buram, gelap, sudut kurang lengkap), sistem meminta rekam ulang.
+- **Semua foto/video langsung dikirim ke penyimpanan cloud yang aman (AWS S3)** — tidak ada yang disimpan di komputer lokal. Ini aturan mutlak.
+
+## 3. Bagaimana Sistem Belajar?
+
+- Setelah ada pendaftaran baru, sistem memproses rekaman: memilih cuplikan wajah terbaik dari berbagai sudut, lalu mengubahnya menjadi "sidik wajah" digital (angka-angka unik, bukan foto).
+- Secara berkala model dilatih ulang (fine-tuning) agar makin akurat.
+- Model baru hanya dipakai kalau terbukti **lebih jarang gagal mengenali orang terdaftar** dibanding model lama, dan tetap cepat. Ada persetujuan manusia sebelum model baru "naik produksi".
+
+Ukuran keberhasilan (sesuai prioritas):
+1. **Recall** — jangan sampai orang yang berhak malah ditolak. Ini prioritas utama.
+2. **F1** — keseimbangan keseluruhan.
+3. **Precision** — jangan sampai orang asing dianggap terdaftar.
+4. **Kecepatan** — keputusan diukur dalam milidetik; target keputusan di bawah ~0,3 detik.
+
+## 4. Apa yang Terjadi di Pintu Masuk?
+
+1. Kamera menangkap wajah orang yang mendekat.
+2. Sistem memeriksa itu wajah asli, bukan foto/HP yang disodorkan ke kamera (anti-pemalsuan).
+3. Wajah dicocokkan dengan daftar orang terdaftar.
+4. Cocok dan statusnya aktif → pintu terbuka. Tidak cocok → pintu tetap tertutup.
+5. Semua kejadian (berhasil, ditolak, dicurigai palsu) tercatat dan bisa dipantau petugas keamanan secara langsung dari dashboard.
+
+Jika sistem sedang gangguan, pintu **tidak** membuka otomatis (lebih aman gagal-tertutup); petugas membuka secara manual.
+
+## 5. Siapa Memakai Apa?
+
+| Peran | Yang bisa dilakukan |
+|---|---|
+| Admin | Mendaftarkan/menghapus orang, mengatur hak akses, melihat semua laporan |
+| Petugas keamanan | Memantau kejadian akses secara langsung, penanganan manual |
+| Karyawan terdaftar | Masuk gedung dengan wajah |
+| Manajemen | Melihat laporan ringkas |
+
+## 6. Bagaimana dengan Privasi?
+
+- Data wajah adalah **data pribadi sensitif** (sesuai UU Perlindungan Data Pribadi). Karena itu:
+  - Wajib ada persetujuan tertulis sebelum direkam.
+  - Foto/video disimpan terenkripsi di cloud, aksesnya sangat dibatasi, dan **dihapus otomatis** setelah tidak diperlukan (usulan: 90 hari setelah pendaftaran berhasil).
+  - Kalau karyawan keluar/menarik persetujuan, seluruh datanya (foto, video, sidik wajah) dihapus dan dia tidak bisa dikenali lagi.
+  - Semua tindakan admin (mendaftarkan, menghapus, mengubah aturan) tercatat dan tidak bisa diubah-ubah.
+- Sistem TIDAK menganalisis emosi, ras, atau hal lain di luar keperluan membuka pintu.
+
+## 7. Hal yang Perlu Dikonfirmasi (asumsi kami)
+
+1. Pendaftaran dilakukan **di kantor, didampingi admin** (bukan mandiri dari rumah). Benar?
+2. "Berputar 360°" artinya **orangnya yang berputar badan/kepala satu putaran penuh** di depan kamera. Benar?
+3. Skala awal: sampai ± 5.000 orang terdaftar dan ± 20 pintu, satu lokasi. Benar?
+4. Perangkat pintu: kamera + kunci elektrik yang bisa diperintah sistem — merek/model belum ditentukan?
+5. Masa simpan video mentah 90 hari setelah pendaftaran berhasil — setuju?
+6. Anti-pemalsuan tahap awal berbasis perangkat lunak saja (belum pakai kamera inframerah/3D) — cukup?
+7. Target: hampir tidak pernah menolak orang terdaftar (≥ 98%), dengan orang asing salah diterima maksimal 1 dari 1.000 percobaan — setuju dengan keseimbangan ini?
+
+## 8. Yang BELUM Termasuk di Tahap Pertama
+
+- Aplikasi mobile khusus; integrasi kartu akses/PIN sebagai cadangan; banyak gedung sekaligus; CCTV/perekaman video pengawasan; analisis apa pun selain "kenal atau tidak".
