@@ -19,15 +19,18 @@ DELETE decision (documented per task BE-04 instructions):
     (BE-08) per NFR-SEC-03.
 """
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.problem import ProblemError
+from app.core.redis_client import get_redis_client
 from app.db.session import get_db
 from app.dependencies.auth import CurrentStaff, require_role
 from app.models.enums import StaffRole, UserStatus
+from app.repositories.access_policies import AccessPolicyRepository
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.users import UserRepository
 from app.schemas.users import (
@@ -36,7 +39,10 @@ from app.schemas.users import (
     UserResponse,
     UserUpdateRequest,
 )
-from app.services import user_service
+from app.services import policy_cache, user_service
+from app.services.policy_cache import RedisLike
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -53,6 +59,37 @@ def get_user_repository(db: Session = Depends(get_db)) -> UserRepository:
 
 def get_audit_log_repository(db: Session = Depends(get_db)) -> AuditLogRepository:
     return AuditLogRepository(db)
+
+
+def get_access_policy_repository(db: Session = Depends(get_db)) -> AccessPolicyRepository:
+    """BE-10: only needed here to (re)build the policy-snapshot cache after a
+    status change — see `_refresh_policy_cache_best_effort` below."""
+    return AccessPolicyRepository(db)
+
+
+def _refresh_policy_cache_best_effort(
+    redis_client: RedisLike,
+    user_repo: UserRepository,
+    policy_repo: AccessPolicyRepository,
+    user_id: uuid.UUID,
+) -> None:
+    """BE-10 (TSD §2.2, FR-INF-05): a user's ACTIVE/SUSPENDED/OFFBOARDED
+    status feeds directly into the door-decision cache, so refresh it
+    proactively here rather than waiting up to the cache's <=30s TTL.
+
+    Deliberately swallows ANY failure (Redis down, DB unreachable for the
+    snapshot rebuild, etc.) — a user-status update must never turn into a
+    500 just because the cache couldn't be refreshed; worst case the cache
+    stays stale until TTL expiry or the next successful refresh, and the
+    fail-secure semantics in app/services/access_event_service.py still
+    hold either way.
+    """
+    try:
+        policy_cache.refresh_cache(redis_client, user_repo, policy_repo, user_id)
+    except Exception:
+        logger.warning(
+            "policy_cache_refresh_failed_after_status_change", extra={"user_id": str(user_id)}
+        )
 
 
 def _not_found(user_id: uuid.UUID) -> ProblemError:
@@ -126,6 +163,8 @@ def update_user(
     current: CurrentStaff = Depends(require_role(*WRITE_ROLES)),
     repo: UserRepository = Depends(get_user_repository),
     audit_repo: AuditLogRepository = Depends(get_audit_log_repository),
+    policy_repo: AccessPolicyRepository = Depends(get_access_policy_repository),
+    redis_client: RedisLike = Depends(get_redis_client),
 ) -> UserResponse:
     updates = body.model_dump(exclude_unset=True)
     try:
@@ -136,6 +175,10 @@ def update_user(
         raise _not_found(user_id) from exc
     except user_service.DuplicateExternalRefError as exc:
         raise _conflict(exc.external_ref) from exc
+
+    if "status" in updates:
+        _refresh_policy_cache_best_effort(redis_client, repo, policy_repo, user_id)
+
     return UserResponse.model_validate(user)
 
 
@@ -145,6 +188,8 @@ def delete_user(
     current: CurrentStaff = Depends(require_role(*WRITE_ROLES)),
     repo: UserRepository = Depends(get_user_repository),
     audit_repo: AuditLogRepository = Depends(get_audit_log_repository),
+    policy_repo: AccessPolicyRepository = Depends(get_access_policy_repository),
+    redis_client: RedisLike = Depends(get_redis_client),
 ) -> UserResponse:
     """Alias for `PATCH {"status": "OFFBOARDED"}` — see module docstring for
     why this never hard-deletes the row."""
@@ -152,4 +197,7 @@ def delete_user(
         user = user_service.offboard_user(repo, audit_repo, user_id=user_id, actor=str(current.id))
     except user_service.UserNotFoundError as exc:
         raise _not_found(user_id) from exc
+
+    _refresh_policy_cache_best_effort(redis_client, repo, policy_repo, user_id)
+
     return UserResponse.model_validate(user)

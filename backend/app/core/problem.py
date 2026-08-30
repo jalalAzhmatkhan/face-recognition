@@ -57,6 +57,30 @@ def problem_response(
     return JSONResponse(status_code=status_code, content=body, media_type=PROBLEM_CONTENT_TYPE)
 
 
+def _sanitize_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pydantic v2's `RequestValidationError.errors()` can embed the raw
+    exception object under `ctx.error` for a `@field_validator`/
+    `@model_validator` that raises `ValueError` (e.g.
+    `app/schemas/access_policies.py`'s "at least one of user_id/group_id"
+    check) — that exception instance is not JSON-serializable, which would
+    otherwise crash the very handler meant to report the 422 (crashing into
+    a 500 instead). Stringify anything under `ctx` that isn't already a
+    plain JSON-safe value.
+    """
+    sanitized = []
+    for error in errors:
+        error = dict(error)
+        ctx = error.get("ctx")
+        if isinstance(ctx, dict):
+            _json_safe = (str, int, float, bool, type(None))
+            error["ctx"] = {
+                key: (value if isinstance(value, _json_safe) else str(value))
+                for key, value in ctx.items()
+            }
+        sanitized.append(error)
+    return sanitized
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProblemError)
     async def handle_problem(request: Request, exc: ProblemError) -> JSONResponse:
@@ -83,7 +107,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             title="Validation failed",
             detail="Request payload or parameters failed validation.",
-            extra={"errors": exc.errors()},
+            extra={"errors": _sanitize_validation_errors(exc.errors())},
         )
 
     @app.exception_handler(Exception)

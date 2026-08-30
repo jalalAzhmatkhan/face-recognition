@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     # a follow-up once scheduled-task infra exists.
     device_heartbeat_stale_after_seconds: int = 90
 
+    # Policy cache (BE-10, TSD §2.2, FR-INF-05): TTL for the per-user Redis
+    # snapshot (`policy_snapshot:{user_id}`) consumed on the recognition hot
+    # path. Kept <= 30s per TSD so a stale policy/status change becomes
+    # effective quickly even when no proactive refresh fires for some reason;
+    # policy/user-status writes ALSO proactively refresh this cache (see
+    # app/services/policy_cache.py) so the TTL is a worst-case bound, not the
+    # typical propagation delay.
+    policy_cache_ttl_seconds: int = 30
+
     @property
     def cors_allow_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]

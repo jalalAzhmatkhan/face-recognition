@@ -80,3 +80,9 @@ class AccessDecision(enum.StrEnum):
     GRANTED = "GRANTED"
     DENIED = "DENIED"
     SPOOF_SUSPECTED = "SPOOF_SUSPECTED"
+    # BE-10 (FR-INF-02): distinct from SPOOF_SUSPECTED — "no liveness/spoof
+    # concern, but the face didn't match anyone (or not confidently enough)".
+    # Added via an additive `ALTER TYPE ... ADD VALUE` migration (see
+    # migrations/versions/ for the BE-10 enum migration) rather than the
+    # baseline schema migration, since this value didn't exist until BE-10.
+    UNKNOWN = "UNKNOWN"
