@@ -42,10 +42,14 @@ from typing import Any
 
 from celery import Task
 
+from app.core.aws import get_s3_client
 from app.db.session import get_sessionmaker
 from app.models.enums import EnrollmentState
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.enrollments import EnrollmentSessionRepository
+from app.repositories.face_embeddings import FaceEmbeddingRepository
+from app.repositories.media_objects import MediaObjectRepository
+from app.repositories.users import UserRepository
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -214,5 +218,145 @@ def run_enrollment_qc(self: Task, session_id: str) -> str:
         enrollment_repo = EnrollmentSessionRepository(db)
         audit_repo = AuditLogRepository(db)
         return _run_enrollment_qc_stub(enrollment_repo, audit_repo, uuid.UUID(session_id))
+    finally:
+        db.close()
+
+
+# --- revoke_enrollment_cleanup (BE-08, FR-ENR-09/NFR-SEC-03/ASM-12) --------
+
+# What "tombstoning" a user means here: the row is never hard-deleted (many
+# FKs — devices/access_events/audit_logs/etc. — reference `users.id`, and
+# hard-delete would either violate referential integrity or, worse, cascade
+# and silently destroy unrelated audit history). Instead only the one
+# column that identifies a *person* (`full_name`) is redacted; `external_ref`
+# (the business key audit/reporting joins against) is deliberately left
+# untouched per BE-08 instructions.
+TOMBSTONE_FULL_NAME = "[REVOKED]"
+
+REVOKE_CLEANUP_SKIPPED_ACTION = "job.revoke_cleanup_skipped"
+REVOKE_COMPLETED_ACTION = "enrollment.revoke_completed"
+
+
+def _revoke_enrollment_cleanup_core(
+    enrollment_repo: EnrollmentSessionRepository,
+    user_repo: UserRepository,
+    media_repo: MediaObjectRepository,
+    embedding_repo: FaceEmbeddingRepository,
+    audit_repo: AuditLogRepository,
+    s3_client: Any,
+    session_id: uuid.UUID,
+) -> str:
+    """Core logic of the revocation cleanup job, factored out for unit
+    testing without a Celery task context (same split as
+    `_run_enrollment_qc_stub` above).
+
+    Returns a short outcome string (`"executed"`, `"skipped_not_found"`,
+    `"skipped_not_revoked"`) purely so tests can assert on it.
+
+    Idempotency (NFR-OPS-02): a duplicate delivery of this job — including
+    the case where a previous run already completed it — is safe. Deleting
+    already-deleted `face_embeddings`/`media_objects` rows is a no-op
+    (`DELETE ... WHERE` matching 0 rows is not an error), an already-absent
+    S3 object is a no-op delete by S3/MinIO semantics, and an already
+    `TOMBSTONE_FULL_NAME` user is left untouched rather than re-written. The
+    job still records a fresh `enrollment.revoke_completed` audit entry each
+    time it runs (with counts reflecting however much work was actually
+    left to do, including 0), rather than treating a repeat run as an error.
+    """
+    session = enrollment_repo.get(session_id)
+    if session is None:
+        logger.warning("revoke_enrollment_cleanup: session %s not found, skipping", session_id)
+        audit_repo.record(
+            actor="system:celery-worker",
+            action=REVOKE_CLEANUP_SKIPPED_ACTION,
+            entity=f"enrollment_session:{session_id}",
+            payload={"reason": "session_not_found"},
+        )
+        return "skipped_not_found"
+
+    if session.state != EnrollmentState.REVOKED:
+        # Guards against ever wiping embeddings/media for a session that
+        # was never actually revoked (e.g. a malformed/duplicate dispatch
+        # racing an in-flight revoke, or a stale job replayed against a
+        # session id that has since been reused/miscopied).
+        logger.warning(
+            "revoke_enrollment_cleanup: session %s is %s (not REVOKED), skipping",
+            session_id,
+            session.state,
+        )
+        audit_repo.record(
+            actor="system:celery-worker",
+            action=REVOKE_CLEANUP_SKIPPED_ACTION,
+            entity=f"enrollment_session:{session_id}",
+            payload={"reason": "not_revoked", "state": session.state.value},
+        )
+        return "skipped_not_revoked"
+
+    embeddings_deleted = embedding_repo.delete_for_session(session_id)
+
+    media_deleted = 0
+    for media in media_repo.list_for_session(session_id):
+        # S3/MinIO DeleteObject is idempotent by nature (deleting an
+        # already-absent key succeeds rather than erroring), so this is
+        # safe to run again on a retry/duplicate delivery.
+        s3_client.delete_object(Bucket=media.s3_bucket, Key=media.s3_key)
+        media_repo.delete(media)
+        media_deleted += 1
+
+    user = user_repo.get(session.user_id)
+    if user is not None and user.full_name != TOMBSTONE_FULL_NAME:
+        user.full_name = TOMBSTONE_FULL_NAME
+        user_repo.update(user)
+
+    audit_repo.record(
+        actor="system:celery-worker",
+        action=REVOKE_COMPLETED_ACTION,
+        entity=f"enrollment_session:{session_id}",
+        payload={"embeddings_deleted": embeddings_deleted, "media_deleted": media_deleted},
+    )
+    return "executed"
+
+
+@celery_app.task(
+    name="app.worker.tasks.revoke_enrollment_cleanup",
+    base=DeadLetterTask,
+    bind=True,
+    autoretry_for=RETRYABLE_EXCEPTIONS,
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=5,
+)
+def revoke_enrollment_cleanup(self: Task, session_id: str) -> str:
+    """Async revocation cleanup job (FR-ENR-09, NFR-SEC-03, ASM-12).
+
+    Dispatched by `app/services/revocation_service.py` (via
+    `app/services/revocation_queue.py`) right after `DELETE
+    /enrollments/{id}` synchronously transitions the session to REVOKED and
+    sets `user.status = OFFBOARDED`. This job performs the physical
+    cleanup within the FR-ENR-09/ASM-12 24h SLA: hard-deletes every
+    `face_embeddings` row for the session, deletes every associated S3
+    object + its `media_objects` row, and tombstones the user's
+    `full_name` (see `TOMBSTONE_FULL_NAME` above). See
+    `_revoke_enrollment_cleanup_core` for the idempotency argument.
+    """
+    session_factory = get_sessionmaker()
+    db = session_factory()
+    try:
+        enrollment_repo = EnrollmentSessionRepository(db)
+        user_repo = UserRepository(db)
+        media_repo = MediaObjectRepository(db)
+        embedding_repo = FaceEmbeddingRepository(db)
+        audit_repo = AuditLogRepository(db)
+        s3_client = get_s3_client()
+        return _revoke_enrollment_cleanup_core(
+            enrollment_repo,
+            user_repo,
+            media_repo,
+            embedding_repo,
+            audit_repo,
+            s3_client,
+            uuid.UUID(session_id),
+        )
     finally:
         db.close()

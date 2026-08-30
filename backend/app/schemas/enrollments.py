@@ -42,6 +42,19 @@ class EnrollmentResponse(BaseModel):
     updated_at: datetime
 
 
+class RevocationResponse(BaseModel):
+    """Body for `DELETE /enrollments/{id}` (BE-08, FR-ENR-09).
+
+    Deliberately minimal (mirrors `CompleteResponse` in schemas/media.py):
+    the 202 status code itself signals that async cleanup
+    (embeddings/media/tombstone) follows, so the response only needs to
+    confirm the synchronous part succeeded.
+    """
+
+    id: uuid.UUID
+    state: EnrollmentState
+
+
 class EnrollmentListResponse(BaseModel):
     items: list[EnrollmentResponse]
     total: int
