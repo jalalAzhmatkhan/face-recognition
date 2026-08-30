@@ -299,6 +299,66 @@ retries are exhausted.
 >   `_run_enrollment_qc_stub` lalu jalankan — tunggu backoff 5x retry, lalu
 >   cek `SELECT * FROM audit_logs WHERE action = 'job.dead_letter'`.
 
+## Retention automation (BE-14, ASM-10, NFR-SEC-03)
+
+`app/services/retention_service.py` implements two idempotent jobs, wrapped
+as Celery tasks in `app/worker/tasks.py`
+(`backfill_retention_expiry_task` / `purge_expired_media_task`):
+
+- **`backfill_retention_expiry`** ("lifecycle verification") — sets
+  `media_objects.retention_expires_at` on FINALIZED rows that don't have it
+  yet. PHOTO/VIDEO (raw enrollment media) anchor on the owning
+  `enrollment_sessions.updated_at` at the moment it reached `ENROLLED`
+  (ASM-10 default: +90 days, `RETENTION_RAW_MEDIA_DAYS`); EVENT_FRAME
+  (door-camera frames, independent of any enrollment session) anchors on the
+  media row's own `created_at` (+30 days default, `RETENTION_EVENT_FRAME_DAYS`
+  — a placeholder pending IN-06 calibration). See the module docstring for
+  why the `ENROLLED`-session anchor is an intentionally conservative
+  approximation (media can end up retained slightly *longer* than the
+  configured window, never shorter).
+- **`purge_expired_media`** — hard-deletes every `media_objects` row whose
+  `retention_expires_at` has passed: S3 object, then DB row, then one
+  `audit_logs` entry (`action="media.retention_purged"`) per deleted item.
+  Per-item try/except so one failure (S3 timeout, etc.) doesn't stop the
+  batch; a 404/already-absent S3 object is treated as success, not failure.
+
+**This is the first Celery Beat schedule in this project** — every task
+before BE-14 was on-demand only. The schedule itself
+(`app/worker/celery_app.py::celery_app.conf.beat_schedule`) is inert unless
+a *separate* beat process is actually running:
+
+```bash
+# Terminal 1 — executes whatever beat enqueues (same as any other job):
+uv run celery -A app.worker.celery_app worker --loglevel=info
+
+# Terminal 2 — enqueues backfill-retention-expiry (hourly) and
+# purge-expired-media (every 6h) on schedule. Without this process, the
+# beat_schedule entries are registered but nothing ever fires them.
+uv run celery -A app.worker.celery_app beat --loglevel=info
+```
+
+Both intervals are configurable via `RETENTION_BACKFILL_INTERVAL_SECONDS` /
+`RETENTION_PURGE_INTERVAL_SECONDS`.
+
+**Known gaps, deliberately out of scope for BE-14** (see
+`app/services/retention_service.py` module docstring for the full
+rationale):
+- The `ENROLLED`-anchor timestamp is approximate because `ai-training/`
+  (TR-02/TR-03) transitions `enrollment_sessions.state -> ENROLLED` via raw
+  SQL, not through `app/services/enrollment_state_machine.py` — so
+  `updated_at` may not always reflect exactly when embedding extraction
+  finished. Direction of error is safe (retain longer, never delete sooner).
+- `media_objects.session_id` is currently `NOT NULL`, which blocks a real
+  EVENT_FRAME row from ever being created independently of an enrollment
+  session — that schema change belongs to IN-06 (event emission), not BE-14.
+  The purge/backfill logic here is already written generically against
+  `kind == EVENT_FRAME` and needs no changes once that lands.
+
+Tests: `tests/test_retention_service.py` (pure service-logic unit tests,
+fake repos/S3 client, no live Postgres/S3) and the retention section of
+`tests/test_worker_tasks.py` (beat schedule registration, task wiring,
+one end-to-end eager-mode run).
+
 ## Konfigurasi
 
 Semua config via environment variables (lihat `.env.example`; salin ke `.env` untuk dev lokal). Tidak ada secret di repo (NFR-OPS-03).

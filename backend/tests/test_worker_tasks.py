@@ -18,7 +18,7 @@ import pytest
 from celery import Task
 
 from app.models.enrollment_session import EnrollmentSession
-from app.models.enums import EnrollmentState, UserStatus
+from app.models.enums import EnrollmentState, MediaKind, MediaObjectStatus, UserStatus
 from app.models.face_embedding import FaceEmbedding
 from app.models.media_object import MediaObject
 from app.models.user import User
@@ -284,8 +284,6 @@ def _user(user_id: uuid.UUID, full_name: str = "Real Person") -> User:
 
 
 def _media(session_id: uuid.UUID) -> MediaObject:
-    from app.models.enums import MediaKind, MediaObjectStatus
-
     now = datetime.now(UTC)
     return MediaObject(
         id=uuid.uuid4(),
@@ -467,3 +465,81 @@ def test_revoke_enrollment_cleanup_dead_letters_after_retries_exhausted(
     assert len(dead_letters) == 1
     assert dead_letters[0].payload["task"] == "app.worker.tasks.revoke_enrollment_cleanup"
     assert dead_letters[0].payload["exception_type"] == "ConnectionError"
+
+
+# --- retention automation (BE-14) — Celery Beat schedule + task wiring -----
+
+
+def test_beat_schedule_registers_both_retention_jobs() -> None:
+    schedule = celery_app.conf.beat_schedule
+    assert "backfill-retention-expiry" in schedule
+    assert "purge-expired-media" in schedule
+    assert (
+        schedule["backfill-retention-expiry"]["task"]
+        == "app.worker.tasks.backfill_retention_expiry_task"
+    )
+    assert (
+        schedule["purge-expired-media"]["task"] == "app.worker.tasks.purge_expired_media_task"
+    )
+    # Both intervals are positive numbers of seconds (config-able, not zero).
+    assert schedule["backfill-retention-expiry"]["schedule"] > 0
+    assert schedule["purge-expired-media"]["schedule"] > 0
+
+
+def test_backfill_retention_expiry_task_is_registered_and_dead_letter_based() -> None:
+    task = celery_app.tasks["app.worker.tasks.backfill_retention_expiry_task"]
+    assert issubclass(task.__class__, worker_tasks.DeadLetterTask)
+    assert task.name == worker_tasks.backfill_retention_expiry_task.name
+
+
+def test_purge_expired_media_task_is_registered_and_dead_letter_based() -> None:
+    task = celery_app.tasks["app.worker.tasks.purge_expired_media_task"]
+    assert issubclass(task.__class__, worker_tasks.DeadLetterTask)
+    assert task.name == worker_tasks.purge_expired_media_task.name
+
+
+def test_backfill_retention_expiry_task_end_to_end(monkeypatch, eager_celery) -> None:
+    """Runs the real task body (in eager mode) against monkeypatched repos to
+    prove the task wires settings + repos into retention_service correctly,
+    without needing a live Postgres."""
+    session = _session(EnrollmentState.ENROLLED)
+    media = MediaObject(
+        id=uuid.uuid4(),
+        session_id=session.id,
+        kind=MediaKind.PHOTO,
+        s3_bucket="test-bucket",
+        s3_key="photo.jpg",
+        checksum="a" * 64,
+        size=1024,
+        content_type="image/jpeg",
+        status=MediaObjectStatus.FINALIZED,
+        created_at=datetime.now(UTC),
+    )
+
+    class _FakeMediaRepo:
+        def __init__(self, items):
+            self._items = items
+            self.updated = []
+
+        def list_finalized_without_retention(self, *, kinds):
+            return [m for m in self._items if m.kind in kinds and m.retention_expires_at is None]
+
+        def update(self, m):
+            self.updated.append(m)
+            return m
+
+    media_repo = _FakeMediaRepo([media])
+    enrollment_repo = FakeEnrollmentRepo(session)
+
+    monkeypatch.setattr(
+        worker_tasks, "get_sessionmaker", lambda: lambda: _FakeDbSession([])
+    )
+    monkeypatch.setattr(worker_tasks, "MediaObjectRepository", lambda db: media_repo)
+    monkeypatch.setattr(worker_tasks, "EnrollmentSessionRepository", lambda db: enrollment_repo)
+
+    result = worker_tasks.backfill_retention_expiry_task.apply()
+
+    assert result.state == "SUCCESS"
+    assert result.result["raw_media_set"] == 1
+    assert media.retention_expires_at is not None
+    assert len(media_repo.updated) == 1

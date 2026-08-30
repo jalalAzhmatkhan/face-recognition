@@ -74,6 +74,30 @@ class Settings(BaseSettings):
     # typical propagation delay.
     policy_cache_ttl_seconds: int = 30
 
+    # Retention automation (BE-14, ASM-10, NFR-SEC-03). Two independent
+    # retention windows, both configurable via env so a deployment can
+    # tighten/loosen them without a code change:
+    #  - `retention_raw_media_days`: ASM-10's documented default (90 days)
+    #    for "raw enrollment media" (kind PHOTO/VIDEO) counted from when the
+    #    owning enrollment session finished enrolling (see
+    #    app/services/retention_service.py for the exact anchor timestamp
+    #    and why it's an approximation).
+    #  - `retention_event_frame_days`: separate, shorter window for door-camera
+    #    EVENT_FRAME media, which is conceptually independent of any
+    #    enrollment session. No FSD/TSD value is specified for this one yet —
+    #    30 days is a placeholder default, same spirit as the QC thresholds in
+    #    ai-training/src/ai_training/config.py, and should be recalibrated
+    #    once IN-06 (event emission, the actual producer of EVENT_FRAME rows)
+    #    ships and privacy/ops give a real number.
+    retention_raw_media_days: int = 90
+    retention_event_frame_days: int = 30
+
+    # Celery Beat schedule intervals (BE-14) — first use of Celery Beat in
+    # this project (see app/worker/celery_app.py docstring for the
+    # operational note on how to actually start the beat process).
+    retention_backfill_interval_seconds: int = 60 * 60  # hourly
+    retention_purge_interval_seconds: int = 6 * 60 * 60  # every 6 hours
+
     @property
     def cors_allow_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
