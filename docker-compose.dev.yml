@@ -98,7 +98,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-frac_dev_password}
       POSTGRES_DB: ${POSTGRES_DB:-frac}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5436}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Creates the `mlflow` DB alongside `frac` and enables pgvector on both
