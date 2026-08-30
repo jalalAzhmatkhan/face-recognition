@@ -1,0 +1,90 @@
+/* S-60 Device Management — plain CSS per project convention (see
+ * `live-monitoring/LiveMonitoring.css`), uses tokens.css vars. */
+
+.device-management-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.device-management-denied {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-8);
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.device-management-denied__title {
+  margin: 0;
+  font: var(--text-h3);
+  color: var(--text-primary);
+}
+
+.device-management-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-16) var(--space-4);
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.device-management-empty__title {
+  margin: 0;
+  font: var(--text-h3);
+  color: var(--text-primary);
+}
+
+.device-management-empty__hint {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.device-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.device-table th,
+.device-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.device-table thead tr {
+  border-bottom: var(--border-w) solid var(--border-default);
+}
+
+.device-table tbody tr {
+  border-bottom: var(--border-w) solid var(--border-default);
+}
+
+/* Offline/stale rows highlighted per screen-plan S-60 ("Offline > threshold
+ * -> baris ter-highlight warning + tercermin di S-40" — the S-40 banner
+ * itself is FE-06's `OfflineDeviceBanner`, this is just the row styling for
+ * S-60's own table using the same is_stale/status data). */
+.device-table__row--warning {
+  background: var(--warning-subtle-bg);
+}
+
+.device-management-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.device-management-actions button {
+  min-height: 28px;
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font: var(--text-caption);
+}
