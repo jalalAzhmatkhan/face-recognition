@@ -138,9 +138,8 @@ export default function DevicesPage() {
     return (
       <>
         <PagePlaceholder
-          screenId="S-60"
           title="Devices"
-          description="Registrasi entry device, status online/offline, dan door group (FR-USR-04)."
+          description="Registrasi entry device, status online/offline, dan door group."
         />
         <div className="device-management-denied" role="alert">
           <h2 className="device-management-denied__title">Tidak Ada Akses</h2>
@@ -179,9 +178,8 @@ export default function DevicesPage() {
   return (
     <div className="device-management-page">
       <PagePlaceholder
-        screenId="S-60"
         title="Devices"
-        description="Registrasi entry device, status online/offline, dan door group (FR-USR-04)."
+        description="Registrasi entry device, status online/offline, dan door group."
       />
 
       {canCreate && (

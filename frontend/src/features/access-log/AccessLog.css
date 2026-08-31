@@ -15,14 +15,6 @@
   gap: var(--space-1);
 }
 
-.access-log-page__screen-id {
-  margin: 0;
-  font: var(--text-caption);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
 .access-log-page__toolbar {
   display: flex;
   align-items: center;

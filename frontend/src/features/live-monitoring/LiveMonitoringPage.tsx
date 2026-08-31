@@ -149,7 +149,6 @@ export default function LiveMonitoringPage() {
   return (
     <section className="live-monitoring-page">
       <header className="live-monitoring-page__header">
-        <p className="mono live-monitoring-page__screen-id">S-40</p>
         <h1>Live Monitoring</h1>
       </header>
 

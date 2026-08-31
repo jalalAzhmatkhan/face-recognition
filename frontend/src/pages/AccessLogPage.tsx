@@ -121,7 +121,6 @@ export default function AccessLogPage() {
   return (
     <section className="access-log-page">
       <header className="access-log-page__header">
-        <p className="mono access-log-page__screen-id">S-42</p>
         <h1>Access Log</h1>
       </header>
 

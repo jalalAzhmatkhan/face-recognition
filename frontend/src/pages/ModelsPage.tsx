@@ -65,9 +65,8 @@ export default function ModelsPage() {
     return (
       <>
         <PagePlaceholder
-          screenId="S-50"
           title="Models & Training"
-          description="Daftar model + metrik (Recall/F1/Precision/latency ms), training jobs, dan promotion review (FE-09)."
+          description="Daftar model + metrik (Recall/F1/Precision/latency ms), training jobs, dan promotion review."
         />
         <div className="training-models-denied" role="alert">
           <h2 className="training-models-denied__title">Tidak Ada Akses</h2>
@@ -86,7 +85,6 @@ export default function ModelsPage() {
   return (
     <div className="training-models-page">
       <header className="training-models-page__header">
-        <p className="mono training-models-page__screen-id">S-50</p>
         <h1>Models & Training</h1>
       </header>
 

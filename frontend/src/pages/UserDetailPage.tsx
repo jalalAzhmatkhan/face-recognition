@@ -101,12 +101,12 @@ export default function UserDetailPage() {
   })
 
   if (!id) {
-    return <PagePlaceholder screenId="S-11" title="User" description="ID user tidak valid." />
+    return <PagePlaceholder title="User" description="ID user tidak valid." />
   }
 
   if (detailQuery.isLoading) {
     return (
-      <PagePlaceholder screenId="S-11" title="Detail User" description="Memuat data user..." />
+      <PagePlaceholder title="Detail User" description="Memuat data user..." />
     )
   }
 
@@ -114,7 +114,6 @@ export default function UserDetailPage() {
     return (
       <>
         <PagePlaceholder
-          screenId="S-11"
           title="Detail User"
           description={describeApiError(detailQuery.error)}
         />
@@ -331,7 +330,7 @@ export default function UserDetailPage() {
               >
                 <p style={{ margin: 0, color: 'var(--danger)' }}>
                   User akan diset ke status OFFBOARDED dan tidak akan lagi diberi akses meskipun
-                  wajahnya cocok (FR-USR-01). Ini mengubah status saja — data biometrik/enrollment
+                  wajahnya cocok. Ini mengubah status saja — data biometrik/enrollment
                   tidak dihapus dan status bisa dikembalikan lagi nanti. Lanjutkan?
                 </p>
                 <div style={{ display: 'flex', gap: 'var(--space-3)' }}>

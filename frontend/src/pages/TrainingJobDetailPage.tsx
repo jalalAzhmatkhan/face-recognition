@@ -85,9 +85,8 @@ export default function TrainingJobDetailPage() {
     return (
       <>
         <PagePlaceholder
-          screenId="S-51"
           title="Training Job Detail"
-          description="Detail status training job, metrik hasil, dan retry (FE-09)."
+          description="Detail status training job, metrik hasil, dan retry."
         />
         <div className="training-models-denied" role="alert">
           <h2 className="training-models-denied__title">Tidak Ada Akses</h2>
@@ -103,7 +102,6 @@ export default function TrainingJobDetailPage() {
   return (
     <div className="training-models-page">
       <header className="training-models-page__header">
-        <p className="mono training-models-page__screen-id">S-51</p>
         <h1>Training Job Detail</h1>
         <Link to="/models">&larr; Kembali ke Models &amp; Training</Link>
       </header>

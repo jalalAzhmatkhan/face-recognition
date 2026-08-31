@@ -53,7 +53,7 @@ export default function StartTrainingDialog({
         <p className="training-models-dialog__hint">
           Dataset snapshot dipilih lewat ID yang sudah kamu siapkan (CLI{' '}
           <code>ai-training snapshot</code> / dokumentasi) — belum ada browser/filter dataset di UI
-          ini (lihat catatan gap FE-09).
+          ini.
         </p>
 
         <form

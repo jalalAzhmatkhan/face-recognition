@@ -13,12 +13,6 @@
   gap: var(--space-1);
 }
 
-.dashboard-page__screen-id {
-  margin: 0;
-  color: var(--text-muted);
-  font: var(--text-caption);
-}
-
 .dashboard-stats-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

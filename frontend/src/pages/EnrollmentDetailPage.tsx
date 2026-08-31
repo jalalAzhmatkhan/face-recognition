@@ -106,7 +106,6 @@ export default function EnrollmentDetailPage() {
   if (!id) {
     return (
       <PagePlaceholder
-        screenId="S-31"
         title="Enrollment"
         description="ID sesi enrollment tidak valid."
       />
@@ -116,7 +115,6 @@ export default function EnrollmentDetailPage() {
   if (detailQuery.isLoading) {
     return (
       <PagePlaceholder
-        screenId="S-31"
         title="Detail Enrollment"
         description="Memuat data sesi enrollment..."
       />
@@ -127,7 +125,6 @@ export default function EnrollmentDetailPage() {
     return (
       <>
         <PagePlaceholder
-          screenId="S-31"
           title="Detail Enrollment"
           description={describeApiError(detailQuery.error)}
         />
