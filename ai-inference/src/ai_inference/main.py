@@ -10,10 +10,11 @@ Endpoints:
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from ai_inference import __version__, gallery
+from ai_inference.auth_dependency import get_current_device_id
 from ai_inference.config import Settings, get_settings
 from ai_inference.metrics import model_loads_total, registry
 from ai_inference.models import ModelKind, build_model_loader
@@ -52,20 +53,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return Response(content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
     @app.post("/recognize", response_model=RecognizeResponse)
-    async def recognize(request: RecognizeRequest) -> RecognizeResponse:
+    async def recognize(
+        request: RecognizeRequest,
+        device_id: str = Depends(get_current_device_id),
+    ) -> RecognizeResponse:
         """Face recognition over 1+ base64 frames (IN-03, FR-INF-01/02/03).
 
-        **IN-02 GAP (device auth): this endpoint has NO authentication at
-        all.** Any caller that can reach this service can submit frames and
-        get a decision back. This MUST be closed (device credential/mTLS/
-        whatever IN-02 lands on) before this is exposed to anything but a
-        trusted internal network. Not implemented here on purpose -- IN-02
-        is a separate, dedicated task.
+        **IN-02 (device auth)**: requires a valid device bearer token
+        (`<credential_id>.<secret>`), verified against the `devices` table
+        via the `ai_inference_ro` role -- see `ai_inference.device_auth` and
+        `ai_inference.auth_dependency.get_current_device_id`. Missing/
+        malformed/unknown/wrong-secret credentials -> 401; a credential
+        belonging to an administratively DISABLED device -> 403
+        (NFR-SEC-04). `device_id` is resolved but not yet used to scope the
+        gallery search or attributed to an `access_events` row -- that lands
+        with IN-06 (event emission).
 
         See `ai_inference.pipeline.recognize` module docstring for the full
-        list of deliberate gaps (IN-04 liveness placeholder, no IN-06 event
-        emission, no IN-07 atomic model switch, `SPOOF_SUSPECTED` never
-        produced).
+        list of other deliberate gaps (IN-04 liveness placeholder, no IN-06
+        event emission, no IN-07 atomic model switch, `SPOOF_SUSPECTED`
+        never produced).
         """
         if not settings.db_dsn:
             raise HTTPException(
