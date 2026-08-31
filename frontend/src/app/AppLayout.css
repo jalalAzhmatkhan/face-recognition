@@ -1,17 +1,24 @@
 .app-shell {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  /* The shell itself never scrolls -- only `.app-content` below does, so
+     the sidebar stays put while a tall page scrolls (not the whole shell). */
+  overflow: hidden;
 }
 
 .app-sidebar {
   width: var(--sidebar-w);
   flex-shrink: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
   padding: var(--space-5) var(--space-4);
   background: var(--bg-surface);
   border-right: var(--border-w) solid var(--border-default);
+  /* Scrolls independently (only if its OWN content overflows, e.g. many nav
+     items on a short screen) instead of moving with the page content. */
+  overflow-y: auto;
 }
 
 .app-sidebar__brand {
@@ -94,6 +101,12 @@
   color: var(--text-secondary);
 }
 
+.app-sidebar__footer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .app-theme-toggle {
   min-height: var(--touch-target);
   padding: 0 var(--space-3);
@@ -108,9 +121,24 @@
   background: var(--bg-sunken);
 }
 
+.app-sidebar__footer-row .app-theme-toggle:not(.app-theme-toggle--icon) {
+  flex: 1;
+}
+
+.app-theme-toggle--icon {
+  flex-shrink: 0;
+  width: var(--touch-target);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .app-content {
   flex: 1;
   min-width: 0;
+  height: 100%;
+  overflow-y: auto;
 }
 
 .app-content__inner {
