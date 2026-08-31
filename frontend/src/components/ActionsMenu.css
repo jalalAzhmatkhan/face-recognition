@@ -1,0 +1,162 @@
+/* Shared "⋮" icon-button + context-menu primitive (bugfix:
+ * users-actions-menu, extended to devices). Used wherever a table row has
+ * MORE THAN ONE possible action stacked in an "Aksi" column -- single-
+ * action columns (a lone "Detail"/"Review" link) stay plain links
+ * elsewhere in this app, since a menu would add a click for no benefit
+ * there. Plain CSS per project convention, uses tokens.css vars. */
+
+.actions-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.actions-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  border: var(--border-w) solid transparent;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.actions-menu__trigger:hover,
+.actions-menu__trigger[aria-expanded='true'] {
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+}
+
+.actions-menu__trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.actions-menu__trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.actions-menu__menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  min-width: 200px;
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+}
+
+.actions-menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font: var(--text-body);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.actions-menu__item:hover {
+  background: var(--bg-sunken);
+}
+
+.actions-menu__item:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.actions-menu__item--danger {
+  color: var(--danger);
+}
+
+.actions-menu__item--danger:hover {
+  background: var(--danger-subtle-bg);
+}
+
+.actions-menu__item--warning {
+  color: var(--warning);
+}
+
+.actions-menu__item--warning:hover {
+  background: var(--warning-subtle-bg);
+}
+
+.actions-menu__confirm {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  width: 260px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.actions-menu__confirm--danger {
+  border: var(--border-w) solid var(--danger);
+}
+
+.actions-menu__confirm--warning {
+  border: var(--border-w) solid var(--warning);
+}
+
+.actions-menu__confirm-text {
+  margin: 0;
+  font: var(--text-small);
+}
+
+.actions-menu__confirm--danger .actions-menu__confirm-text {
+  color: var(--danger);
+}
+
+.actions-menu__confirm--warning .actions-menu__confirm-text {
+  color: var(--warning);
+}
+
+.actions-menu__confirm-buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.actions-menu__confirm-buttons button {
+  flex: 1;
+  min-height: var(--touch-target);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.actions-menu__confirm-buttons button:last-child {
+  border: var(--border-w) solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.actions-menu__confirm--danger .actions-menu__confirm-buttons button:first-child {
+  border: var(--border-w) solid var(--danger);
+  background: var(--danger);
+  color: var(--text-inverse);
+}
+
+.actions-menu__confirm--warning .actions-menu__confirm-buttons button:first-child {
+  border: var(--border-w) solid var(--warning);
+  background: var(--warning);
+  color: var(--text-inverse);
+}

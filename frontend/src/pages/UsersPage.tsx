@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import PagePlaceholder from './PagePlaceholder'
 import {
@@ -18,6 +18,7 @@ import {
   canStartEnrollment,
 } from '../features/user-management/roleGating'
 import UserStatusBadge from '../features/user-management/UserStatusBadge'
+import UserActionsMenu from '../features/user-management/UserActionsMenu'
 import { USER_STATUSES } from '../features/user-management/types'
 import type { UserStatus } from '../features/user-management/types'
 
@@ -291,117 +292,20 @@ export default function UsersPage() {
                       {formatDate(user.created_at)}
                     </td>
                     <td style={{ padding: 'var(--space-2) var(--space-3)' }}>
-                      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'center' }}>
-                        <Link to={`/users/${user.id}`}>Detail / Edit</Link>
-
-                        {canQuickChangeStatus && user.status === 'ACTIVE' && (
-                          <button
-                            type="button"
-                            disabled={anyMutationPending}
-                            onClick={() => statusMutation.mutate({ id: user.id, status: 'SUSPENDED' })}
-                            style={{
-                              border: 'var(--border-w) solid var(--warning)',
-                              background: 'var(--warning-subtle-bg)',
-                              color: 'var(--warning)',
-                              borderRadius: 'var(--radius-md)',
-                              padding: '2px var(--space-3)',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Suspend
-                          </button>
-                        )}
-
-                        {canQuickChangeStatus && user.status === 'SUSPENDED' && (
-                          <button
-                            type="button"
-                            disabled={anyMutationPending}
-                            onClick={() => statusMutation.mutate({ id: user.id, status: 'ACTIVE' })}
-                            style={{
-                              border: 'var(--border-w) solid var(--success)',
-                              background: 'var(--success-subtle-bg)',
-                              color: 'var(--success)',
-                              borderRadius: 'var(--radius-md)',
-                              padding: '2px var(--space-3)',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Aktifkan
-                          </button>
-                        )}
-
-                        {canOffboard && user.status !== 'OFFBOARDED' && offboardTargetId !== user.id && (
-                          <button
-                            type="button"
-                            disabled={anyMutationPending}
-                            onClick={() => setOffboardTargetId(user.id)}
-                            style={{
-                              border: 'var(--border-w) solid var(--danger)',
-                              background: 'var(--danger-subtle-bg)',
-                              color: 'var(--danger)',
-                              borderRadius: 'var(--radius-md)',
-                              padding: '2px var(--space-3)',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Nonaktifkan
-                          </button>
-                        )}
-
-                        {offboardTargetId === user.id && (
-                          <span style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                            <span style={{ color: 'var(--danger)', font: 'var(--text-caption)' }}>
-                              Yakin nonaktifkan user ini?
-                            </span>
-                            <button
-                              type="button"
-                              disabled={anyMutationPending}
-                              onClick={() => offboardMutation.mutate(user.id)}
-                              style={{
-                                border: 'var(--border-w) solid var(--danger)',
-                                background: 'var(--danger)',
-                                color: 'var(--text-inverse)',
-                                borderRadius: 'var(--radius-md)',
-                                padding: '2px var(--space-3)',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {offboardMutation.isPending ? 'Memproses...' : 'Ya, Nonaktifkan'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setOffboardTargetId(null)}
-                              style={{
-                                border: 'var(--border-w) solid var(--border-strong)',
-                                background: 'var(--bg-surface)',
-                                borderRadius: 'var(--radius-md)',
-                                padding: '2px var(--space-3)',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              Batal
-                            </button>
-                          </span>
-                        )}
-
-                        {canEnroll && (
-                          <button
-                            type="button"
-                            disabled={anyMutationPending}
-                            onClick={() => enrollMutation.mutate(user.id)}
-                            style={{
-                              border: 'var(--border-w) solid var(--accent)',
-                              background: 'var(--accent)',
-                              color: 'var(--text-inverse)',
-                              borderRadius: 'var(--radius-md)',
-                              padding: '2px var(--space-3)',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {enrollMutation.isPending ? 'Membuat...' : 'Mulai Enrollment'}
-                          </button>
-                        )}
-                      </div>
+                      <UserActionsMenu
+                        user={user}
+                        canQuickChangeStatus={canQuickChangeStatus}
+                        canOffboard={canOffboard}
+                        canEnroll={canEnroll}
+                        anyMutationPending={anyMutationPending}
+                        isOffboardTarget={offboardTargetId === user.id}
+                        isOffboardPending={offboardMutation.isPending}
+                        onStatusChange={(status) => statusMutation.mutate({ id: user.id, status })}
+                        onRequestOffboard={() => setOffboardTargetId(user.id)}
+                        onCancelOffboard={() => setOffboardTargetId(null)}
+                        onConfirmOffboard={() => offboardMutation.mutate(user.id)}
+                        onEnroll={() => enrollMutation.mutate(user.id)}
+                      />
                     </td>
                   </tr>
                 ))}

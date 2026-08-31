@@ -102,9 +102,9 @@ describe('DevicesPage — write-role gating', () => {
     renderPage()
     await screen.findByText('Pintu Lobby')
     expect(screen.queryByRole('button', { name: 'Tambah Device' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Rotasi Kredensial' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Nonaktifkan' })).not.toBeInTheDocument()
+    // OPERATOR has none of Edit/Rotate/Disable -- the whole "⋮" actions
+    // trigger is absent for this row, not just disabled or empty when opened.
+    expect(screen.queryByRole('button', { name: 'Aksi lainnya' })).not.toBeInTheDocument()
   })
 })
 
@@ -143,7 +143,8 @@ describe('DevicesPage — credential bootstrap dialog', () => {
     renderPage()
     await screen.findByText('Pintu Lobby')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rotasi Kredensial' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Aksi lainnya' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rotasi Kredensial' }))
     fireEvent.click(screen.getByRole('button', { name: 'Ya, Rotasi' }))
 
     expect(await screen.findByTestId('credential-value')).toHaveTextContent('new-cred-2')
