@@ -1,0 +1,258 @@
+/* S-02 Dashboard — plain CSS per project convention (see
+ * `training-models/TrainingModels.css`), uses tokens.css vars. */
+
+.dashboard-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.dashboard-page__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.dashboard-page__screen-id {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.dashboard-stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.dashboard-stat-card {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.dashboard-stat-card--skeleton {
+  min-height: 96px;
+  background: var(--bg-sunken);
+  opacity: 0.6;
+}
+
+.dashboard-stat-card__label {
+  margin: 0;
+  color: var(--text-secondary);
+  font: var(--text-small);
+}
+
+.dashboard-stat-card__value {
+  margin: 0;
+  font: var(--text-display);
+  color: var(--text-primary);
+}
+
+.dashboard-stat-card--success .dashboard-stat-card__value {
+  color: var(--success);
+}
+
+.dashboard-stat-card--danger .dashboard-stat-card__value {
+  color: var(--danger);
+}
+
+.dashboard-stat-card--warning .dashboard-stat-card__value {
+  color: var(--warning);
+}
+
+.dashboard-stat-card__sublabel {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.dashboard-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--space-4);
+}
+
+.dashboard-row--funnel {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 900px) {
+  .dashboard-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dashboard-panel {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dashboard-panel--skeleton {
+  min-height: 180px;
+  background: var(--bg-sunken);
+  opacity: 0.6;
+}
+
+.dashboard-panel__title {
+  margin: 0;
+  font: var(--text-h3);
+}
+
+.dashboard-panel__empty-hint {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.dashboard-panel__version {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.dashboard-panel__metrics {
+  margin: 0;
+  display: flex;
+  gap: var(--space-6);
+  flex-wrap: wrap;
+}
+
+.dashboard-panel__metrics div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dashboard-panel__metrics dt {
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.dashboard-panel__metrics dd {
+  margin: 0;
+  font: var(--text-h3);
+}
+
+.dashboard-panel__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-small);
+}
+
+.dashboard-chart {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dashboard-chart--skeleton {
+  min-height: 240px;
+  background: var(--bg-sunken);
+  opacity: 0.6;
+}
+
+.dashboard-chart--empty {
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--text-muted);
+}
+
+.dashboard-chart__svg {
+  width: 100%;
+  height: 200px;
+}
+
+.dashboard-chart__legend {
+  display: flex;
+  gap: var(--space-4);
+  font: var(--text-small);
+  color: var(--text-secondary);
+}
+
+.dashboard-chart__legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dashboard-chart__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  display: inline-block;
+}
+
+.dashboard-chart__axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.dashboard-funnel__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.dashboard-funnel__empty-cta {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.dashboard-funnel {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dashboard-funnel__row {
+  display: grid;
+  grid-template-columns: 110px 1fr 48px;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.dashboard-funnel__label {
+  color: var(--text-secondary);
+  font: var(--text-small);
+}
+
+.dashboard-funnel__bar-track {
+  background: var(--bg-sunken);
+  border-radius: var(--radius-full);
+  height: 12px;
+  overflow: hidden;
+}
+
+.dashboard-funnel__bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-full);
+}
+
+.dashboard-funnel__count {
+  text-align: right;
+  color: var(--text-primary);
+}
