@@ -11,7 +11,12 @@ export const USER_STATUSES: UserStatus[] = ['ACTIVE', 'SUSPENDED', 'OFFBOARDED']
 
 export interface UserResponse {
   id: string
-  external_ref: string
+  /** Nullable on the backend (`app/schemas/users.py::UserResponse`) even
+   * though `CreateUserBody.external_ref` below is required to create one —
+   * kept optional here to match, not because the UI has any path that sets
+   * it to null itself (found live, FE-10: `UserDetailPage` crashed calling
+   * `.trim()` on this when it was null). */
+  external_ref: string | null
   full_name: string
   status: UserStatus
   created_at: string

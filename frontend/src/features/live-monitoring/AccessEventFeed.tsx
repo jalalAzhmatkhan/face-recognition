@@ -11,6 +11,8 @@ interface AccessEventFeedProps {
   /** ids that arrived within this render pass — drives the slide-in
    * animation on `AccessEventItem`. */
   newIds: Set<string>
+  /** FE-10: opens the S-41 detail drawer for the clicked row. */
+  onSelectEvent: (event: AccessEventPayload) => void
 }
 
 const SCROLL_TOP_THRESHOLD_PX = 24
@@ -31,6 +33,7 @@ export default function AccessEventFeed({
   reviewedSpoofIds,
   onMarkReviewed,
   newIds,
+  onSelectEvent,
 }: AccessEventFeedProps) {
   const containerRef = useRef<HTMLUListElement>(null)
   // `pinned` is true while the operator is at (or hasn't left) the top of
@@ -104,6 +107,7 @@ export default function AccessEventFeed({
             isNew={newIds.has(event.id)}
             reviewed={reviewedSpoofIds.has(event.id)}
             onMarkReviewed={onMarkReviewed}
+            onSelect={onSelectEvent}
           />
         ))}
       </ul>

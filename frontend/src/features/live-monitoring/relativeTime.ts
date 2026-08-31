@@ -36,3 +36,15 @@ export function formatEventTime(iso: string): string {
     return iso
   }
 }
+
+/** Full precise date+time for the S-41 detail drawer ("waktu presisi") --
+ * unlike `formatEventTime`'s compact HH:mm:ss (fine for a dense feed row),
+ * the drawer is a single-event detail view where the full date matters
+ * too (an operator reviewing history shouldn't have to guess which day). */
+export function formatPreciseEventTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'medium' })
+  } catch {
+    return iso
+  }
+}

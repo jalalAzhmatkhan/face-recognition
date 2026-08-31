@@ -30,6 +30,7 @@ const grantedEvent: AccessEventPayload = {
   liveness_score: 0.98,
   model_version: 'v1',
   latency_ms: 85,
+  frame_media_id: null,
   door_command_issued: true,
 }
 
@@ -52,6 +53,7 @@ describe('AccessEventFeed', () => {
         reviewedSpoofIds={new Set()}
         onMarkReviewed={() => {}}
         newIds={new Set()}
+        onSelectEvent={() => {}}
       />,
     )
     expect(screen.getByText('Belum ada aktivitas')).toBeInTheDocument()
@@ -66,6 +68,7 @@ describe('AccessEventFeed', () => {
         reviewedSpoofIds={new Set()}
         onMarkReviewed={() => {}}
         newIds={new Set()}
+        onSelectEvent={() => {}}
       />,
     )
     expect(screen.queryByText('Belum ada aktivitas')).not.toBeInTheDocument()
@@ -80,6 +83,7 @@ describe('AccessEventFeed', () => {
         reviewedSpoofIds={new Set()}
         onMarkReviewed={() => {}}
         newIds={new Set()}
+        onSelectEvent={() => {}}
       />,
     )
     expect(screen.getByText('Pintu Lobby')).toBeInTheDocument()
@@ -97,6 +101,7 @@ describe('AccessEventFeed', () => {
         reviewedSpoofIds={new Set()}
         onMarkReviewed={() => {}}
         newIds={new Set()}
+        onSelectEvent={() => {}}
       />,
     )
     expect(screen.getByText('device-1')).toBeInTheDocument()
@@ -113,6 +118,7 @@ describe('AccessEventFeed', () => {
         reviewedSpoofIds={new Set()}
         onMarkReviewed={onMarkReviewed}
         newIds={new Set()}
+        onSelectEvent={() => {}}
       />,
     )
     expect(screen.getByText(/Dicurigai spoof/)).toBeInTheDocument()
@@ -120,6 +126,42 @@ describe('AccessEventFeed', () => {
     button.click()
     expect(onMarkReviewed).toHaveBeenCalledWith('evt-2')
     expect(screen.getByText(/belum tersimpan permanen/)).toBeInTheDocument()
+  })
+
+  it('calls onSelectEvent with the clicked event (FE-10 drawer trigger)', () => {
+    const onSelectEvent = vi.fn()
+    renderWithClient(
+      <AccessEventFeed
+        events={[grantedEvent]}
+        deviceNames={new Map([['device-1', 'Pintu Lobby']])}
+        isLoading={false}
+        reviewedSpoofIds={new Set()}
+        onMarkReviewed={() => {}}
+        newIds={new Set()}
+        onSelectEvent={onSelectEvent}
+      />,
+    )
+    screen.getByText('Pintu Lobby').closest('button')?.click()
+    expect(onSelectEvent).toHaveBeenCalledWith(grantedEvent)
+  })
+
+  it('clicking "Tandai ditinjau" does not also trigger onSelectEvent', () => {
+    const onSelectEvent = vi.fn()
+    const onMarkReviewed = vi.fn()
+    renderWithClient(
+      <AccessEventFeed
+        events={[spoofEvent]}
+        deviceNames={new Map()}
+        isLoading={false}
+        reviewedSpoofIds={new Set()}
+        onMarkReviewed={onMarkReviewed}
+        newIds={new Set()}
+        onSelectEvent={onSelectEvent}
+      />,
+    )
+    screen.getByRole('button', { name: 'Tandai ditinjau' }).click()
+    expect(onMarkReviewed).toHaveBeenCalledWith('evt-2')
+    expect(onSelectEvent).not.toHaveBeenCalled()
   })
 
   it('shows the reviewed note instead of the button once marked reviewed', () => {
@@ -131,6 +173,7 @@ describe('AccessEventFeed', () => {
         reviewedSpoofIds={new Set(['evt-2'])}
         onMarkReviewed={() => {}}
         newIds={new Set()}
+        onSelectEvent={() => {}}
       />,
     )
     expect(screen.queryByRole('button', { name: 'Tandai ditinjau' })).not.toBeInTheDocument()
