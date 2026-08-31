@@ -65,6 +65,15 @@ dev = [
 # local — never published to a package index). See the `ml` extra comment
 # above for why this lives under an optional extra rather than base deps.
 ai-training = { path = "../ai-training", editable = true }
+# CPU-only wheel index (Docker images run with no GPU passthrough) --
+# mirrors ai-training/pyproject.toml's identical override; see that file's
+# comment for the full rationale.
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

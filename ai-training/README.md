@@ -21,6 +21,31 @@ uv sync --extra ml
 
 **Why the split**: TR-02's quality metrics (blur/brightness/face-size) and TR-03's alignment math are plain-numpy, dependency-light, and unit-tested directly. Video decode (`cv2.VideoCapture`) and face-landmark detection (`mediapipe`) genuinely need the heavy `ml` extra, so those code paths are lazily imported and exercised only via manual verification against a real recording, not automated tests. `celery`/`redis`/`psycopg[binary]`/`pgvector` are base deps (not `ml`) because they're needed to unit-test the worker's idempotency logic (with a mocked DB cursor) without pulling in torch/mediapipe.
 
+## Run via Docker Compose
+
+```bash
+# from repo root
+docker compose -f docker-compose.dev.yml --profile app up -d postgres mlflow minio ai-training
+```
+
+Runs the Celery worker (this service has no HTTP app). `torch` is pinned to
+PyTorch's own CPU-only wheel index (`[tool.uv.sources]` in `pyproject.toml`)
+since this compose file has no GPU passthrough configured — PyPI's default
+`torch` wheel otherwise drags in ~40 transitive `nvidia-*` CUDA packages
+(several GB) that would just sit there unused; `TRN_EMBEDDER__BACKEND=adaface`/
+`TRN_LIVENESS__BACKEND=minifasnet` in the compose file select the real
+backends. MiniFASNet's weights ship committed (`models/*.pth`) so liveness
+works immediately; the AdaFace checkpoint (~250MB, gitignored — non-
+commercial license procured separately) does not, and must be downloaded
+once after the container is up:
+
+```bash
+docker compose exec ai-training ai-training download-adaface-weights
+```
+
+It lands under `models/`, which the compose file bind-mounts back to the
+host, so it survives container rebuilds.
+
 ## Configuration
 
 Env vars with prefix `TRN_`, nested with `__` (see `src/ai_training/config.py`):

@@ -1,11 +1,14 @@
 # Docker Compose — development environment.
 #
 # XC-01 laid the app-service skeleton (backend/frontend/ai-inference/ai-training,
-# profile "app" — opt-in). `backend`/`frontend` now have real Dockerfiles
-# (see backend/Dockerfile, frontend/Dockerfile); ai-inference/ai-training's
-# Dockerfiles are still pending, so `--profile app` will fail to build those
-# two until then — bring up just backend+frontend explicitly if needed:
-#   docker compose --profile app up backend frontend celery-worker backend-migrate
+# profile "app" — opt-in). All four now have real Dockerfiles (see
+# backend/Dockerfile, frontend/Dockerfile, ai-inference/Dockerfile,
+# ai-training/Dockerfile) — `docker compose --profile app up` brings up the
+# whole stack. `ai-inference`/`ai-training` install the full `ml` extra
+# (torch/mediapipe/opencv/mlflow/...) so their first build is large and
+# slow; no GPU passthrough is configured (CPU-only) — see those two
+# Dockerfiles' own comments for why, and for the one manual step needed
+# after first boot (downloading the AdaFace checkpoint).
 # XC-02 adds the infra services below (default profile — `docker compose up`
 # brings these up without needing `--profile app`): PostgreSQL 16 + pgvector,
 # Redis 7, MinIO (S3-compatible, dev-only), MLflow (self-hosted).
@@ -34,7 +37,10 @@ services:
   backend-migrate:
     build:
       context: ./backend
-    command: ["uv", "run", "alembic", "upgrade", "head"]
+    # No `uv` binary in the image's runtime stage (multi-stage build keeps
+    # it builder-only, see backend/Dockerfile) -- `alembic` is on PATH via
+    # the venv directly.
+    command: ["alembic", "upgrade", "head"]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-frac}:${POSTGRES_PASSWORD:-frac_dev_password}@postgres:5432/${POSTGRES_DB:-frac}
     depends_on:
@@ -88,7 +94,7 @@ services:
   celery-worker:
     build:
       context: ./backend
-    command: ["uv", "run", "celery", "-A", "app.worker.celery_app", "worker", "--loglevel=info"]
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--loglevel=info"]
     environment:
       APP_ENV: dev
       LOG_LEVEL: DEBUG
@@ -122,15 +128,45 @@ services:
 
   ai-inference:
     build:
-      context: ./ai-inference
+      # Root context, not ./ai-inference -- this service's `ml` extra path-
+      # depends on the sibling ai-training/ tree. See ai-inference/Dockerfile's
+      # own comment for the full explanation.
+      context: .
+      dockerfile: ai-inference/Dockerfile
+    # 8100 matches Settings.port's own default (ai_inference/config.py) --
+    # the previous "8001:8001" here predated any Dockerfile/CMD actually
+    # binding a port and didn't match what the app binds; fixed while wiring
+    # this up for real.
     ports:
-      - "8001:8001"
+      - "8100:8100"
     environment:
       APP_ENV: dev
       INF_MLFLOW_TRACKING_URI: http://mlflow:5000
+      # Real AdaFace+MiniFASNet pipeline, not the stub loader -- requires the
+      # `ml` extra (this image has it) AND the AdaFace checkpoint to have
+      # been downloaded once (see ai-training/Dockerfile's comment); until
+      # then `/recognize` fails closed with an actionable 500, per its own
+      # "requires a real embedder" guard.
+      INF_MODEL_LOADER: adaface
+      # ai-inference is a server-side caller here (unlike the frontend/
+      # browser case above), so it CAN use Docker-internal DNS for both of
+      # these rather than a host-mapped port.
+      INF_DB_DSN: postgresql://${POSTGRES_USER:-frac}:${POSTGRES_PASSWORD:-frac_dev_password}@postgres:5432/${POSTGRES_DB:-frac}
+      INF_BACKEND_BASE_URL: http://backend:8000
+    volumes:
+      # Both source trees, kept as siblings under /app (same layout as the
+      # image build) so the `../ai-training` editable path dependency keeps
+      # resolving correctly, and edits to EITHER take effect via --reload.
+      - ./ai-inference:/app/ai-inference
+      - ./ai-training:/app/ai-training
+      - ai_inference_venv:/app/ai-inference/.venv
     depends_on:
+      postgres:
+        condition: service_healthy
       mlflow:
         condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
     profiles: ["app"]
 
   ai-training:
@@ -139,10 +175,23 @@ services:
     environment:
       APP_ENV: dev
       TRN_DB__DSN: postgresql://${POSTGRES_USER:-frac}:${POSTGRES_PASSWORD:-frac_dev_password}@postgres:5432/${POSTGRES_DB:-frac}
+      # Flat env var (no `__` nesting) -- MUST match backend's own REDIS_URL
+      # (same broker/queue, cross-service task dispatch by name) -- found
+      # live: this was missing entirely, so the worker kept retrying
+      # `localhost:6379` (its no-Redis-configured default) forever.
+      TRN_REDIS_URL: redis://redis:6379/0
       TRN_MLFLOW__TRACKING_URI: http://mlflow:5000
       TRN_S3__BUCKET: ${S3_BUCKET:-frac-media}
       TRN_S3__ENDPOINT_URL: http://minio:9000
       TRN_S3__REGION: ${AWS_REGION:-ap-southeast-1}
+      # Real AdaFace/MiniFASNet backends, not the stub defaults -- MiniFASNet's
+      # weights ship committed (no extra step); AdaFace's checkpoint must be
+      # downloaded once, see this service's Dockerfile comment.
+      TRN_EMBEDDER__BACKEND: adaface
+      TRN_LIVENESS__BACKEND: minifasnet
+    volumes:
+      - ./ai-training:/app
+      - ai_training_venv:/app/.venv
     depends_on:
       postgres:
         condition: service_healthy
@@ -255,3 +304,5 @@ volumes:
   minio_data:
   backend_venv:
   frontend_node_modules:
+  ai_inference_venv:
+  ai_training_venv:

@@ -27,6 +27,24 @@ than vendoring or reimplementing it. See `src/ai_inference/training_bridge.py`
 for how `ai_inference.config.Settings` (`INF_*`) hands off to
 `ai_training.config.Settings` (`TRN_*`) for the embedder specifically.
 
+### Run via Docker Compose
+
+```bash
+# from repo root
+docker compose -f docker-compose.dev.yml --profile app up -d backend-migrate backend ai-inference
+```
+
+`Dockerfile`'s build **context is the repo root** (`docker-compose.dev.yml`
+sets `context: .`, `dockerfile: ai-inference/Dockerfile`), not this
+directory — required because the `../ai-training` path dependency above
+needs ai-training's source tree in the same build context. `torch` is
+pinned to PyTorch's own CPU-only wheel index (`[tool.uv.sources]`) since
+this compose file has no GPU passthrough configured; that same override
+means `/recognize`'s real AdaFace/MiniFASNet pipeline runs on CPU here, not
+CUDA. The AdaFace checkpoint itself still isn't baked into the image (see
+`ai-training/README.md`) — download it once via the `ai-training` service
+before `/recognize` will do more than fail closed with a 500.
+
 ## Endpoints
 
 - `GET /healthz` — status + loaded model versions
