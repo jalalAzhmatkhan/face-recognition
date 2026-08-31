@@ -106,6 +106,19 @@ class Settings(BaseSettings):
     # loosened without a documented NFR change.
     promotion_latency_budget_ms: int = 300
 
+    # Forgot-password email (BE-03 follow-up). Dev/test points at MailHog
+    # (docker-compose.dev.yml's `mailhog` service: SMTP on 1025, web UI on
+    # 8025) which accepts any message without real delivery — see README.
+    # `frontend_base_url` is used to build the reset-password link embedded
+    # in the email (`{frontend_base_url}/reset-password?token=...`); the
+    # backend has no other way to know where the SPA is served from.
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_from_address: str = "noreply@frac.local"
+    smtp_use_tls: bool = False
+    frontend_base_url: str = "http://localhost:5173"
+    password_reset_token_expire_minutes: int = 30
+
     @property
     def cors_allow_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]

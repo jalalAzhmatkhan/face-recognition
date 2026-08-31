@@ -15,6 +15,7 @@ from app.models.enrollment_session import EnrollmentSession
 from app.models.face_embedding import EMBEDDING_DIM, FaceEmbedding
 from app.models.media_object import MediaObject
 from app.models.model_registry import ModelVersion
+from app.models.password_reset_token import PasswordResetToken
 from app.models.staff_account import StaffAccount
 from app.models.training_job import TrainingJob
 from app.models.user import User
@@ -31,6 +32,7 @@ __all__ = [
     "FaceEmbedding",
     "MediaObject",
     "ModelVersion",
+    "PasswordResetToken",
     "StaffAccount",
     "TrainingJob",
     "User",

@@ -5,12 +5,14 @@ instead of a real DB session/engine — no live Postgres needed.
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.core.config import Settings
-from app.core.security import create_refresh_token, hash_password
+from app.core.security import create_refresh_token, hash_password, hash_secret, verify_password
 from app.models.enums import StaffRole
+from app.models.password_reset_token import PasswordResetToken
 from app.models.staff_account import StaffAccount
 from app.services import auth_service
 
@@ -36,6 +38,24 @@ class FakeStaffAccountRepository:
         self._by_id[account.id] = account
         self._by_email[account.email] = account
         return account
+
+    def update_password_hash(self, account: StaffAccount, password_hash: str) -> None:
+        account.password_hash = password_hash
+
+
+class FakePasswordResetTokenRepository:
+    def __init__(self) -> None:
+        self._by_id: dict[uuid.UUID, PasswordResetToken] = {}
+
+    def get(self, token_id: uuid.UUID) -> PasswordResetToken | None:
+        return self._by_id.get(token_id)
+
+    def create(self, token: PasswordResetToken) -> PasswordResetToken:
+        self._by_id[token.id] = token
+        return token
+
+    def mark_used(self, token: PasswordResetToken) -> None:
+        token.used_at = datetime.now(UTC)
 
 
 def _settings() -> Settings:
@@ -176,4 +196,131 @@ def test_bootstrap_admin_rejects_when_an_admin_already_exists() -> None:
     with pytest.raises(auth_service.AdminAlreadyExistsError):
         auth_service.bootstrap_admin(
             repo, email="second-admin@example.com", password="S0meStrongPass!"
+        )
+
+
+def test_request_password_reset_does_nothing_for_an_unknown_email(monkeypatch) -> None:
+    sent = []
+    monkeypatch.setattr(
+        auth_service, "send_password_reset_email", lambda **kwargs: sent.append(kwargs)
+    )
+    staff_repo = FakeStaffAccountRepository([])
+    token_repo = FakePasswordResetTokenRepository()
+
+    auth_service.request_password_reset(staff_repo, token_repo, email="ghost@example.com")
+
+    assert sent == []
+    assert token_repo._by_id == {}
+
+
+def test_request_password_reset_mints_a_token_and_sends_email(monkeypatch) -> None:
+    sent = []
+    monkeypatch.setattr(
+        auth_service, "send_password_reset_email", lambda **kwargs: sent.append(kwargs)
+    )
+    account = _account(email="admin@example.com")
+    staff_repo = FakeStaffAccountRepository([account])
+    token_repo = FakePasswordResetTokenRepository()
+
+    auth_service.request_password_reset(staff_repo, token_repo, email="admin@example.com")
+
+    assert len(sent) == 1
+    assert sent[0]["to_address"] == "admin@example.com"
+    assert "reset_url" in sent[0]
+    assert len(token_repo._by_id) == 1
+    (token,) = token_repo._by_id.values()
+    assert token.staff_id == account.id
+    assert token.used_at is None
+
+
+def _reset_token(*, staff_id: uuid.UUID, secret: str = "reset-secret", expired: bool = False):
+    token_id = uuid.uuid4()
+    expires_at = datetime.now(UTC) + (
+        timedelta(minutes=-1) if expired else timedelta(minutes=30)
+    )
+    return token_id, PasswordResetToken(
+        id=token_id,
+        staff_id=staff_id,
+        token_hash=hash_secret(secret),
+        expires_at=expires_at,
+    )
+
+
+def test_reset_password_succeeds_with_a_valid_token() -> None:
+    account = _account()
+    staff_repo = FakeStaffAccountRepository([account])
+    token_repo = FakePasswordResetTokenRepository()
+    token_id, record = _reset_token(staff_id=account.id, secret="reset-secret")
+    token_repo.create(record)
+
+    auth_service.reset_password(
+        staff_repo, token_repo, token=f"{token_id}.reset-secret", new_password="NewStrongPass!1"
+    )
+
+    assert verify_password("NewStrongPass!1", account.password_hash)
+    assert record.used_at is not None
+
+
+def test_reset_password_rejects_a_malformed_token() -> None:
+    staff_repo = FakeStaffAccountRepository([])
+    token_repo = FakePasswordResetTokenRepository()
+
+    with pytest.raises(auth_service.InvalidResetTokenError):
+        auth_service.reset_password(
+            staff_repo, token_repo, token="not-a-valid-token", new_password="NewStrongPass!1"
+        )
+
+
+def test_reset_password_rejects_an_unknown_token_id() -> None:
+    staff_repo = FakeStaffAccountRepository([])
+    token_repo = FakePasswordResetTokenRepository()
+
+    with pytest.raises(auth_service.InvalidResetTokenError):
+        auth_service.reset_password(
+            staff_repo,
+            token_repo,
+            token=f"{uuid.uuid4()}.some-secret",
+            new_password="NewStrongPass!1",
+        )
+
+
+def test_reset_password_rejects_an_expired_token() -> None:
+    account = _account()
+    staff_repo = FakeStaffAccountRepository([account])
+    token_repo = FakePasswordResetTokenRepository()
+    token_id, record = _reset_token(staff_id=account.id, secret="reset-secret", expired=True)
+    token_repo.create(record)
+
+    with pytest.raises(auth_service.InvalidResetTokenError):
+        auth_service.reset_password(
+            staff_repo, token_repo, token=f"{token_id}.reset-secret", new_password="NewStrongPass!1"
+        )
+
+
+def test_reset_password_rejects_a_wrong_secret() -> None:
+    account = _account()
+    staff_repo = FakeStaffAccountRepository([account])
+    token_repo = FakePasswordResetTokenRepository()
+    token_id, record = _reset_token(staff_id=account.id, secret="reset-secret")
+    token_repo.create(record)
+
+    with pytest.raises(auth_service.InvalidResetTokenError):
+        auth_service.reset_password(
+            staff_repo, token_repo, token=f"{token_id}.wrong-secret", new_password="NewStrongPass!1"
+        )
+
+
+def test_reset_password_rejects_reusing_an_already_used_token() -> None:
+    account = _account()
+    staff_repo = FakeStaffAccountRepository([account])
+    token_repo = FakePasswordResetTokenRepository()
+    token_id, record = _reset_token(staff_id=account.id, secret="reset-secret")
+    token_repo.create(record)
+
+    auth_service.reset_password(
+        staff_repo, token_repo, token=f"{token_id}.reset-secret", new_password="NewStrongPass!1"
+    )
+    with pytest.raises(auth_service.InvalidResetTokenError):
+        auth_service.reset_password(
+            staff_repo, token_repo, token=f"{token_id}.reset-secret", new_password="AnotherPass!2"
         )

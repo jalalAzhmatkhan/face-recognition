@@ -13,17 +13,23 @@ from app.core.problem import ProblemError
 from app.dependencies.auth import (
     CurrentStaff,
     get_current_staff,
+    get_password_reset_token_repository,
     get_staff_account_repository,
     require_role,
 )
 from app.models.enums import StaffRole
+from app.repositories.password_reset_tokens import PasswordResetTokenRepository
 from app.repositories.staff_accounts import StaffAccountRepository
 from app.schemas.auth import (
     AccessTokenResponse,
     BootstrapAdminRequest,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     LoginRequest,
     MeResponse,
     RefreshRequest,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     SetupStatusResponse,
     TokenResponse,
 )
@@ -104,6 +110,38 @@ def bootstrap_admin(
         refresh_token=refresh_token,
         expires_in=expires_in,
     )
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+def forgot_password(
+    body: ForgotPasswordRequest,
+    staff_repo: StaffAccountRepository = Depends(get_staff_account_repository),
+    token_repo: PasswordResetTokenRepository = Depends(get_password_reset_token_repository),
+) -> ForgotPasswordResponse:
+    """Unauthenticated on purpose. Always returns 200 with the identical
+    message whether or not `email` matched an account (NFR-SEC-04) — see
+    `auth_service.request_password_reset`."""
+    auth_service.request_password_reset(staff_repo, token_repo, email=body.email)
+    return ForgotPasswordResponse()
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+def reset_password(
+    body: ResetPasswordRequest,
+    staff_repo: StaffAccountRepository = Depends(get_staff_account_repository),
+    token_repo: PasswordResetTokenRepository = Depends(get_password_reset_token_repository),
+) -> ResetPasswordResponse:
+    try:
+        auth_service.reset_password(
+            staff_repo, token_repo, token=body.token, new_password=body.new_password
+        )
+    except auth_service.InvalidResetTokenError as exc:
+        raise ProblemError(
+            status_code=400,
+            title="Bad Request",
+            detail="Token reset password tidak valid, sudah digunakan, atau sudah kedaluwarsa.",
+        ) from exc
+    return ResetPasswordResponse()
 
 
 @router.get("/me", response_model=MeResponse)

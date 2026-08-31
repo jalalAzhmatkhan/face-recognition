@@ -18,6 +18,7 @@ from app.core.problem import ProblemError
 from app.core.security import TokenError, TokenType, decode_token
 from app.db.session import get_db
 from app.models.enums import StaffRole
+from app.repositories.password_reset_tokens import PasswordResetTokenRepository
 from app.repositories.staff_accounts import StaffAccountRepository
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -28,6 +29,12 @@ def get_staff_account_repository(db: Session = Depends(get_db)) -> StaffAccountR
     tests can override just the repository with a fake, without needing a
     real DB session (see backend/tests/test_auth_router.py)."""
     return StaffAccountRepository(db)
+
+
+def get_password_reset_token_repository(
+    db: Session = Depends(get_db),
+) -> PasswordResetTokenRepository:
+    return PasswordResetTokenRepository(db)
 
 
 @dataclass(frozen=True)

@@ -36,3 +36,8 @@ class StaffAccountRepository:
         self._session.commit()
         self._session.refresh(account)
         return account
+
+    def update_password_hash(self, account: StaffAccount, password_hash: str) -> None:
+        """Used by the forgot-password flow (`auth_service.reset_password`)."""
+        account.password_hash = password_hash
+        self._session.commit()

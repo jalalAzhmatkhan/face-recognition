@@ -71,6 +71,14 @@ services:
       AWS_S3_PREFIX: ${AWS_S3_PREFIX:-face-recognition/}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # Forgot-password email (BE-03 follow-up): MailHog accepts any message
+      # without real delivery -- view what was "sent" at http://localhost:8025.
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      # Frontend runs in the BROWSER, so the reset-password link embedded in
+      # the email must use the host-mapped origin, same reasoning as
+      # CORS_ALLOW_ORIGINS above.
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:5173}
     volumes:
       # Bind-mount for live reload (uvicorn --reload picks up host edits
       # without a rebuild); the anonymous volume on .venv stops the host's
@@ -83,6 +91,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailhog:
+        condition: service_started
       backend-migrate:
         condition: service_completed_successfully
     profiles: ["app"]
@@ -239,6 +249,17 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # Dev-only fake SMTP server for the forgot-password flow (BE-03 follow-up):
+  # backend's SMTP_HOST/SMTP_PORT point here, so every "sent" email is caught
+  # and viewable at the web UI instead of leaving the machine. No auth, no
+  # persistence needed.
+  mailhog:
+    image: mailhog/mailhog
+    restart: unless-stopped
+    ports:
+      - "${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "${MAILHOG_WEB_PORT:-8025}:8025"
 
   # S3-compatible stand-in for dev/CI only. Staging/prod use real AWS S3
   # (see infra/terraform/ — XC-03); ai-training's S3Settings.endpoint_url and

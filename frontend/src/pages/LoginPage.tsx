@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { getSetupStatus, login, LoginError } from '../lib/authToken'
 
@@ -139,6 +139,10 @@ export default function LoginPage() {
         >
           {submitting ? 'Masuk…' : 'Masuk'}
         </button>
+
+        <Link to="/forgot-password" style={{ font: 'var(--text-small)', color: 'var(--text-secondary)' }}>
+          Lupa password?
+        </Link>
 
         <p
           style={{
