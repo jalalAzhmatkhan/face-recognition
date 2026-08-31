@@ -127,6 +127,31 @@ DATABASE_URL_EMBEDDINGS_WRITE=postgresql+psycopg://ai_training_embeddings_write:
 Gunakan `DATABASE_URL_RO` untuk query dataset (tanpa risiko baca embeddings),
 dan `DATABASE_URL_EMBEDDINGS_WRITE` khusus untuk job yang meng-upsert
 `face_embeddings`. JANGAN memberi role ini `LOGIN`/password lewat migration —
+
+### DB role: `ai_inference_ro` (ai-inference, read-only, IN-03)
+
+Migration `b7c4e1a2d9f0` membuat role Postgres `NOLOGIN` ketiga,
+`ai_inference_ro`, khusus untuk service `ai-inference/`'s `/recognize` ANN
+gallery search. Jauh lebih sempit daripada `ai_training_ro`: HANYA `SELECT`
+pada dua tabel —
+
+- **`models`** — untuk menentukan versi mana yang `stage='PRODUCTION'` saat ini.
+- **`face_embeddings`** — untuk pgvector top-k search (`vector <=> ...`) pada
+  versi PRODUCTION tersebut.
+
+Tidak ada akses ke `users`/`staff_accounts`/`audit_logs`/tabel lain sama
+sekali (least privilege, TSD §6). Sama seperti role lain di atas, kredensial
+login diberikan terpisah oleh DBA/secret manager, tidak pernah lewat
+migration:
+
+```bash
+DATABASE_URL_AI_INFERENCE_RO=postgresql://ai_inference_ro:<pwd>@host:5432/frac
+```
+
+Service `ai-inference/` memakainya lewat `INF_DB_DSN` (lihat
+`ai-inference/src/ai_inference/config.py` dan `ai_inference/gallery.py`).
+
+
 itu harus lewat mekanisme secret yang sama dengan kredensial lain (NFR-OPS-03).
 
 ## AuthN/AuthZ staff (BE-03)

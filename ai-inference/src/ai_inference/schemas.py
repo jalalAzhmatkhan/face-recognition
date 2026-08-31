@@ -1,0 +1,50 @@
+"""Request/response schemas for ``POST /recognize`` (IN-03, FR-INF-02).
+
+Base64 JPEG/PNG frames were chosen over multipart (TSD §7 leaves either
+option open: "multipart frames | base64 batch") because a JSON body of
+base64 strings is simpler to implement AND to test (a plain
+``TestClient.post(json=...)`` call, no multipart boundary construction) for
+a service that already speaks JSON everywhere else (``/healthz``,
+``/metrics``). The tradeoff (≈33% larger payload than raw multipart bytes)
+is judged not to matter at this stage; multipart can be added as a second
+supported content-type later without breaking this one if it ever does.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class RecognizeRequest(BaseModel):
+    """One or more frames from a single recognition attempt.
+
+    recommendations.md §5's multi-frame temporal voting (accept if >=2 of
+    3-5 frames pass threshold tau) is the reason this is a list rather than
+    a single frame -- see ``ai_inference.pipeline.recognize.run_recognition``.
+    """
+
+    frames_base64: list[str] = Field(
+        min_length=1,
+        description="Base64-encoded JPEG or PNG bytes, one entry per captured frame.",
+    )
+
+
+class RecognizeResponse(BaseModel):
+    """FR-INF-02 response shape -- field set and names are exact per the
+    IN-03 task brief, do not rename without updating callers.
+
+    ``decision`` is intentionally restricted to a SUBSET of backend's full
+    ``AccessDecision`` enum (``GRANTED | DENIED | UNKNOWN | SPOOF_SUSPECTED``):
+    only ``GRANTED``/``UNKNOWN`` are ever produced here. ``DENIED`` requires
+    a real liveness/spoof signal this task does not have (IN-04), and
+    ``SPOOF_SUSPECTED`` requires the same. See
+    ``ai_inference.pipeline.recognize`` module docstring for the full list
+    of gaps this endpoint deliberately does not close.
+    """
+
+    decision: str  # "GRANTED" | "UNKNOWN"
+    user_id: str | None = None
+    similarity: float
+    liveness_score: float
+    model_version: str
+    latency_ms: int

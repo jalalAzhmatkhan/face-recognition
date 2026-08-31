@@ -22,19 +22,44 @@ class Settings(BaseSettings):
     # MLflow model registry (TSD SS1.2: INF loads models from MLflow)
     mlflow_tracking_uri: str = ""
     # Registered model names in the MLflow registry (per ratified recommendation:
-    # SCRFD detector, AdaFace embedder, MiniFASNet liveness).
-    detector_model_name: str = "scrfd-detector"
+    # MediaPipe Face Landmarker detector (substituted for SCRFD -- see
+    # IN-03/TR-02 licensing note below), AdaFace embedder, MiniFASNet liveness).
+    detector_model_name: str = "mediapipe-face-landmarker"
     embedder_model_name: str = "adaface-embedder"
     liveness_model_name: str = "minifasnet-liveness"
     # "production" alias by default; pin an explicit version to override.
     model_stage_or_version: str = "production"
 
-    # Loader backend: "stub" (no downloads, for dev/CI) or "mlflow".
+    # Loader backend: "stub" (no downloads, for dev/CI), or "mlflow"/"adaface"
+    # (both select AdaFaceModelLoader -- see models/loader.py module docstring
+    # for why "mlflow" is kept only as a backward-compatible alias, not because
+    # anything is actually loaded from an MLflow registry).
     model_loader: str = "stub"
 
     # Decision parameters (tuned later on validation curves - TSD SS5)
     similarity_threshold: float = 0.35
     device: str = "cpu"  # "cpu" | "cuda"
+
+    # --- IN-03: /recognize pipeline ---------------------------------------
+    # Postgres DSN using the read-only `ai_inference_ro` role (backend
+    # migration b7c4e1a2d9f0): SELECT-only on `models` (find the PRODUCTION
+    # version) and `face_embeddings` (ANN gallery search). No other table
+    # access -- see backend/README.md "DB role: ai_inference_ro".
+    db_dsn: str = ""
+    # LIMIT for the pgvector top-k ANN query in ai_inference.gallery.search_top_k,
+    # before per-user max-fusion collapse (recommendations.md SS4). A user can
+    # have ~13 templates (multiple pose buckets), so this must comfortably
+    # exceed (num_candidate_users * templates_per_user) to avoid truncating a
+    # real match's best template out of the result set.
+    ann_top_k: int = 50
+    # Top1 - top2 (different users) margin required, IN ADDITION to
+    # top1 >= similarity_threshold, to GRANT. 0.0 = margin not enforced yet
+    # (recommendations.md SS5: tighten this during threshold calibration).
+    margin_threshold: float = 0.0
+    # Multi-frame temporal voting (recommendations.md SS5): a user must be the
+    # per-frame winner in at least this many submitted frames for the final
+    # decision to be GRANTED for that user.
+    min_frames_for_grant: int = 2
 
 
 @lru_cache
