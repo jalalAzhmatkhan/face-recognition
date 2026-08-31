@@ -3,6 +3,8 @@ ANN gallery search -> threshold/margin decision -> temporal voting (IN-03,
 FR-INF-01/02/03; liveness/PAD landed in IN-04, closing gap 2/5 below).
 Per-stage Prometheus latency histograms (`ai_inference.metrics`) and the
 `decisions_total` counter are recorded here too (IN-05, NFR-PRF-01/02).
+Drift/unknown-rate/latency-SLO monitoring (`ai_inference.monitoring`,
+IN-08, FR-MON-04) is fed from here and from `run_recognition_timed` too.
 
 **Deliberate gaps, NOT implemented here** (see the IN-03 task brief for the
 tracking tickets):
@@ -318,6 +320,7 @@ def run_recognition(
 
     candidates: list[FrameCandidate] = []
     liveness_scores: list[float] = []
+    best_similarity_seen: float | None = None
     for frame_b64 in frames_base64:
         stage_start = time.perf_counter()
         frame_bgr = _decode_frame_bgr(frame_b64)
@@ -366,7 +369,12 @@ def run_recognition(
             k=settings.ann_top_k,
         )
         stage_latency_seconds.labels(stage="search").observe(time.perf_counter() - stage_start)
-        candidates.append(_collapse_to_top_candidates(rows))
+        candidate = _collapse_to_top_candidates(rows)
+        candidates.append(candidate)
+        if candidate.top1_similarity is not None and (
+            best_similarity_seen is None or candidate.top1_similarity > best_similarity_seen
+        ):
+            best_similarity_seen = candidate.top1_similarity
 
     stage_start = time.perf_counter()
     result = decide_from_scores(
@@ -377,6 +385,19 @@ def run_recognition(
     )
     stage_latency_seconds.labels(stage="overhead").observe(time.perf_counter() - stage_start)
     decisions_total.labels(decision=result.decision).inc()
+
+    # IN-08 (FR-MON-04): feed the best RAW top-1 similarity actually seen
+    # this request into score-drift monitoring -- deliberately NOT
+    # `result.similarity` (that field is hardcoded 0.0 on UNKNOWN, which
+    # would corrupt the tracked distribution with a flood of fake zeros;
+    # see ai_inference.monitoring module docstring). `None` means no frame
+    # produced any candidate at all (e.g. no face detected in any frame) --
+    # nothing meaningful to record.
+    if best_similarity_seen is not None:
+        from ai_inference import monitoring
+
+        monitoring.record_similarity_score(best_similarity_seen)
+
     return result, production_version, liveness_scores
 
 
@@ -416,6 +437,17 @@ def run_recognition_timed(
     decision_latency_seconds.observe(elapsed_seconds)
     latency_ms = int(elapsed_seconds * 1000)
     reported_liveness_score = min(liveness_scores) if liveness_scores else _LIVENESS_FALLBACK_SCORE
+
+    # IN-08 (FR-MON-04): unknown-rate and latency-SLO monitoring both have
+    # everything they need right here (the final decision, and wall-clock
+    # latency measured in THIS function -- `run_recognition` itself has no
+    # notion of elapsed time). Score-drift is recorded separately, inside
+    # `run_recognition`, where the raw per-frame candidate scores live.
+    from ai_inference import monitoring
+
+    monitoring.record_decision(result.decision)
+    monitoring.record_latency(latency_ms)
+
     return {
         "decision": result.decision,
         "user_id": result.user_id,

@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from ai_inference import __version__, events, gallery
+from ai_inference import __version__, events, gallery, monitoring
 from ai_inference.auth_dependency import get_current_device_bearer_token, get_current_device_id
 from ai_inference.config import Settings, get_settings
 from ai_inference.metrics import model_loads_total, registry
@@ -44,6 +44,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # buffer, for the lifetime of the app (cancelled at shutdown below).
         events.configure_buffer(settings.access_event_buffer_max_size)
         flush_task = asyncio.create_task(events.run_flush_loop(settings))
+
+        # IN-08: fresh drift/unknown-rate/latency-SLO detectors for this
+        # process's lifetime (module-global by design, see
+        # ai_inference.monitoring module docstring).
+        monitoring.configure(settings)
         try:
             yield
         finally:

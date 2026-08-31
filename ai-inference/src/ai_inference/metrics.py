@@ -28,7 +28,7 @@ stage (so many frames across many requests build up a meaningful
 percentile distribution); ``overhead`` gets one observation per request.
 """
 
-from prometheus_client import CollectorRegistry, Counter, Histogram
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 # Dedicated registry so tests / multiple app instances never collide on the
 # global default registry.
@@ -94,5 +94,53 @@ model_version_mismatches_total = Counter(
     "comparing embeddings across two different model versions. Non-zero "
     "means this replica needs a restart/redeploy pointed at the newly "
     "promoted model's weights -- see ai_inference.model_switch.",
+    registry=registry,
+)
+
+# --- IN-08: drift & model monitoring (FR-MON-04) ----------------------
+# There is no Alertmanager/Grafana deployed anywhere in this monorepo (see
+# ai_inference.monitoring module docstring) -- these Gauges ARE the alert
+# surface: a `*_alert` Gauge reading 1 is the signal an operator (or a
+# future Alertmanager rule watching `inference_*_alert == 1`) would act on.
+
+score_drift_psi = Gauge(
+    "inference_score_drift_psi",
+    "Population Stability Index (IN-08) between a frozen baseline window of "
+    "top-1 similarity scores and the current rolling window. <0.1 no "
+    "significant shift, 0.1-0.2 moderate, >0.2 significant -- see "
+    "ai_inference.monitoring for the frozen-baseline-vs-rolling-window design.",
+    registry=registry,
+)
+score_drift_alert = Gauge(
+    "inference_score_drift_alert",
+    "1 when inference_score_drift_psi exceeds Settings.score_drift_psi_threshold, else 0.",
+    registry=registry,
+)
+
+unknown_rate = Gauge(
+    "inference_unknown_rate",
+    "Fraction of the last Settings.monitoring_window_size /recognize "
+    "decisions that were UNKNOWN (IN-08, FR-MON-04 'unknown-rate spike').",
+    registry=registry,
+)
+unknown_rate_alert = Gauge(
+    "inference_unknown_rate_alert",
+    "1 when inference_unknown_rate exceeds Settings.unknown_rate_alert_threshold, else 0.",
+    registry=registry,
+)
+
+latency_p95_ms = Gauge(
+    "inference_latency_p95_ms",
+    "p95 of the last Settings.monitoring_window_size /recognize "
+    "decision_latency_ms values (IN-08, FR-MON-04 'latency SLO breach') -- "
+    "a rolling-window sibling of the inference_decision_latency_seconds "
+    "histogram, kept separate so a breach can be flagged without a "
+    "Prometheus query-time percentile calculation.",
+    registry=registry,
+)
+latency_slo_breach_alert = Gauge(
+    "inference_latency_slo_breach_alert",
+    "1 when inference_latency_p95_ms exceeds Settings.latency_slo_p95_ms "
+    "(NFR-PRF-01's 300ms budget by default), else 0.",
     registry=registry,
 )
