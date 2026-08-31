@@ -7,6 +7,7 @@ interface DeviceActionsMenuProps {
   canEdit: boolean
   canRotate: boolean
   canDisable: boolean
+  canActivate: boolean
   anyMutationPending: boolean
   isRotateTarget: boolean
   isRotatePending: boolean
@@ -19,6 +20,7 @@ interface DeviceActionsMenuProps {
   onRequestDisable: () => void
   onCancelDisable: () => void
   onConfirmDisable: () => void
+  onActivate: () => void
 }
 
 /**
@@ -35,6 +37,7 @@ export default function DeviceActionsMenu({
   canEdit,
   canRotate,
   canDisable,
+  canActivate,
   anyMutationPending,
   isRotateTarget,
   isRotatePending,
@@ -47,12 +50,22 @@ export default function DeviceActionsMenu({
   onRequestDisable,
   onCancelDisable,
   onConfirmDisable,
+  onActivate,
 }: DeviceActionsMenuProps) {
   const canDisableThisDevice = canDisable && device.status !== 'DISABLED'
+  // "Aktifkan" only makes sense for a device that isn't disabled.
+  const canActivateThisDevice = canActivate && device.status !== 'DISABLED'
   // OPERATOR (this page's other allowed role, see roleGating.ts) has none
-  // of these three actions -- show nothing at all rather than a "⋮"
+  // of these four actions -- show nothing at all rather than a "⋮"
   // trigger that opens an empty menu.
-  if (!canEdit && !canRotate && !canDisableThisDevice && !isRotateTarget && !isDisableTarget) {
+  if (
+    !canEdit &&
+    !canRotate &&
+    !canDisableThisDevice &&
+    !canActivateThisDevice &&
+    !isRotateTarget &&
+    !isDisableTarget
+  ) {
     return null
   }
 
@@ -89,6 +102,18 @@ export default function DeviceActionsMenu({
     <ActionsMenu renderConfirm={renderConfirm}>
       {(closeMenu) => (
         <>
+          {canActivateThisDevice && (
+            <ActionsMenuItem
+              disabled={anyMutationPending}
+              onClick={() => {
+                closeMenu()
+                onActivate()
+              }}
+            >
+              Aktivasi (Simulasi Heartbeat)
+            </ActionsMenuItem>
+          )}
+
           {canEdit && (
             <ActionsMenuItem
               disabled={anyMutationPending}

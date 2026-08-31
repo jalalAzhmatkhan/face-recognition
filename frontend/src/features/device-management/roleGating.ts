@@ -40,3 +40,14 @@ export function canRotateDeviceCredential(role: StaffRole | null): boolean {
 export function canDisableDevice(role: StaffRole | null): boolean {
   return role !== null && WRITE_ROLES.includes(role)
 }
+
+/** Dev/testing convenience (FE-08 follow-up): open the in-browser heartbeat
+ * simulator dialog. Gated the same as the other mutations (ADMIN only) even
+ * though the actual `POST /devices/{id}/heartbeat` call it triggers is
+ * authorized by the device credential itself, not the staff role — device
+ * credentials gate physical door hardware, so this console keeps every
+ * device-related action ADMIN-only for consistency, same rationale as
+ * `canEditDevice`/`canRotateDeviceCredential`/`canDisableDevice` above. */
+export function canActivateDevice(role: StaffRole | null): boolean {
+  return role !== null && WRITE_ROLES.includes(role)
+}
