@@ -9,9 +9,10 @@ consistently across this project since TR-02 -- see below):
   project has used MediaPipe (``ai_training.quality.pose``) everywhere
   since TR-02 instead. Do not reintroduce SCRFD here.
 - embedder: AdaFace IR-101 (WebFace12M), 512-d embeddings.
-- liveness: not implemented yet (IN-04). See :class:`StubModelLoader`'s
-  liveness handling and ``ai_inference.pipeline.recognize`` for the current
-  fixed-score placeholder.
+- liveness: MiniFASNet ensemble PAD (IN-04). See
+  ``ai_training.liveness.detector.MiniFASNetLivenessDetector`` and
+  ``ai_inference.pipeline.recognize`` for how a per-frame score feeds the
+  ``SPOOF_SUSPECTED`` decision path.
 
 Design:
 
@@ -126,9 +127,15 @@ class AdaFaceModelLoader(ModelLoader):
       version to "load" ahead of time (``ai_training.quality.pose`` opens
       its ``.task`` asset per call) -- this just records the configured
       detector name/version so ``/healthz`` reports something meaningful.
-    - ``LIVENESS``: no real model exists until IN-04. Recorded as a
-      placeholder version so ``/healthz`` is honest about what's actually
-      running (see ``ai_inference.pipeline.recognize.placeholder_liveness``).
+    - ``LIVENESS`` (IN-04): builds
+      ``ai_training.liveness.detector.build_liveness_detector()`` against
+      the SAME bridged ``ai_training.config.Settings`` used for the
+      embedder (``ai_inference.training_bridge``, forced onto the real
+      ``"minifasnet"`` backend), and loads the two committed weight files
+      on first use (the detector itself lazy-loads torch/the weights -- see
+      ``MiniFASNetLivenessDetector._get_models``). Requires the ``ml``
+      extra; the weight files themselves ship committed in the repo (no
+      separate download step, unlike AdaFace).
 
     ``ai_training``/``torch``/etc are imported lazily so this module stays
     importable without the ``ml`` extra installed.
@@ -138,6 +145,7 @@ class AdaFaceModelLoader(ModelLoader):
         self._settings = settings
         self._loaded: dict[ModelKind, LoadedModel] = {}
         self._embedder: Any = None  # ai_training.embedding.embedder.EmbedderInterface
+        self._liveness_detector: Any = None  # ai_training.liveness.detector.LivenessDetector
 
     def load(self, kind: ModelKind, version: str | None = None) -> LoadedModel:
         if kind is ModelKind.EMBEDDER:
@@ -155,12 +163,13 @@ class AdaFaceModelLoader(ModelLoader):
                 version=version or "mediapipe-face-landmarker-v1",
                 handle=None,
             )
-        else:  # ModelKind.LIVENESS -- IN-04 gap, see module docstring.
+        else:  # ModelKind.LIVENESS (IN-04) -- see module docstring.
+            liveness_detector = self._get_liveness_detector()
             model = LoadedModel(
                 kind=kind,
                 name=self._settings.liveness_model_name,
-                version=version or "liveness-placeholder-not-implemented",
-                handle=None,
+                version=version or liveness_detector.model_version,
+                handle=liveness_detector,
             )
         self._loaded[kind] = model
         return model
@@ -182,6 +191,24 @@ class AdaFaceModelLoader(ModelLoader):
         training_settings = build_training_settings(self._settings)
         self._embedder = build_embedder(training_settings)
         return self._embedder
+
+    def _get_liveness_detector(self) -> Any:
+        if self._liveness_detector is not None:
+            return self._liveness_detector
+        try:
+            import torch  # noqa: F401  (lazy heavy import, actionable error below)
+        except ImportError as exc:  # pragma: no cover - depends on extras
+            raise RuntimeError(
+                "AdaFaceModelLoader requires the 'ml' extra (uv sync --extra ml): torch "
+                "(pulled in transitively via the ai-training path dependency)."
+            ) from exc
+        from ai_training.liveness.detector import build_liveness_detector
+
+        from ai_inference.training_bridge import build_training_settings
+
+        training_settings = build_training_settings(self._settings)
+        self._liveness_detector = build_liveness_detector(training_settings)
+        return self._liveness_detector
 
     def loaded_versions(self) -> dict[ModelKind, str]:
         return {kind: model.version for kind, model in self._loaded.items()}

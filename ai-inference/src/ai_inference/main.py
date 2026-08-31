@@ -3,9 +3,9 @@
 Endpoints:
 - ``GET /healthz`` - liveness/readiness probe with loaded-model versions.
 - ``GET /metrics`` - Prometheus exposition (per-stage latency histograms etc.).
-- ``POST /recognize`` - face recognition pipeline (IN-03). See the endpoint
-  docstring below for the IN-02/IN-04/IN-06/IN-07 gaps it deliberately does
-  NOT close.
+- ``POST /recognize`` - face recognition pipeline (IN-03, liveness/PAD added
+  IN-04). See the endpoint docstring below for the IN-02/IN-06/IN-07 gaps it
+  deliberately does NOT close.
 """
 
 from contextlib import asynccontextmanager
@@ -70,9 +70,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with IN-06 (event emission).
 
         See `ai_inference.pipeline.recognize` module docstring for the full
-        list of other deliberate gaps (IN-04 liveness placeholder, no IN-06
-        event emission, no IN-07 atomic model switch, `SPOOF_SUSPECTED`
-        never produced).
+        list of other deliberate gaps (no IN-06 event emission, no IN-07
+        atomic model switch). IN-04 (real liveness/PAD, `SPOOF_SUSPECTED`)
+        is now closed -- see that module for the MiniFASNet-based gate.
         """
         if not settings.db_dsn:
             raise HTTPException(
@@ -91,6 +91,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "install the 'ml' extra.",
             )
 
+        # IN-04: liveness gate runs on the same real-backend requirement as
+        # the embedder above -- fail closed (500), never silently skip the
+        # spoof check, per NFR-SEC-06.
+        loaded_liveness = loader.load(ModelKind.LIVENESS)
+        liveness_detector = loaded_liveness.handle
+        if liveness_detector is None:
+            raise HTTPException(
+                status_code=500,
+                detail="`/recognize` requires a real liveness detector: set "
+                "INF_MODEL_LOADER=adaface (or the legacy 'mlflow' alias) and "
+                "install the 'ml' extra.",
+            )
+
         from ai_inference.pipeline.recognize import run_recognition_timed
 
         try:
@@ -100,7 +113,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with conn.cursor() as cursor:
                 response_dict = run_recognition_timed(
-                    request.frames_base64, settings, embedder=embedder, cursor=cursor
+                    request.frames_base64,
+                    settings,
+                    embedder=embedder,
+                    cursor=cursor,
+                    liveness_detector=liveness_detector,
                 )
         finally:
             conn.close()

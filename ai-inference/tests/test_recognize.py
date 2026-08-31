@@ -1,5 +1,6 @@
 """Unit tests for the pure decision logic in `ai_inference.pipeline.recognize`
-(IN-03). No DB/torch/cv2 -- must pass on base CI (no `ml` extra)."""
+(IN-03; SPOOF_SUSPECTED voting added IN-04). No DB/torch/cv2 -- must pass on
+base CI (no `ml` extra)."""
 
 from ai_inference.pipeline.recognize import (
     FrameCandidate,
@@ -135,3 +136,62 @@ def test_decide_min_frames_for_grant_of_one_grants_on_single_pass() -> None:
         candidates, threshold=THRESHOLD, margin=MARGIN, min_frames_for_grant=1
     )
     assert result == RecognitionResult(decision="GRANTED", user_id="u1", similarity=0.9)
+
+
+# --- IN-04: SPOOF_SUSPECTED voting -------------------------------------
+
+
+def test_decide_spoof_suspected_when_all_frames_flagged() -> None:
+    candidates = [
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=True),
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=True),
+    ]
+    result = decide_from_scores(
+        candidates, threshold=THRESHOLD, margin=MARGIN, min_frames_for_grant=MIN_FRAMES
+    )
+    assert result == RecognitionResult(decision="SPOOF_SUSPECTED", user_id=None, similarity=0.0)
+
+
+def test_decide_spoof_suspected_wins_over_granted_user_from_other_frames() -> None:
+    # 2 frames flagged spoof-suspect (reaches MIN_FRAMES) AND 2 OTHER frames
+    # separately pass identity voting for u1 (also reaches MIN_FRAMES) --
+    # SPOOF_SUSPECTED must win regardless, per the documented priority rule.
+    candidates = [
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=True),
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=True),
+        FrameCandidate(top1_user_id="u1", top1_similarity=0.9),
+        FrameCandidate(top1_user_id="u1", top1_similarity=0.8),
+    ]
+    result = decide_from_scores(
+        candidates, threshold=THRESHOLD, margin=MARGIN, min_frames_for_grant=MIN_FRAMES
+    )
+    assert result == RecognitionResult(decision="SPOOF_SUSPECTED", user_id=None, similarity=0.0)
+
+
+def test_decide_not_spoof_suspected_when_below_min_frames() -> None:
+    # Only 1 spoof-suspect frame, MIN_FRAMES=2 -- not enough to flag spoof;
+    # falls through to normal identity voting (which also fails here, so
+    # UNKNOWN) -- proves a single flagged frame alone can't tank the result.
+    candidates = [
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=True),
+        FrameCandidate(top1_user_id="u1", top1_similarity=0.9),
+    ]
+    result = decide_from_scores(
+        candidates, threshold=THRESHOLD, margin=MARGIN, min_frames_for_grant=MIN_FRAMES
+    )
+    assert result == RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0)
+
+
+def test_decide_no_spoof_frames_behaves_exactly_as_before() -> None:
+    # Regression: identical to test_decide_grants_when_same_user_wins_min_frames
+    # above but with spoof_suspect explicitly False everywhere -- confirms
+    # the IN-04 addition changes nothing when there is no spoof signal.
+    candidates = [
+        FrameCandidate(top1_user_id="u1", top1_similarity=0.6, spoof_suspect=False),
+        FrameCandidate(top1_user_id="u1", top1_similarity=0.7, spoof_suspect=False),
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=False),
+    ]
+    result = decide_from_scores(
+        candidates, threshold=THRESHOLD, margin=MARGIN, min_frames_for_grant=MIN_FRAMES
+    )
+    assert result == RecognitionResult(decision="GRANTED", user_id="u1", similarity=0.7)

@@ -23,6 +23,13 @@ but ai-inference's whole point in depending on this code is to run the REAL
 embedder, so this bridge forces ``backend="adaface"`` regardless of what
 ``TRN_EMBEDDER__BACKEND`` is set to (or not set at all).
 
+**IN-04 extends the same override to liveness**: ``LivenessSettings.backend``
+also defaults to ``"stub"`` on the ai-training side (same test/CI reasoning),
+but the whole point of ``/recognize`` calling
+``ai_training.liveness.detector.build_liveness_detector`` is to run REAL
+anti-spoofing on the main path, so this bridge forces
+``backend="minifasnet"`` here too, regardless of ``TRN_LIVENESS__BACKEND``.
+
 Lazily imports ``ai_training`` so this module (and anything importing it)
 stays importable without the ``ml`` extra installed.
 """
@@ -49,4 +56,6 @@ def build_training_settings(_inference_settings: InferenceSettings) -> TrainingS
     training_settings = TrainingSettings()
     if training_settings.embedder.backend != "adaface":
         training_settings.embedder.backend = "adaface"
+    if training_settings.liveness.backend != "minifasnet":
+        training_settings.liveness.backend = "minifasnet"
     return training_settings
