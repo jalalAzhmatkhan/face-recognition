@@ -4,8 +4,8 @@ Endpoints:
 - ``GET /healthz`` - liveness/readiness probe with loaded-model versions.
 - ``GET /metrics`` - Prometheus exposition (per-stage latency histograms etc.).
 - ``POST /recognize`` - face recognition pipeline (IN-03, liveness/PAD added
-  IN-04, access-event emission added IN-06). See the endpoint docstring below
-  for the IN-07 gap it deliberately does NOT close.
+  IN-04, access-event emission added IN-06, atomic model+gallery switch
+  guard added IN-07). See the endpoint docstring below for details.
 """
 
 import asyncio
@@ -19,6 +19,7 @@ from ai_inference import __version__, events, gallery
 from ai_inference.auth_dependency import get_current_device_bearer_token, get_current_device_id
 from ai_inference.config import Settings, get_settings
 from ai_inference.metrics import model_loads_total, registry
+from ai_inference.model_switch import ProductionVersionCache
 from ai_inference.models import ModelKind, build_model_loader
 from ai_inference.schemas import RecognizeRequest, RecognizeResponse
 from ai_inference.tracing import setup_tracing
@@ -27,6 +28,10 @@ from ai_inference.tracing import setup_tracing
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     loader = build_model_loader(settings)
+    # IN-07: one cache per app instance (not module-global, unlike IN-06's
+    # event buffer) -- each `create_app()` call (e.g. one per test) gets an
+    # independent, un-warmed cache, matching how `loader` itself is scoped.
+    production_version_cache = ProductionVersionCache(settings.production_version_cache_ttl_seconds)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -90,10 +95,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         `ai_inference.events` module docstring for the fallback-buffer
         mechanism.
 
-        See `ai_inference.pipeline.recognize` module docstring for the
-        remaining deliberate gap (no IN-07 atomic model switch). IN-04 (real
-        liveness/PAD, `SPOOF_SUSPECTED`) is now closed -- see that module for
-        the MiniFASNet-based gate.
+        **IN-07 (atomic model+gallery switch)**: the current PRODUCTION
+        `models.version` is read through a short-TTL cache
+        (`app.state`-scoped `ai_inference.model_switch.ProductionVersionCache`,
+        see `create_app`) rather than fresh every call, and this process's
+        loaded embedder version is checked against it before any gallery
+        search -- a mismatch fail-secures the whole request to `UNKNOWN`.
+        See `ai_inference.model_switch` module docstring for why this is a
+        fail-secure guard, not a live weight hot-swap.
+
+        IN-04 (real liveness/PAD, `SPOOF_SUSPECTED`) is closed -- see
+        `ai_inference.pipeline.recognize` for the MiniFASNet-based gate.
         """
         if not settings.db_dsn:
             raise HTTPException(
@@ -139,6 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     embedder=embedder,
                     cursor=cursor,
                     liveness_detector=liveness_detector,
+                    production_version_cache=production_version_cache,
                 )
         finally:
             conn.close()

@@ -25,11 +25,15 @@ tracking tickets):
    `ai_inference.main`'s `/recognize` handler (fire-and-forget via
    `BackgroundTasks`, see `ai_inference.events`), using this function's
    returned `RecognitionResult`/`model_version`/`liveness_scores`.
-4. **IN-07 (atomic model+gallery switch)**: the PRODUCTION model version is
-   read fresh from `models` on every single request
-   (`gallery.get_current_production_model_version`) -- no caching, no
-   atomic blue/green switch mechanism. Good enough for v1; IN-07 can add
-   caching later.
+4. ~~IN-07 (atomic model+gallery switch)~~ **CLOSED (IN-07)**: the
+   PRODUCTION model version is now read through a short-TTL
+   `ai_inference.model_switch.ProductionVersionCache` instead of fresh on
+   every request, AND this process's loaded embedder version is checked
+   against it (`model_switch.embedder_matches_production`) before any
+   gallery search -- a mismatch fail-secures to `UNKNOWN` exactly like "no
+   PRODUCTION model", guaranteeing no request is ever decided by comparing
+   embeddings across two different model versions. See that module's
+   docstring for why this is a fail-secure guard, not a weight hot-swap.
 5. ~~`SPOOF_SUSPECTED`~~ **CLOSED (IN-04)**: `decide_from_scores` can now
    return `"SPOOF_SUSPECTED"` -- see its docstring for the exact voting
    rule and priority order.
@@ -50,7 +54,12 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ai_inference.metrics import decision_latency_seconds, decisions_total, stage_latency_seconds
+from ai_inference.metrics import (
+    decision_latency_seconds,
+    decisions_total,
+    model_version_mismatches_total,
+    stage_latency_seconds,
+)
 
 if TYPE_CHECKING:
     from ai_inference.config import Settings
@@ -239,6 +248,7 @@ def run_recognition(
     embedder: Any,
     cursor: Any,
     liveness_detector: Any = None,
+    production_version_cache: Any = None,
 ) -> tuple[RecognitionResult, str, list[float]]:
     """Full orchestration for `POST /recognize` (task brief steps 1-8, plus
     IN-04's liveness gate between detect and embed).
@@ -255,6 +265,12 @@ def run_recognition(
     (`ai_inference.main`) always passes a real detector.
     `cursor` is a `ai_inference.gallery.Cursor`-shaped DB-API cursor already
     connected via the `ai_inference_ro` role.
+    `production_version_cache` (IN-07), if given, is an
+    `ai_inference.model_switch.ProductionVersionCache` used instead of
+    calling `gallery.get_current_production_model_version` fresh every
+    call -- `None` (the default) preserves the pre-IN-07 always-fresh-read
+    behavior, which every unit test still relies on via a plain
+    `FakeCursor`.
 
     Returns `(RecognitionResult, model_version, liveness_scores)` --
     `model_version` is `""` when there is no PRODUCTION model (fail-secure:
@@ -271,11 +287,31 @@ def run_recognition(
     from ai_inference import gallery
 
     stage_start = time.perf_counter()
-    production_version = gallery.get_current_production_model_version(cursor)
+    if production_version_cache is not None:
+        production_version = production_version_cache.get(cursor)
+    else:
+        production_version = gallery.get_current_production_model_version(cursor)
     stage_latency_seconds.labels(stage="overhead").observe(time.perf_counter() - stage_start)
     if production_version is None:
         decisions_total.labels(decision="UNKNOWN").inc()
         return RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0), "", []
+
+    # IN-07 (FR-TRN-06): this process's loaded embedder must be the SAME
+    # model_version currently PRODUCTION, or a query embedding computed
+    # here would be compared against a gallery in a DIFFERENT (possibly
+    # incompatible) embedding space -- see ai_inference.model_switch
+    # module docstring. Fail-secure UNKNOWN exactly like "no PRODUCTION
+    # model" rather than risk a silently-wrong similarity score.
+    from ai_inference.model_switch import embedder_matches_production
+
+    if not embedder_matches_production(embedder.model_version, production_version):
+        model_version_mismatches_total.inc()
+        decisions_total.labels(decision="UNKNOWN").inc()
+        return (
+            RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0),
+            production_version,
+            [],
+        )
 
     from ai_training.embedding.alignment import align_face
     from ai_training.quality.pose import detect_face_and_landmarks
@@ -351,6 +387,7 @@ def run_recognition_timed(
     embedder: Any,
     cursor: Any,
     liveness_detector: Any = None,
+    production_version_cache: Any = None,
 ) -> dict[str, Any]:
     """`run_recognition` wrapped with the FR-INF-02 `latency_ms` measurement
     and assembled into the exact `/recognize` response dict (task brief step
@@ -373,6 +410,7 @@ def run_recognition_timed(
     result, model_version, liveness_scores = run_recognition(
         frames_base64, settings, embedder=embedder, cursor=cursor,
         liveness_detector=liveness_detector,
+        production_version_cache=production_version_cache,
     )
     elapsed_seconds = time.perf_counter() - start
     decision_latency_seconds.observe(elapsed_seconds)

@@ -1,12 +1,14 @@
 """Unit tests for the pure decision logic in `ai_inference.pipeline.recognize`
-(IN-03; SPOOF_SUSPECTED voting added IN-04). No DB/torch/cv2 -- must pass on
-base CI (no `ml` extra)."""
+(IN-03; SPOOF_SUSPECTED voting added IN-04; IN-07's model-version-mismatch
+guard, exercised with an empty frame list so no cv2/torch is touched). No
+DB/torch/cv2 -- must pass on base CI (no `ml` extra)."""
 
 from ai_inference.pipeline.recognize import (
     FrameCandidate,
     RecognitionResult,
     decide_from_scores,
     frame_passes_threshold,
+    run_recognition,
 )
 
 THRESHOLD = 0.5
@@ -180,6 +182,77 @@ def test_decide_not_spoof_suspected_when_below_min_frames() -> None:
         candidates, threshold=THRESHOLD, margin=MARGIN, min_frames_for_grant=MIN_FRAMES
     )
     assert result == RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0)
+
+
+# --- IN-07: model-version-mismatch fail-secure guard -------------------
+# `run_recognition([], ...)` never reaches the frame loop (no frames to
+# iterate), so this exercises the real orchestration function's guard logic
+# with zero cv2/torch/DB dependency -- only a fake cursor/embedder.
+
+
+class _FakeCursorWithProductionVersion:
+    def __init__(self, production_version: str | None) -> None:
+        self._production_version = production_version
+
+    def execute(self, query: str, params: tuple = ()) -> None:
+        pass
+
+    def fetchone(self):
+        return (self._production_version,) if self._production_version else None
+
+    def fetchall(self):
+        return []
+
+
+class _FakeEmbedder:
+    def __init__(self, model_version: str) -> None:
+        self.model_version = model_version
+
+    def embed(self, aligned_crop):  # pragma: no cover - unreachable with no frames
+        raise AssertionError("embed() must not be called on a version mismatch")
+
+
+def test_run_recognition_unknown_when_embedder_version_mismatches_production() -> None:
+    from ai_inference.config import Settings
+
+    settings = Settings()
+    cursor = _FakeCursorWithProductionVersion("adaface-ir101-webface12m-v2")
+    embedder = _FakeEmbedder("adaface-ir101-webface12m-v1")
+
+    result, model_version, liveness_scores = run_recognition(
+        [], settings, embedder=embedder, cursor=cursor
+    )
+    assert result == RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0)
+    # Reports the ACTUAL production version (even though unused) so an
+    # operator can see "production moved on, this replica hasn't" -- see
+    # ai_inference.model_switch module docstring.
+    assert model_version == "adaface-ir101-webface12m-v2"
+    assert liveness_scores == []
+
+
+def test_run_recognition_unknown_when_no_production_model_at_all() -> None:
+    """Regression: pre-IN-07 fail-secure path (no PRODUCTION row) must be
+    unaffected by the new mismatch guard."""
+    from ai_inference.config import Settings
+
+    settings = Settings()
+    cursor = _FakeCursorWithProductionVersion(None)
+    embedder = _FakeEmbedder("adaface-ir101-webface12m-v1")
+
+    result, model_version, liveness_scores = run_recognition(
+        [], settings, embedder=embedder, cursor=cursor
+    )
+    assert result == RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0)
+    assert model_version == ""
+    assert liveness_scores == []
+
+
+# NOTE: a "versions match, guard passes through" test is deliberately NOT
+# included here -- even with an empty frame list, `run_recognition` past
+# the guard unconditionally imports `ai_training.embedding.alignment` /
+# `ai_training.quality.pose` (needs the `ml` extra), so that path is left to
+# this project's established live-verification convention instead (see
+# module docstring), same as the rest of `run_recognition`'s orchestration.
 
 
 def test_decide_no_spoof_frames_behaves_exactly_as_before() -> None:
