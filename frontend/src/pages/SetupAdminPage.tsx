@@ -2,46 +2,61 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { getSetupStatus, login, LoginError } from '../lib/authToken'
+import { BootstrapAdminError, bootstrapAdmin, getSetupStatus } from '../lib/authToken'
 
-/** S-01 Login (screen-plan §2). FE-02: real email+password login against
- * `POST /auth/login` (BE-03) — the earlier SSO-disabled placeholder is
- * gone now that the backend endpoint exists. */
-export default function LoginPage() {
+/**
+ * First-run "create ADMIN account" screen. Reachable at `/setup` — declared
+ * as a top-level sibling of `/login` in `routes.tsx`, outside `AuthGuard`,
+ * so it works with zero staff accounts and no token at all.
+ *
+ * Self-disabling: `GET /auth/setup-status` reports `needs_setup: true` only
+ * while zero ADMIN accounts exist anywhere (backend-enforced —
+ * `POST /auth/bootstrap-admin` itself would reject a second attempt with
+ * 409 even if this redirect were somehow bypassed). Once an ADMIN exists,
+ * this page redirects to `/login` instead of rendering the form.
+ */
+export default function SetupAdminPage() {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  // A freshly-deployed instance has zero staff accounts, so no credentials
-  // could ever work here yet -- redirect straight to the first-run bootstrap
-  // screen instead of leaving the operator stuck at a login form that can
-  // never succeed. Errors are ignored (stay on the login form) rather than
-  // blocking login on this being reachable.
   const setupStatusQuery = useQuery({
     queryKey: ['auth', 'setup-status'],
     queryFn: getSetupStatus,
     retry: false,
   })
-  const needsSetup = setupStatusQuery.data?.needs_setup === true
-  useEffect(() => {
-    if (needsSetup) navigate('/setup', { replace: true })
-  }, [needsSetup, navigate])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
     setSubmitting(true)
     try {
-      await login({ email, password })
+      await bootstrapAdmin({ email, password })
       navigate('/', { replace: true })
     } catch (err) {
-      setError(err instanceof LoginError ? err.message : 'Gagal login, silakan coba lagi.')
+      setError(
+        err instanceof BootstrapAdminError ? err.message : 'Gagal membuat akun ADMIN, silakan coba lagi.',
+      )
     } finally {
       setSubmitting(false)
     }
   }
+
+  // Don't render the form (or flash it) while we don't yet know the
+  // setup-status, or once we know it's no longer needed -- redirect instead,
+  // matching AuthGuard's own "return null while checking" convention.
+  // Navigation itself happens in an effect (not during render) since
+  // triggering a route change mid-render is unsafe in React.
+  const shouldRedirectToLogin =
+    setupStatusQuery.isError || setupStatusQuery.data?.needs_setup === false
+
+  useEffect(() => {
+    if (shouldRedirectToLogin) navigate('/login', { replace: true })
+  }, [shouldRedirectToLogin, navigate])
+
+  if (setupStatusQuery.isLoading || shouldRedirectToLogin) return null
 
   return (
     <div
@@ -68,17 +83,17 @@ export default function LoginPage() {
           gap: 'var(--space-4)',
         }}
       >
-        <h1>FRAC Console</h1>
+        <h1>Setup Awal FRAC Console</h1>
         <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
-          Face Recognition Access Control
+          Belum ada akun ADMIN. Buat akun ADMIN pertama untuk mulai menggunakan aplikasi ini.
         </p>
 
         <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-          <label htmlFor="login-email" style={{ font: 'var(--text-small)', color: 'var(--text-secondary)' }}>
+          <label htmlFor="setup-email" style={{ font: 'var(--text-small)', color: 'var(--text-secondary)' }}>
             Email
           </label>
           <input
-            id="login-email"
+            id="setup-email"
             name="email"
             type="email"
             autoComplete="username"
@@ -96,15 +111,16 @@ export default function LoginPage() {
         </div>
 
         <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-          <label htmlFor="login-password" style={{ font: 'var(--text-small)', color: 'var(--text-secondary)' }}>
+          <label htmlFor="setup-password" style={{ font: 'var(--text-small)', color: 'var(--text-secondary)' }}>
             Password
           </label>
           <input
-            id="login-password"
+            id="setup-password"
             name="password"
             type="password"
-            autoComplete="current-password"
+            autoComplete="new-password"
             required
+            minLength={8}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             style={{
@@ -115,6 +131,9 @@ export default function LoginPage() {
               font: 'var(--text-body)',
             }}
           />
+          <span style={{ font: 'var(--text-caption)', color: 'var(--text-muted)' }}>
+            Minimal 8 karakter.
+          </span>
         </div>
 
         {error && (
@@ -137,7 +156,7 @@ export default function LoginPage() {
             opacity: submitting ? 0.6 : 1,
           }}
         >
-          {submitting ? 'Masuk…' : 'Masuk'}
+          {submitting ? 'Membuat akun…' : 'Buat Akun ADMIN'}
         </button>
 
         <p
@@ -147,7 +166,7 @@ export default function LoginPage() {
             margin: 0,
           }}
         >
-          Sistem ini memproses data biometrik dan tunduk pada UU PDP.
+          Halaman ini hanya bisa diakses satu kali, sebelum akun ADMIN pertama dibuat.
         </p>
       </form>
     </div>

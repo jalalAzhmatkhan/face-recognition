@@ -27,6 +27,21 @@ class FakeStaffAccountRepository:
     def get_by_email(self, email: str) -> StaffAccount | None:
         return self._by_email.get(email)
 
+    def exists_by_role(self, role: StaffRole) -> bool:
+        return any(a.role == role for a in self._by_id.values())
+
+    def create(self, account: StaffAccount) -> StaffAccount:
+        # Mimics the ID being assigned on INSERT by a real session/DB flush
+        # (`UUIDPKMixin.id`'s `default=uuid.uuid4` is a client-side default
+        # SQLAlchemy applies at flush time, not at object construction) --
+        # this fake never touches a real session, so it must assign one
+        # itself.
+        if account.id is None:
+            account.id = uuid.uuid4()
+        self._by_id[account.id] = account
+        self._by_email[account.email] = account
+        return account
+
 
 ADMIN_PASSWORD = "S0meStrongPass!"
 VIEWER_PASSWORD = "AnotherPass!23"
@@ -167,3 +182,66 @@ def test_admin_only_endpoint_denies_missing_token_with_401_not_403(client: TestC
     403 (unauthorized) — require_role always resolves get_current_staff first."""
     response = client.get("/api/v1/auth/admin-only-example")
     assert response.status_code == 401
+
+
+def _empty_client() -> TestClient:
+    app = create_app()
+    fake_repo = FakeStaffAccountRepository([])
+    app.dependency_overrides[get_staff_account_repository] = lambda: fake_repo
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_setup_status_reports_needs_setup_true_with_no_admin() -> None:
+    # `accounts` fixture only seeds an ADMIN + a VIEWER, so this branch is
+    # exercised via an empty-repo client instead.
+    empty_client = _empty_client()
+
+    response = empty_client.get("/api/v1/auth/setup-status")
+    assert response.status_code == 200
+    assert response.json() == {"needs_setup": True}
+
+
+def test_setup_status_reports_needs_setup_false_once_an_admin_exists(client: TestClient) -> None:
+    response = client.get("/api/v1/auth/setup-status")
+    assert response.status_code == 200
+    assert response.json() == {"needs_setup": False}
+
+
+def test_bootstrap_admin_succeeds_and_returns_tokens_when_no_admin_exists() -> None:
+    empty_client = _empty_client()
+
+    response = empty_client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={"email": "first-admin@example.com", "password": "S0meStrongPass!"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["access_token"]
+    assert body["refresh_token"]
+
+    # The new access token really identifies an ADMIN now.
+    me_response = empty_client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"}
+    )
+    assert me_response.status_code == 200
+    assert me_response.json()["role"] == "ADMIN"
+    assert me_response.json()["email"] == "first-admin@example.com"
+
+
+def test_bootstrap_admin_fails_once_an_admin_already_exists(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={"email": "second-admin@example.com", "password": "S0meStrongPass!"},
+    )
+    assert response.status_code == 409
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+def test_bootstrap_admin_rejects_a_short_password() -> None:
+    empty_client = _empty_client()
+
+    response = empty_client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={"email": "first-admin@example.com", "password": "short"},
+    )
+    assert response.status_code == 422

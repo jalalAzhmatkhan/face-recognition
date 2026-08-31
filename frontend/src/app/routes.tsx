@@ -2,6 +2,7 @@ import type { RouteObject } from 'react-router-dom'
 import AppLayout from './AppLayout'
 import AuthGuard from './AuthGuard'
 import LoginPage from '../pages/LoginPage'
+import SetupAdminPage from '../pages/SetupAdminPage'
 import DashboardPage from '../pages/DashboardPage'
 import UsersPage from '../pages/UsersPage'
 import UserDetailPage from '../pages/UserDetailPage'
@@ -25,6 +26,9 @@ import NotFoundPage from '../pages/NotFoundPage'
  */
 export const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
+  // First-run "create ADMIN account" screen -- same reasoning as /login for
+  // living outside AuthGuard (see SetupAdminPage.tsx docstring).
+  { path: '/setup', element: <SetupAdminPage /> },
   // S-30 capture wizard is full-screen outside the app shell (screen-plan),
   // same as /login — sidebar/nav would only distract during capture.
   { path: '/enrollments/:id/capture', element: <EnrollmentCapturePage /> },

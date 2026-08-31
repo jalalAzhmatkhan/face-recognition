@@ -26,6 +26,17 @@ class FakeStaffAccountRepository:
     def get_by_email(self, email: str) -> StaffAccount | None:
         return self._by_email.get(email)
 
+    def exists_by_role(self, role: StaffRole) -> bool:
+        return any(a.role == role for a in self._by_id.values())
+
+    def create(self, account: StaffAccount) -> StaffAccount:
+        # See matching comment in tests/test_auth_router.py's fake.
+        if account.id is None:
+            account.id = uuid.uuid4()
+        self._by_id[account.id] = account
+        self._by_email[account.email] = account
+        return account
+
 
 def _settings() -> Settings:
     return Settings(jwt_secret_key="unit-test-secret")
@@ -125,3 +136,44 @@ def test_refresh_access_token_rejects_when_account_no_longer_exists() -> None:
 
     with pytest.raises(auth_service.InvalidRefreshTokenError):
         auth_service.refresh_access_token(repo, refresh_token=refresh_token, settings=settings)
+
+
+def test_needs_admin_bootstrap_true_with_no_accounts() -> None:
+    repo = FakeStaffAccountRepository([])
+    assert auth_service.needs_admin_bootstrap(repo) is True
+
+
+def test_needs_admin_bootstrap_false_once_an_admin_exists() -> None:
+    repo = FakeStaffAccountRepository([_account()])
+    assert auth_service.needs_admin_bootstrap(repo) is False
+
+
+def test_needs_admin_bootstrap_true_with_only_non_admin_accounts() -> None:
+    viewer = StaffAccount(
+        id=uuid.uuid4(),
+        email="viewer@example.com",
+        role=StaffRole.VIEWER,
+        password_hash=hash_password("whatever123"),
+    )
+    repo = FakeStaffAccountRepository([viewer])
+    assert auth_service.needs_admin_bootstrap(repo) is True
+
+
+def test_bootstrap_admin_creates_an_admin_account_when_none_exists() -> None:
+    repo = FakeStaffAccountRepository([])
+
+    account = auth_service.bootstrap_admin(
+        repo, email="first-admin@example.com", password="S0meStrongPass!"
+    )
+    assert account.role == StaffRole.ADMIN
+    assert account.email == "first-admin@example.com"
+    assert repo.get_by_email("first-admin@example.com") is account
+
+
+def test_bootstrap_admin_rejects_when_an_admin_already_exists() -> None:
+    repo = FakeStaffAccountRepository([_account()])
+
+    with pytest.raises(auth_service.AdminAlreadyExistsError):
+        auth_service.bootstrap_admin(
+            repo, email="second-admin@example.com", password="S0meStrongPass!"
+        )

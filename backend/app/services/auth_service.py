@@ -15,14 +15,21 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    hash_password,
     verify_password,
 )
+from app.models.enums import StaffRole
 from app.models.staff_account import StaffAccount
 
 
 class StaffAccountReader(Protocol):
     def get(self, staff_id: uuid.UUID) -> StaffAccount | None: ...
     def get_by_email(self, email: str) -> StaffAccount | None: ...
+
+
+class StaffAccountBootstrapper(Protocol):
+    def exists_by_role(self, role: StaffRole) -> bool: ...
+    def create(self, account: StaffAccount) -> StaffAccount: ...
 
 
 class InvalidCredentialsError(Exception):
@@ -33,6 +40,11 @@ class InvalidCredentialsError(Exception):
 class InvalidRefreshTokenError(Exception):
     """Refresh token missing/expired/invalid, or points at a staff account
     that no longer exists."""
+
+
+class AdminAlreadyExistsError(Exception):
+    """`bootstrap_admin` is a one-time-only operation — raised when at least
+    one ADMIN account already exists."""
 
 
 def authenticate(
@@ -99,6 +111,35 @@ def refresh_access_token(
         staff_id=account.id, role=account.role.value, settings=settings
     )
     return access_token, expires_in
+
+
+def needs_admin_bootstrap(repo: StaffAccountBootstrapper) -> bool:
+    """True while zero ADMIN accounts exist anywhere -- the only time the
+    first-run bootstrap screen/endpoint should be usable."""
+    return not repo.exists_by_role(StaffRole.ADMIN)
+
+
+def bootstrap_admin(
+    repo: StaffAccountBootstrapper, *, email: str, password: str
+) -> StaffAccount:
+    """Create the very first ADMIN account. Raises `AdminAlreadyExistsError`
+    if one already exists -- this is intentionally NOT a general-purpose
+    "create staff account" function (no such HTTP endpoint exists yet, see
+    `app/cli.py::create_admin` for the CLI equivalent used by seed/dev
+    scripts); it exists solely to unblock a freshly-deployed instance with
+    no staff accounts at all.
+
+    Known limitation: the exists-then-create check is not atomic against a
+    concurrent call (no unique constraint on `role`, no row lock) -- a race
+    could create two ADMINs. Acceptable for a one-time, human-triggered,
+    first-run action; no such concurrency guard exists elsewhere in this
+    codebase either (see `StaffAccountRepository` docstring).
+    """
+    if repo.exists_by_role(StaffRole.ADMIN):
+        raise AdminAlreadyExistsError("An ADMIN account already exists.")
+
+    account = StaffAccount(email=email, role=StaffRole.ADMIN, password_hash=hash_password(password))
+    return repo.create(account)
 
 
 # A real argon2 hash of a random, never-used password — exists purely so
