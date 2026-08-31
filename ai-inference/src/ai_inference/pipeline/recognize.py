@@ -1,14 +1,16 @@
 """`/recognize` pipeline: decode -> detect -> liveness -> align -> embed ->
 ANN gallery search -> threshold/margin decision -> temporal voting (IN-03,
 FR-INF-01/02/03; liveness/PAD landed in IN-04, closing gap 2/5 below).
+Per-stage Prometheus latency histograms (`ai_inference.metrics`) and the
+`decisions_total` counter are recorded here too (IN-05, NFR-PRF-01/02).
 
 **Deliberate gaps, NOT implemented here** (see the IN-03 task brief for the
 tracking tickets):
 
-1. **IN-02 (device auth)**: `POST /recognize` has NO device authentication.
-   The router (`ai_inference.main`) documents this at the endpoint
-   definition; this module has no auth concept at all. MUST be closed
-   before production.
+1. ~~IN-02 (device auth)~~ **CLOSED (IN-02)**: `POST /recognize` requires a
+   device credential via `ai_inference.auth_dependency.get_current_device_id`
+   (wired at the router in `ai_inference.main`, not in this module -- this
+   module still has no auth concept of its own, by design).
 2. ~~IN-04 (real liveness/anti-spoofing)~~ **CLOSED (IN-04)**: every frame
    is now scored by `ai_training.liveness.detector.LivenessDetector`
    (default real backend: `MiniFASNetLivenessDetector`, an ensemble of two
@@ -42,6 +44,8 @@ import base64
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from ai_inference.metrics import decision_latency_seconds, decisions_total, stage_latency_seconds
 
 if TYPE_CHECKING:
     from ai_inference.config import Settings
@@ -261,8 +265,11 @@ def run_recognition(
     """
     from ai_inference import gallery
 
+    stage_start = time.perf_counter()
     production_version = gallery.get_current_production_model_version(cursor)
+    stage_latency_seconds.labels(stage="overhead").observe(time.perf_counter() - stage_start)
     if production_version is None:
+        decisions_total.labels(decision="UNKNOWN").inc()
         return RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0), "", []
 
     from ai_training.embedding.alignment import align_face
@@ -271,11 +278,14 @@ def run_recognition(
     candidates: list[FrameCandidate] = []
     liveness_scores: list[float] = []
     for frame_b64 in frames_base64:
+        stage_start = time.perf_counter()
         frame_bgr = _decode_frame_bgr(frame_b64)
         if frame_bgr is None:
+            stage_latency_seconds.labels(stage="detect").observe(time.perf_counter() - stage_start)
             continue  # malformed frame: skip, not a hard failure (step 1)
 
         detection = detect_face_and_landmarks(frame_bgr)
+        stage_latency_seconds.labels(stage="detect").observe(time.perf_counter() - stage_start)
         if detection is None:
             continue  # no face in this frame: skip, not a hard failure (step 2)
 
@@ -283,12 +293,14 @@ def run_recognition(
         # spoof-suspect frame contributes a spoof vote but is NEVER passed
         # to gallery search -- no identity match from a suspected spoof
         # frame may contribute to a GRANTED decision (NFR-SEC-06).
+        stage_start = time.perf_counter()
         if liveness_detector is not None:
             live_score = liveness_detector.score(
                 frame_bgr, detection.bbox_xy, detection.bbox_wh
             )
         else:
             live_score = _LIVENESS_FALLBACK_SCORE
+        stage_latency_seconds.labels(stage="liveness").observe(time.perf_counter() - stage_start)
         liveness_scores.append(live_score)
 
         if live_score < settings.liveness_threshold:
@@ -300,22 +312,30 @@ def run_recognition(
             )
             continue  # do NOT reach gallery search for this frame
 
+        stage_start = time.perf_counter()
         aligned = align_face(frame_bgr, detection.alignment_landmarks_5pt())
         vector = embedder.embed(aligned)
+        stage_latency_seconds.labels(stage="embed").observe(time.perf_counter() - stage_start)
+
+        stage_start = time.perf_counter()
         rows = gallery.search_top_k(
             cursor,
             embedding=vector,
             model_version=production_version,
             k=settings.ann_top_k,
         )
+        stage_latency_seconds.labels(stage="search").observe(time.perf_counter() - stage_start)
         candidates.append(_collapse_to_top_candidates(rows))
 
+    stage_start = time.perf_counter()
     result = decide_from_scores(
         candidates,
         threshold=settings.similarity_threshold,
         margin=settings.margin_threshold,
         min_frames_for_grant=settings.min_frames_for_grant,
     )
+    stage_latency_seconds.labels(stage="overhead").observe(time.perf_counter() - stage_start)
+    decisions_total.labels(decision=result.decision).inc()
     return result, production_version, liveness_scores
 
 
@@ -349,7 +369,9 @@ def run_recognition_timed(
         frames_base64, settings, embedder=embedder, cursor=cursor,
         liveness_detector=liveness_detector,
     )
-    latency_ms = int((time.perf_counter() - start) * 1000)
+    elapsed_seconds = time.perf_counter() - start
+    decision_latency_seconds.observe(elapsed_seconds)
+    latency_ms = int(elapsed_seconds * 1000)
     reported_liveness_score = min(liveness_scores) if liveness_scores else _LIVENESS_FALLBACK_SCORE
     return {
         "decision": result.decision,
