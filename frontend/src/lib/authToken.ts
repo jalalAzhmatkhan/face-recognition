@@ -229,3 +229,69 @@ export async function login({ email, password }: LoginCredentials): Promise<void
   const data = (await response.json()) as TokenPair
   setTokens(data)
 }
+
+export interface SetupStatus {
+  needs_setup: boolean
+}
+
+/** `GET /auth/setup-status` — unauthenticated, used by `SetupAdminPage` to
+ * decide whether the first-run "create ADMIN account" screen should even be
+ * shown (only while zero ADMIN accounts exist anywhere). */
+export async function getSetupStatus(): Promise<SetupStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/auth/setup-status`, {
+    headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) {
+    throw new Error(`GET /auth/setup-status failed with ${response.status}`)
+  }
+  return (await response.json()) as SetupStatus
+}
+
+/** Thrown by `bootstrapAdmin()`. */
+export class BootstrapAdminError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'BootstrapAdminError'
+    this.status = status
+  }
+}
+
+/** `POST /auth/bootstrap-admin` — creates the very first ADMIN account.
+ * Fails with 409 once any ADMIN already exists (self-disabling by design,
+ * see `backend/app/services/auth_service.py::bootstrap_admin`). On success,
+ * stores both tokens via `setTokens` exactly like `login()` does, so the
+ * caller can navigate straight into the console. */
+export async function bootstrapAdmin({ email, password }: LoginCredentials): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/auth/bootstrap-admin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+  } catch {
+    throw new BootstrapAdminError('Tidak dapat terhubung ke server. Coba lagi.', 0)
+  }
+
+  if (!response.ok) {
+    let detail: string | undefined
+    try {
+      const body = (await response.json()) as { detail?: string }
+      detail = body.detail
+    } catch {
+      /* no JSON body */
+    }
+    const message =
+      response.status === 409
+        ? (detail ?? 'Akun ADMIN sudah pernah dibuat sebelumnya.')
+        : response.status === 422
+          ? (detail ?? 'Data yang dikirim tidak valid — password minimal 8 karakter.')
+          : (detail ?? 'Gagal membuat akun ADMIN, silakan coba lagi.')
+    throw new BootstrapAdminError(message, response.status)
+  }
+
+  const data = (await response.json()) as TokenPair
+  setTokens(data)
+}
