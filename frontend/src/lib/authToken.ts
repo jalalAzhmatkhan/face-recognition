@@ -230,6 +230,72 @@ export async function login({ email, password }: LoginCredentials): Promise<void
   setTokens(data)
 }
 
+/** Thrown by `forgotPassword()`/`resetPassword()`. */
+export class PasswordResetError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'PasswordResetError'
+    this.status = status
+  }
+}
+
+async function postPasswordResetRequest(
+  path: string,
+  body: Record<string, string>,
+  fallbackMessage: string,
+): Promise<{ message: string }> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new PasswordResetError('Tidak dapat terhubung ke server. Coba lagi.', 0)
+  }
+
+  if (!response.ok) {
+    let detail: string | undefined
+    try {
+      const problemBody = (await response.json()) as { detail?: string }
+      detail = problemBody.detail
+    } catch {
+      /* no JSON body */
+    }
+    throw new PasswordResetError(detail ?? fallbackMessage, response.status)
+  }
+
+  return (await response.json()) as { message: string }
+}
+
+/** `POST /auth/forgot-password` — always succeeds from the caller's
+ * perspective (NFR-SEC-04: identical response whether or not the email
+ * matched an account). Never throws for an unknown email; only a genuine
+ * network/server failure throws. */
+export async function forgotPassword(email: string): Promise<{ message: string }> {
+  return postPasswordResetRequest(
+    '/api/v1/auth/forgot-password',
+    { email },
+    'Gagal mengirim tautan reset password, silakan coba lagi.',
+  )
+}
+
+/** `POST /auth/reset-password` — throws `PasswordResetError` (400) when the
+ * token is malformed/unknown/expired/already used. */
+export async function resetPassword(
+  token: string,
+  newPassword: string,
+): Promise<{ message: string }> {
+  return postPasswordResetRequest(
+    '/api/v1/auth/reset-password',
+    { token, new_password: newPassword },
+    'Gagal mereset password, silakan coba lagi.',
+  )
+}
+
 export interface SetupStatus {
   needs_setup: boolean
 }

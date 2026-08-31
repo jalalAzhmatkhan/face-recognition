@@ -6,6 +6,7 @@ session — see backend/tests/test_auth_service.py.
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from app.core.config import Settings, get_settings
@@ -15,11 +16,17 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    generate_password_reset_token,
     hash_password,
+    hash_secret,
+    parse_password_reset_token,
     verify_password,
+    verify_secret,
 )
 from app.models.enums import StaffRole
+from app.models.password_reset_token import PasswordResetToken
 from app.models.staff_account import StaffAccount
+from app.services.email_service import send_password_reset_email
 
 
 class StaffAccountReader(Protocol):
@@ -30,6 +37,18 @@ class StaffAccountReader(Protocol):
 class StaffAccountBootstrapper(Protocol):
     def exists_by_role(self, role: StaffRole) -> bool: ...
     def create(self, account: StaffAccount) -> StaffAccount: ...
+
+
+class PasswordResetStaffRepo(Protocol):
+    def get(self, staff_id: uuid.UUID) -> StaffAccount | None: ...
+    def get_by_email(self, email: str) -> StaffAccount | None: ...
+    def update_password_hash(self, account: StaffAccount, password_hash: str) -> None: ...
+
+
+class PasswordResetTokenStore(Protocol):
+    def get(self, token_id: uuid.UUID) -> PasswordResetToken | None: ...
+    def create(self, token: PasswordResetToken) -> PasswordResetToken: ...
+    def mark_used(self, token: PasswordResetToken) -> None: ...
 
 
 class InvalidCredentialsError(Exception):
@@ -45,6 +64,11 @@ class InvalidRefreshTokenError(Exception):
 class AdminAlreadyExistsError(Exception):
     """`bootstrap_admin` is a one-time-only operation — raised when at least
     one ADMIN account already exists."""
+
+
+class InvalidResetTokenError(Exception):
+    """Reset token missing/malformed/expired/already-used/unknown — all
+    treated identically (NFR-SEC-04: no info leak about which)."""
 
 
 def authenticate(
@@ -140,6 +164,73 @@ def bootstrap_admin(
 
     account = StaffAccount(email=email, role=StaffRole.ADMIN, password_hash=hash_password(password))
     return repo.create(account)
+
+
+def request_password_reset(
+    staff_repo: PasswordResetStaffRepo,
+    token_repo: PasswordResetTokenStore,
+    *,
+    email: str,
+    settings: Settings | None = None,
+) -> None:
+    """Always succeeds from the caller's perspective (NFR-SEC-04: the
+    `/auth/forgot-password` response must not reveal whether `email`
+    matched an account) — silently does nothing when there's no match.
+    Mints a single-use token and emails a reset link otherwise.
+    """
+    settings = settings or get_settings()
+    account = staff_repo.get_by_email(email)
+    if account is None:
+        return
+
+    token_id, plaintext_secret, plaintext_token = generate_password_reset_token()
+    expires_at = datetime.now(UTC) + timedelta(
+        minutes=settings.password_reset_token_expire_minutes
+    )
+    token_repo.create(
+        PasswordResetToken(
+            id=token_id,
+            staff_id=account.id,
+            token_hash=hash_secret(plaintext_secret),
+            expires_at=expires_at,
+        )
+    )
+    reset_url = f"{settings.frontend_base_url}/reset-password?token={plaintext_token}"
+    send_password_reset_email(to_address=account.email, reset_url=reset_url, settings=settings)
+
+
+def reset_password(
+    staff_repo: PasswordResetStaffRepo,
+    token_repo: PasswordResetTokenStore,
+    *,
+    token: str,
+    new_password: str,
+) -> None:
+    """Validate a presented `<token_id>.<secret>` reset token and, if valid,
+    update the target account's password and consume the token. Raises
+    `InvalidResetTokenError` for anything malformed/unknown/expired/already
+    used/pointing at a missing account — deliberately the same exception
+    for all of these (NFR-SEC-04).
+    """
+    parsed = parse_password_reset_token(token)
+    if parsed is None:
+        raise InvalidResetTokenError("Malformed reset token")
+    token_id, secret = parsed
+
+    record = token_repo.get(token_id)
+    if record is None or record.used_at is not None:
+        raise InvalidResetTokenError("Invalid or already-used reset token")
+    if record.expires_at <= datetime.now(UTC):
+        raise InvalidResetTokenError("Reset token has expired")
+    if not verify_secret(secret, record.token_hash):
+        raise InvalidResetTokenError("Invalid reset token")
+
+    account = staff_repo.get(record.staff_id)
+    if account is None:
+        raise InvalidResetTokenError("Invalid reset token")
+
+    staff_repo.update_password_hash(account, hash_password(new_password))
+    token_repo.mark_used(record)
 
 
 # A real argon2 hash of a random, never-used password — exists purely so

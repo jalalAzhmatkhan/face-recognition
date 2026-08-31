@@ -3,6 +3,8 @@ import AppLayout from './AppLayout'
 import AuthGuard from './AuthGuard'
 import LoginPage from '../pages/LoginPage'
 import SetupAdminPage from '../pages/SetupAdminPage'
+import ForgotPasswordPage from '../pages/ForgotPasswordPage'
+import ResetPasswordPage from '../pages/ResetPasswordPage'
 import DashboardPage from '../pages/DashboardPage'
 import UsersPage from '../pages/UsersPage'
 import UserDetailPage from '../pages/UserDetailPage'
@@ -29,6 +31,10 @@ export const routes: RouteObject[] = [
   // First-run "create ADMIN account" screen -- same reasoning as /login for
   // living outside AuthGuard (see SetupAdminPage.tsx docstring).
   { path: '/setup', element: <SetupAdminPage /> },
+  // Forgot/reset password -- same reasoning as /login (must be reachable
+  // with no session at all).
+  { path: '/forgot-password', element: <ForgotPasswordPage /> },
+  { path: '/reset-password', element: <ResetPasswordPage /> },
   // S-30 capture wizard is full-screen outside the app shell (screen-plan),
   // same as /login — sidebar/nav would only distract during capture.
   { path: '/enrollments/:id/capture', element: <EnrollmentCapturePage /> },

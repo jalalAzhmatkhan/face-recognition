@@ -106,6 +106,40 @@ def parse_device_token(token: str) -> tuple[str, str] | None:
     return credential_id, secret
 
 
+def generate_password_reset_token() -> tuple[uuid.UUID, str, str]:
+    """Generate a new forgot-password token (BE-03 follow-up, NFR-SEC-04).
+
+    Same `<id>.<secret>` scheme as `generate_device_credential`, except the
+    id is a fresh UUID meant to double as the token row's own primary key
+    (`password_reset_tokens.id`) rather than a separate lookup column —
+    each token is single-use and minted fresh per request, so there is
+    nothing to "rotate" the way a device credential id needs to survive.
+
+    Returns `(token_id, plaintext_secret, plaintext_token)`; only
+    `hash_secret(plaintext_secret)` is ever persisted, and `plaintext_token`
+    is emailed to the account holder exactly once.
+    """
+    token_id = uuid.uuid4()
+    plaintext_secret = secrets.token_urlsafe(32)
+    plaintext_token = f"{token_id}.{plaintext_secret}"
+    return token_id, plaintext_secret, plaintext_token
+
+
+def parse_password_reset_token(token: str) -> tuple[uuid.UUID, str] | None:
+    """Split a presented reset token into `(token_id, secret)`.
+
+    Returns `None` (never raises) for anything malformed — callers must
+    treat that identically to "token not found" (NFR-SEC-04)."""
+    token_id_str, sep, secret = token.partition(".")
+    if not sep or not token_id_str or not secret:
+        return None
+    try:
+        token_id = uuid.UUID(token_id_str)
+    except ValueError:
+        return None
+    return token_id, secret
+
+
 def _encode(
     *,
     subject: str,

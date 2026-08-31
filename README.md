@@ -139,15 +139,15 @@ Semua service Python dimanage `uv`; frontend dengan `npm`.
 
 - [`uv`](https://docs.astral.sh/uv/) (Python package/venv manager)
 - Node.js ≥ 20 + `npm` (untuk `frontend/`)
-- Docker + Docker Compose (untuk infra dev: Postgres, Redis, MinIO, MLflow)
+- Docker + Docker Compose (untuk infra dev: Postgres, Redis, MinIO, MLflow, MailHog)
 - (Opsional, hanya untuk `ai-training` extra `ml`) GPU + CUDA bila memakai PyTorch — CPU tetap bisa jalan untuk pipeline QC (OpenCV + MediaPipe)
 
 ### 5.2 Menjalankan via Docker Compose
 
-**Opsi A — infra saja** (Postgres+pgvector, Redis, MinIO, MLflow), lalu jalankan service aplikasi manual (§5.3) untuk iterasi tercepat:
+**Opsi A — infra saja** (Postgres+pgvector, Redis, MinIO, MLflow, MailHog), lalu jalankan service aplikasi manual (§5.3) untuk iterasi tercepat:
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d postgres redis minio minio-init mlflow
+docker compose -f docker-compose.dev.yml up -d postgres redis minio minio-init mlflow mailhog
 ```
 
 Bucket `frac-media` otomatis dibuat oleh service `minio-init`. Kredensial default (**hanya untuk dev**, jangan dipakai di produksi) ada di `.env.example`.
@@ -177,7 +177,9 @@ docker compose -f docker-compose.dev.yml --profile app up -d \
 python3 scripts/device_simulator.py --device-id <uuid> --credential <credential_id>.<secret>
 ```
 
-Berjalan terus mengirim heartbeat tiap 30 detik (`--interval` bisa diubah, tapi jaga tetap di bawah 90 detik — ambang basi `Settings.device_heartbeat_stale_after_seconds`) sampai dihentikan (Ctrl+C), atau pakai `--once` untuk sekali kirim lalu keluar.
+Berjalan terus mengirim heartbeat tiap 30 detik (`--interval` bisa diubah, tapi jaga tetap di bawah 90 detik — ambang basi `Settings.device_heartbeat_stale_after_seconds`) sampai dihentikan (Ctrl+C), atau pakai `--once` untuk sekali kirim lalu keluar. Sejak FE ini juga tersedia dari browser: menu Devices → "⋮" → **Aktivasi (Simulasi Heartbeat)** (ADMIN only).
+
+**Setup akun ADMIN pertama & lupa password.** Selain `python -m app.cli create_admin` (§5.3), first-run juga bisa lewat browser: buka **http://localhost:5173/setup** selama belum ada akun ADMIN sama sekali (halaman ini otomatis nonaktif/redirect ke `/login` begitu ≥1 akun ADMIN ada). Lupa password memakai SMTP asli yang disimulasikan lewat **MailHog** (dev-only fake SMTP, tidak benar-benar mengirim keluar) — klik "Lupa password?" di halaman login, lalu buka **http://localhost:8025** untuk melihat email tautan reset yang "terkirim".
 
 ### 5.3 Menjalankan Manual per Service
 

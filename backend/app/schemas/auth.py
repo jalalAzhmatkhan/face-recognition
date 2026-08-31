@@ -28,6 +28,26 @@ class BootstrapAdminRequest(BaseModel):
     password: str = Field(min_length=8)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Deliberately the SAME message regardless of whether `email` matched
+    an account (NFR-SEC-04) — see `auth_service.request_password_reset`."""
+
+    message: str = "Jika email terdaftar, tautan reset password telah dikirim."
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str = "Password berhasil direset. Silakan login dengan password baru."
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
