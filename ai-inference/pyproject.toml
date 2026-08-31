@@ -10,6 +10,11 @@ dependencies = [
     "prometheus-client>=0.20",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    # Device bearer-token auth for /recognize (IN-02, NFR-SEC-04): pure-Python
+    # Argon2id crypto, not ML -- lives in base deps (not the `ml` extra) so
+    # device auth works and is unit-testable without the heavy extra
+    # installed. See ai_inference/device_auth.py module docstring.
+    "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]
@@ -70,3 +75,12 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's `Depends(...)` as a parameter default is the framework's own
+# idiom (evaluated once per-request by Starlette's DI, not at import time) --
+# B008 exists for the general "don't call functions in defaults" footgun and
+# doesn't special-case this, so silence it where Depends is used (same
+# per-file-ignore backend/pyproject.toml uses for its own dependencies/routers).
+"src/ai_inference/auth_dependency.py" = ["B008"]
+"src/ai_inference/main.py" = ["B008"]
