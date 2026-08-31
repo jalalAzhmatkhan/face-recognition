@@ -61,7 +61,8 @@
   color: var(--text-secondary);
 }
 
-.live-monitoring-filterbar__field select {
+.live-monitoring-filterbar__field select,
+.live-monitoring-filterbar__field input {
   min-height: var(--touch-target);
   padding: 0 var(--space-3);
   border: var(--border-w) solid var(--border-strong);
