@@ -72,3 +72,19 @@ async def get_current_device_id(
                 ) from exc
     finally:
         conn.close()
+
+
+async def get_current_device_bearer_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_device_bearer_scheme),
+) -> str | None:
+    """Raw bearer token string (`<credential_id>.<secret>`), for call sites
+    that need to FORWARD the same credential elsewhere rather than resolve
+    it to a device id (IN-06: `POST /access-events` is device-authenticated
+    by backend too, with no separate service-to-service auth path, so
+    ai-inference must re-present the same token the caller used for
+    `/recognize`). Does not re-verify anything -- `get_current_device_id` is
+    what actually authenticates the request; this just exposes the raw
+    string already extracted by the same `HTTPBearer` scheme. Returns `None`
+    only if no bearer token was supplied at all, which never happens on a
+    request that also passed `get_current_device_id`."""
+    return credentials.credentials if credentials else None

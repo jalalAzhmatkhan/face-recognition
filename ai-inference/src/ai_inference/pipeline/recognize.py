@@ -18,8 +18,13 @@ tracking tickets):
    procedure/reinterpretation of the upstream score). A frame whose score
    falls below `settings.liveness_threshold` is flagged spoof-suspect and
    is EXCLUDED from identity voting entirely (see `decide_from_scores`).
-3. **IN-06 (event emission)**: this module never calls backend's
-   `POST /access-events`. It only computes and returns a decision.
+3. ~~IN-06 (event emission)~~ **CLOSED (IN-06)**: this module itself still
+   never calls backend's `POST /access-events` -- it only computes and
+   returns a decision, by design (no HTTP/backend concern belongs in the
+   pure pipeline). The emission itself is dispatched by
+   `ai_inference.main`'s `/recognize` handler (fire-and-forget via
+   `BackgroundTasks`, see `ai_inference.events`), using this function's
+   returned `RecognitionResult`/`model_version`/`liveness_scores`.
 4. **IN-07 (atomic model+gallery switch)**: the PRODUCTION model version is
    read fresh from `models` on every single request
    (`gallery.get_current_production_model_version`) -- no caching, no

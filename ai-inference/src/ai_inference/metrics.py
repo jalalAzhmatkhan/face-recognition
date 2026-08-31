@@ -74,3 +74,14 @@ model_loads_total = Counter(
     labelnames=("kind", "result"),
     registry=registry,
 )
+
+access_events_total = Counter(
+    "inference_access_events_total",
+    "Outcomes of emitting an access event to backend's POST /access-events "
+    "(IN-06), by result: sent (delivered on the first try) | buffered "
+    "(first try failed, queued in memory) | dropped (buffer was full, "
+    "oldest evicted to make room) | retried_ok (delivered from the buffer "
+    "on a later attempt) | retry_failed (buffer flush attempt still failing).",
+    labelnames=("result",),
+    registry=registry,
+)

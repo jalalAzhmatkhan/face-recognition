@@ -15,6 +15,11 @@ dependencies = [
     # device auth works and is unit-testable without the heavy extra
     # installed. See ai_inference/device_auth.py module docstring.
     "argon2-cffi>=23.1",
+    # Outbound HTTP client for reporting access events to backend's own
+    # `POST /access-events` (IN-06, TSD SS1.3) -- lives in base deps (not the
+    # `ml` extra) since it's plain networking, not ML, and event emission
+    # must work even in a `stub`-loader dev/CI setup. See ai_inference/events.py.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -49,7 +54,9 @@ otel = [
 [dependency-groups]
 dev = [
     "pytest>=8.2",
-    "httpx>=0.27",
+    # httpx itself is now a base runtime dep (IN-06, see [project.dependencies]
+    # above) -- kept listed here implicitly via that; this group only needs
+    # pytest/ruff plus whatever FastAPI's TestClient pulls in transitively.
     "ruff>=0.5",
 ]
 
