@@ -17,6 +17,7 @@ import {
   canRotateDeviceCredential,
 } from '../features/device-management/roleGating'
 import DeviceStatusBadge from '../features/device-management/DeviceStatusBadge'
+import DeviceActionsMenu from '../features/device-management/DeviceActionsMenu'
 import CredentialBootstrapDialog from '../features/device-management/CredentialBootstrapDialog'
 import { DEVICE_STATUSES } from '../features/device-management/types'
 import type { DeviceResponse, DeviceStatus, DeviceWithCredential } from '../features/device-management/types'
@@ -490,119 +491,24 @@ export default function DevicesPage() {
                               </button>
                             </>
                           ) : (
-                            <>
-                              {canEdit && (
-                                <button
-                                  type="button"
-                                  disabled={anyMutationPending}
-                                  onClick={() => startEdit(device)}
-                                  style={{
-                                    border: 'var(--border-w) solid var(--border-strong)',
-                                    background: 'var(--bg-surface)',
-                                  }}
-                                >
-                                  Edit
-                                </button>
-                              )}
-
-                              {canRotate && rotateTargetId !== device.id && (
-                                <button
-                                  type="button"
-                                  disabled={anyMutationPending}
-                                  onClick={() => setRotateTargetId(device.id)}
-                                  style={{
-                                    border: 'var(--border-w) solid var(--warning)',
-                                    background: 'var(--warning-subtle-bg)',
-                                    color: 'var(--warning)',
-                                  }}
-                                >
-                                  Rotasi Kredensial
-                                </button>
-                              )}
-
-                              {rotateTargetId === device.id && (
-                                <span
-                                  style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}
-                                >
-                                  <span style={{ color: 'var(--warning)', font: 'var(--text-caption)' }}>
-                                    Kredensial lama akan langsung invalid — device fisik harus
-                                    diupdate manual dengan kredensial baru. Lanjutkan?
-                                  </span>
-                                  <button
-                                    type="button"
-                                    disabled={anyMutationPending}
-                                    onClick={() => rotateMutation.mutate(device.id)}
-                                    style={{
-                                      border: 'var(--border-w) solid var(--warning)',
-                                      background: 'var(--warning)',
-                                      color: 'var(--text-inverse)',
-                                    }}
-                                  >
-                                    {rotateMutation.isPending ? 'Memproses...' : 'Ya, Rotasi'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setRotateTargetId(null)}
-                                    style={{
-                                      border: 'var(--border-w) solid var(--border-strong)',
-                                      background: 'var(--bg-surface)',
-                                    }}
-                                  >
-                                    Batal
-                                  </button>
-                                </span>
-                              )}
-
-                              {canDisable &&
-                                device.status !== 'DISABLED' &&
-                                disableTargetId !== device.id && (
-                                  <button
-                                    type="button"
-                                    disabled={anyMutationPending}
-                                    onClick={() => setDisableTargetId(device.id)}
-                                    style={{
-                                      border: 'var(--border-w) solid var(--danger)',
-                                      background: 'var(--danger-subtle-bg)',
-                                      color: 'var(--danger)',
-                                    }}
-                                  >
-                                    Nonaktifkan
-                                  </button>
-                                )}
-
-                              {disableTargetId === device.id && (
-                                <span
-                                  style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}
-                                >
-                                  <span style={{ color: 'var(--danger)', font: 'var(--text-caption)' }}>
-                                    Device tidak akan bisa lagi mengirim heartbeat/access-event
-                                    valid (bukan hapus permanen). Yakin?
-                                  </span>
-                                  <button
-                                    type="button"
-                                    disabled={anyMutationPending}
-                                    onClick={() => disableMutation.mutate(device.id)}
-                                    style={{
-                                      border: 'var(--border-w) solid var(--danger)',
-                                      background: 'var(--danger)',
-                                      color: 'var(--text-inverse)',
-                                    }}
-                                  >
-                                    {disableMutation.isPending ? 'Memproses...' : 'Ya, Nonaktifkan'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setDisableTargetId(null)}
-                                    style={{
-                                      border: 'var(--border-w) solid var(--border-strong)',
-                                      background: 'var(--bg-surface)',
-                                    }}
-                                  >
-                                    Batal
-                                  </button>
-                                </span>
-                              )}
-                            </>
+                            <DeviceActionsMenu
+                              device={device}
+                              canEdit={canEdit}
+                              canRotate={canRotate}
+                              canDisable={canDisable}
+                              anyMutationPending={anyMutationPending}
+                              isRotateTarget={rotateTargetId === device.id}
+                              isRotatePending={rotateMutation.isPending}
+                              isDisableTarget={disableTargetId === device.id}
+                              isDisablePending={disableMutation.isPending}
+                              onEdit={() => startEdit(device)}
+                              onRequestRotate={() => setRotateTargetId(device.id)}
+                              onCancelRotate={() => setRotateTargetId(null)}
+                              onConfirmRotate={() => rotateMutation.mutate(device.id)}
+                              onRequestDisable={() => setDisableTargetId(device.id)}
+                              onCancelDisable={() => setDisableTargetId(null)}
+                              onConfirmDisable={() => disableMutation.mutate(device.id)}
+                            />
                           )}
                         </div>
                       </td>
