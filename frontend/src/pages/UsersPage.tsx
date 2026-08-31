@@ -105,9 +105,8 @@ export default function UsersPage() {
   return (
     <>
       <PagePlaceholder
-        screenId="S-10"
         title="Users"
-        description="Daftar user terotorisasi: status ACTIVE/SUSPENDED/OFFBOARDED tidak pernah diberi akses biometrik (FR-USR-01)."
+        description="Daftar user terotorisasi: status ACTIVE/SUSPENDED/OFFBOARDED tidak pernah diberi akses biometrik."
       />
 
       {canCreate && (

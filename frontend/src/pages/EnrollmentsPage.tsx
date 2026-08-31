@@ -124,7 +124,6 @@ export default function EnrollmentsPage() {
   return (
     <>
       <PagePlaceholder
-        screenId="S-30/S-31"
         title="Enrollment"
         description="Daftar sesi enrollment: filter, pagination, dan aksi berbasis role."
       />
@@ -413,7 +412,7 @@ export default function EnrollmentsPage() {
         <h2 style={{ margin: 0 }}>Mulai Capture Enrollment</h2>
         <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
           Masukkan ID sesi enrollment untuk membuka wizard capture 360°
-          (FE-04) langsung, tanpa melalui detail sesi.
+          langsung, tanpa melalui detail sesi.
         </p>
         <form
           onSubmit={(event) => {

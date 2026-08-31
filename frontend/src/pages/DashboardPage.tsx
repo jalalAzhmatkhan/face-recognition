@@ -80,7 +80,6 @@ export default function DashboardPage() {
   return (
     <div className="dashboard-page">
       <header className="dashboard-page__header">
-        <p className="mono dashboard-page__screen-id">S-02</p>
         <h1>Dashboard</h1>
       </header>
 

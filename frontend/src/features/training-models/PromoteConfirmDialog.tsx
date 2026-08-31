@@ -51,9 +51,8 @@ export default function PromoteConfirmDialog({
               : 'Belum ada model produksi sebelumnya — ini adalah promosi pertama.'}
           </li>
           <li className="training-models-dialog__notes-warning">
-            Re-embedding gallery (blue/green switch) BELUM otomatis dijalankan setelah promosi ini
-            (TR-08 belum diimplementasikan) — perlu tindakan manual terpisah agar gallery memakai
-            model baru.
+            Re-embedding gallery (blue/green switch) BELUM otomatis dijalankan setelah promosi
+            ini — perlu tindakan manual terpisah agar gallery memakai model baru.
           </li>
         </ul>
 

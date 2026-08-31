@@ -323,7 +323,7 @@ export default function EnrollmentCapturePage() {
     <section className="capture-page">
       <canvas ref={canvasRef} style={{ display: 'none' }} />
       <header className="capture-page__header">
-        <p className="mono capture-page__eyebrow">S-30 · sesi {enrollmentId}</p>
+        <p className="mono capture-page__eyebrow">Sesi {enrollmentId}</p>
         <h1>Enrollment — Capture 360°</h1>
       </header>
 

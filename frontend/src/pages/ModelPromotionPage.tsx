@@ -83,9 +83,8 @@ export default function ModelPromotionPage() {
     return (
       <>
         <PagePlaceholder
-          screenId="S-52"
           title="Promotion Review"
-          description="Review dan promosi model kandidat ke produksi (FE-09)."
+          description="Review dan promosi model kandidat ke produksi."
         />
         <div className="training-models-denied" role="alert">
           <h2 className="training-models-denied__title">Tidak Ada Akses</h2>
@@ -105,7 +104,6 @@ export default function ModelPromotionPage() {
   return (
     <div className="training-models-page">
       <header className="training-models-page__header">
-        <p className="mono training-models-page__screen-id">S-52</p>
         <h1>Promotion Review</h1>
         <Link to="/models">&larr; Kembali ke Models &amp; Training</Link>
       </header>
@@ -127,8 +125,8 @@ export default function ModelPromotionPage() {
         <div className="training-models-success-banner" role="status">
           <strong>Promosi berhasil.</strong> Versi {version} sekarang PRODUCTION.
           <p style={{ margin: '4px 0 0' }}>
-            Catatan: re-embedding gallery belum otomatis — TR-08 belum diimplementasikan, perlu
-            tindakan manual terpisah agar gallery memakai model baru (FR-TRN-06).
+            Catatan: re-embedding gallery belum otomatis — perlu tindakan manual terpisah agar
+            gallery memakai model baru.
           </p>
         </div>
       )}
@@ -238,7 +236,7 @@ export default function ModelPromotionPage() {
       {dismissed && !promoteSuccess && (
         <p className="training-models-section__hint">
           Kandidat {version} disembunyikan untuk sesi ini saja — TIDAK mengubah status apapun di
-          server (backend tidak punya stage REJECTED, lihat catatan gap FE-09).{' '}
+          server.{' '}
           <button type="button" onClick={() => setDismissed(false)}>
             Tampilkan lagi
           </button>

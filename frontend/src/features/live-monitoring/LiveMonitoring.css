@@ -13,14 +13,6 @@
   gap: var(--space-1);
 }
 
-.live-monitoring-page__screen-id {
-  margin: 0;
-  font: var(--text-caption);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
 .live-monitoring-page__body {
   display: grid;
   grid-template-columns: 1fr 320px;

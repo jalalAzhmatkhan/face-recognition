@@ -231,7 +231,59 @@ Konfigurasi selalu lewat environment variables (lihat `*/.env.example` masing-ma
 
 ## 6. Flow Bisnis & User Sequence
 
-### 6.1 Enrollment — Mendaftarkan Karyawan Baru
+### 6.1 Setup Awal, Login & Lupa Password (Staff Console)
+
+Sebelum aplikasi bisa dipakai sama sekali, harus ada minimal satu akun **ADMIN**. Alur ini dirancang self-service (tidak wajib akses server/CLI) dan aman-secara-default: layar setup otomatis menutup diri begitu akun ADMIN pertama sudah ada.
+
+```mermaid
+sequenceDiagram
+    actor Staff as Staff (Admin/Operator/Viewer)
+    participant FE as Web Console
+    participant API as Core API (backend)
+    participant Mail as Email (SMTP)
+
+    rect rgb(235, 245, 255)
+    Note over Staff,API: Setup awal (hanya sekali, saat instalasi baru)
+    Staff->>FE: Buka halaman login
+    FE->>API: GET /auth/setup-status
+    alt Belum ada akun ADMIN sama sekali
+        API-->>FE: needs_setup = true
+        FE->>Staff: Arahkan ke halaman "Buat Akun ADMIN"
+        Staff->>FE: Isi email + password
+        FE->>API: POST /auth/bootstrap-admin
+        API-->>FE: Berhasil dibuat + langsung login
+    else Sudah ada akun ADMIN
+        API-->>FE: needs_setup = false
+        Note right of FE: Halaman setup tidak bisa diakses lagi<br/>mulai titik ini (menutup diri permanen)
+    end
+    end
+
+    rect rgb(240, 255, 240)
+    Note over Staff,API: Login sehari-hari
+    Staff->>FE: Masukkan email + password
+    FE->>API: POST /auth/login
+    API-->>FE: Token akses (berlaku sesuai role ADMIN/OPERATOR/VIEWER)
+    end
+
+    rect rgb(255, 250, 235)
+    Note over Staff,Mail: Lupa password
+    Staff->>FE: Klik "Lupa password?" + masukkan email
+    FE->>API: POST /auth/forgot-password
+    API->>Mail: Kirim email berisi tautan reset (sekali pakai, kedaluwarsa 30 menit)
+    Note right of API: Balasan ke FE SELALU sama, baik email<br/>terdaftar maupun tidak (tidak bocorkan data)
+    Staff->>Mail: Buka email, klik tautan reset
+    Staff->>FE: Masukkan password baru
+    FE->>API: POST /auth/reset-password
+    API-->>FE: Password berhasil diganti, arahkan ke login
+    end
+```
+
+**Poin penting:**
+- **Tidak ada "akun ADMIN cadangan" tersembunyi** — satu-satunya cara membuat ADMIN pertama adalah lewat halaman setup ini, dan halaman itu terkunci permanen setelah dipakai sekali.
+- **Tautan reset password sekali pakai** — begitu dipakai (atau kedaluwarsa), tautan yang sama tidak bisa dipakai lagi.
+- **Tidak membocorkan data**: permintaan "lupa password" untuk email yang tidak terdaftar tetap mendapat balasan sukses yang sama persis, sehingga tidak bisa dipakai untuk menebak-nebak email siapa saja yang punya akun.
+
+### 6.2 Enrollment — Mendaftarkan Karyawan Baru
 
 Admin membuat sesi enrollment untuk karyawan, mendapatkan persetujuan (consent) tertulis/lisan yang tercatat, memandu karyawan merekam wajah, lalu sistem memvalidasi kualitas rekaman sebelum wajah tersebut "resmi terdaftar" dan bisa dikenali di pintu.
 
@@ -286,7 +338,7 @@ sequenceDiagram
 - **Rekaman langsung ke cloud** — perangkat admin/karyawan tidak pernah menyimpan file foto/video; begitu selesai diunggah, tidak ada jejak file di komputer/browser.
 - **Validasi otomatis** — kalau video kurang jelas (goyang, gelap, wajah tidak lengkap terlihat), sistem menolak dengan alasan spesifik dan meminta rekam ulang — bukan diterima seadanya.
 
-### 6.2 Verifikasi Akses — Karyawan Masuk Gedung
+### 6.3 Verifikasi Akses — Karyawan Masuk Gedung
 
 ```mermaid
 sequenceDiagram
@@ -322,9 +374,41 @@ sequenceDiagram
 - **Karyawan yang di-nonaktifkan tidak pernah lolos**, walau wajahnya "cocok" secara teknis — status keaktifan selalu dicek bersamaan.
 - Setiap upaya masuk (berhasil maupun ditolak) tercatat untuk keperluan audit.
 
-### 6.3 Pelatihan & Promosi Model (Ringkas)
+### 6.4 Pelatihan & Promosi Model (Ringkas)
 
 Model AI yang dipakai untuk mengenali wajah **tidak statis** — bisa dilatih ulang (fine-tune) memakai data yang terkumpul, dievaluasi, lalu baru dipakai di produksi setelah disetujui manusia (bukan otomatis). Lihat detail teknis di [§8](#8-flow-logic-ai-deteksi--liveness--ekstraksi-fitur--keputusan).
+
+### 6.5 Aktivasi Device (Dev/Testing)
+
+Di produksi, status device menjadi **Online** hanya lewat firmware kamera pintu fisik yang mengirim heartbeat berkala menggunakan kredensial device (bukan login staff). Karena firmware fisik tidak tersedia di lingkungan dev/testing, ada dua cara mensimulasikannya:
+
+```mermaid
+sequenceDiagram
+    actor Admin
+    participant FE as Web Console
+    participant CLI as scripts/device_simulator.py
+    participant API as Core API (backend)
+
+    Admin->>FE: Tambah device baru / rotasi kredensial
+    FE-->>Admin: Tampilkan kredensial SEKALI (tidak bisa dilihat lagi setelahnya)
+
+    alt Simulasi lewat browser
+        Admin->>FE: Menu Devices → "⋮" → Aktivasi (Simulasi Heartbeat)
+        Admin->>FE: Tempel kredensial, klik "Mulai Heartbeat"
+        loop Setiap 30 detik selagi dialog terbuka
+            FE->>API: POST /devices/{id}/heartbeat (pakai kredensial device)
+            API-->>FE: Status terkini device
+        end
+        Admin->>FE: Klik "Stop" atau tutup dialog kapan saja
+    else Simulasi lewat CLI
+        Admin->>CLI: python scripts/device_simulator.py --device-id ... --credential ...
+        loop Setiap 30 detik (Ctrl+C untuk berhenti)
+            CLI->>API: POST /devices/{id}/heartbeat
+        end
+    end
+```
+
+**Poin penting:** tidak ada tombol "paksa online" di sisi staff — status device sengaja hanya bisa diubah lewat kredensial device itu sendiri (fail-secure). Baik simulasi lewat browser maupun CLI memanggil endpoint yang sama persis dengan yang dipakai firmware sungguhan.
 
 ---
 
