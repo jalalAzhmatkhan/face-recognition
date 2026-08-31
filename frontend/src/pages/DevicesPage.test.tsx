@@ -4,13 +4,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import DevicesPage from './DevicesPage'
 import type { DeviceResponse } from '../features/device-management/types'
 
-const { getCurrentRoleMock, listDevicesMock, createDeviceMock, rotateDeviceCredentialMock } =
-  vi.hoisted(() => ({
-    getCurrentRoleMock: vi.fn(),
-    listDevicesMock: vi.fn(),
-    createDeviceMock: vi.fn(),
-    rotateDeviceCredentialMock: vi.fn(),
-  }))
+const {
+  getCurrentRoleMock,
+  listDevicesMock,
+  createDeviceMock,
+  rotateDeviceCredentialMock,
+  sendDeviceHeartbeatMock,
+} = vi.hoisted(() => ({
+  getCurrentRoleMock: vi.fn(),
+  listDevicesMock: vi.fn(),
+  createDeviceMock: vi.fn(),
+  rotateDeviceCredentialMock: vi.fn(),
+  sendDeviceHeartbeatMock: vi.fn(),
+}))
 
 vi.mock('../lib/authToken', () => ({
   getCurrentRole: getCurrentRoleMock,
@@ -25,6 +31,7 @@ vi.mock('../features/device-management/api', async () => {
     listDevices: listDevicesMock,
     createDevice: createDeviceMock,
     rotateDeviceCredential: rotateDeviceCredentialMock,
+    sendDeviceHeartbeat: sendDeviceHeartbeatMock,
   }
 })
 
@@ -148,5 +155,45 @@ describe('DevicesPage — credential bootstrap dialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ya, Rotasi' }))
 
     expect(await screen.findByTestId('credential-value')).toHaveTextContent('new-cred-2')
+  })
+})
+
+describe('DevicesPage — device activation dialog', () => {
+  it('sends a heartbeat with the pasted credential and shows the result', async () => {
+    getCurrentRoleMock.mockReturnValue('ADMIN')
+    sendDeviceHeartbeatMock.mockResolvedValue({
+      status: 'ONLINE',
+      last_heartbeat_at: '2026-08-31T00:00:00Z',
+    })
+    renderPage()
+    await screen.findByText('Pintu Lobby')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Aksi lainnya' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Aktivasi (Simulasi Heartbeat)' }))
+
+    expect(screen.getByRole('dialog')).toHaveTextContent('Aktivasi Device: Pintu Lobby')
+
+    fireEvent.change(screen.getByPlaceholderText('credential_id.secret'), {
+      target: { value: 'cred-1.secret-1' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Mulai Heartbeat' }))
+
+    await waitFor(() =>
+      expect(sendDeviceHeartbeatMock).toHaveBeenCalledWith('device-1', 'cred-1.secret-1'),
+    )
+    expect(await screen.findByText(/Heartbeat berjalan/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(screen.getByText(/Heartbeat dihentikan/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tutup' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('does not show the "Aktivasi" action for OPERATOR', async () => {
+    getCurrentRoleMock.mockReturnValue('OPERATOR')
+    renderPage()
+    await screen.findByText('Pintu Lobby')
+    expect(screen.queryByRole('button', { name: 'Aksi lainnya' })).not.toBeInTheDocument()
   })
 })

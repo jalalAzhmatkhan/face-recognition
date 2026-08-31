@@ -139,6 +139,52 @@ export async function rotateDeviceCredential(id: string): Promise<DeviceWithCred
   return (await response.json()) as DeviceWithCredential
 }
 
+export interface HeartbeatResult {
+  status: DeviceStatus
+  last_heartbeat_at: string | null
+}
+
+/**
+ * `POST /devices/{id}/heartbeat` — the DEVICE-authenticated endpoint (BE-09),
+ * called with a device credential (`<credential_id>.<secret>`, minted once at
+ * create/rotate time), not a staff JWT. Deliberately does NOT go through
+ * `authFetch`: that helper attaches the staff access token and reacts to a
+ * 401 by refreshing/retrying the *staff* session, which is meaningless (and
+ * would be actively wrong) for a device-credential call — a bad/expired
+ * device credential should just fail, not trigger a staff token refresh.
+ * Mirrors `scripts/device_simulator.py::send_heartbeat` — this is the
+ * in-browser equivalent of that CLI simulator, used by
+ * `ActivateDeviceDialog` so an operator can bring a device ONLINE from the
+ * UI without physical hardware or a terminal.
+ */
+export async function sendDeviceHeartbeat(
+  deviceId: string,
+  credential: string,
+): Promise<HeartbeatResult> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/devices/${deviceId}/heartbeat`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${credential}`,
+    },
+  })
+
+  if (!response.ok) {
+    let body: unknown = null
+    try {
+      body = await response.json()
+    } catch {
+      /* no JSON body */
+    }
+    throw new ApiError(
+      `Heartbeat request for device ${deviceId} failed with ${response.status}`,
+      response.status,
+      body,
+    )
+  }
+  return (await response.json()) as HeartbeatResult
+}
+
 interface ProblemBody {
   detail?: string
 }

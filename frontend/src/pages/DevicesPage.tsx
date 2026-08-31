@@ -10,6 +10,7 @@ import {
   updateDevice,
 } from '../features/device-management/api'
 import {
+  canActivateDevice,
   canCreateDevice,
   canDisableDevice,
   canEditDevice,
@@ -19,6 +20,7 @@ import {
 import DeviceStatusBadge from '../features/device-management/DeviceStatusBadge'
 import DeviceActionsMenu from '../features/device-management/DeviceActionsMenu'
 import CredentialBootstrapDialog from '../features/device-management/CredentialBootstrapDialog'
+import ActivateDeviceDialog from '../features/device-management/ActivateDeviceDialog'
 import { DEVICE_STATUSES } from '../features/device-management/types'
 import type { DeviceResponse, DeviceStatus, DeviceWithCredential } from '../features/device-management/types'
 import { getCurrentRole } from '../lib/authToken'
@@ -63,6 +65,7 @@ export default function DevicesPage() {
 
   const [rotateTargetId, setRotateTargetId] = useState<string | null>(null)
   const [disableTargetId, setDisableTargetId] = useState<string | null>(null)
+  const [activateTarget, setActivateTarget] = useState<{ id: string; name: string } | null>(null)
 
   /** Set right after a successful create/rotate, and cleared ONLY by the
    * dialog's explicit acknowledge button (never by any other state change)
@@ -159,6 +162,7 @@ export default function DevicesPage() {
   const canEdit = canEditDevice(role)
   const canRotate = canRotateDeviceCredential(role)
   const canDisable = canDisableDevice(role)
+  const canActivate = canActivateDevice(role)
 
   const anyMutationPending =
     createMutation.isPending ||
@@ -496,6 +500,7 @@ export default function DevicesPage() {
                               canEdit={canEdit}
                               canRotate={canRotate}
                               canDisable={canDisable}
+                              canActivate={canActivate}
                               anyMutationPending={anyMutationPending}
                               isRotateTarget={rotateTargetId === device.id}
                               isRotatePending={rotateMutation.isPending}
@@ -508,6 +513,9 @@ export default function DevicesPage() {
                               onRequestDisable={() => setDisableTargetId(device.id)}
                               onCancelDisable={() => setDisableTargetId(null)}
                               onConfirmDisable={() => disableMutation.mutate(device.id)}
+                              onActivate={() =>
+                                setActivateTarget({ id: device.id, name: device.name })
+                              }
                             />
                           )}
                         </div>
@@ -568,6 +576,14 @@ export default function DevicesPage() {
           deviceName={credentialReveal.deviceName}
           credential={credentialReveal.credential}
           onAcknowledge={() => setCredentialReveal(null)}
+        />
+      )}
+
+      {activateTarget && (
+        <ActivateDeviceDialog
+          deviceId={activateTarget.id}
+          deviceName={activateTarget.name}
+          onClose={() => setActivateTarget(null)}
         />
       )}
     </div>
