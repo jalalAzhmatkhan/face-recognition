@@ -1,0 +1,19 @@
+# Never bake secrets or local state into the image (NFR-OPS-03: no secrets
+# in repo/image; env vars come from docker-compose.dev.yml / the host env).
+.env
+.env.*
+!.env.example
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+graphify-out/
+
+.git/
+.gitignore
