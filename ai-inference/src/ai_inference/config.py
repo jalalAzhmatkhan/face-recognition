@@ -110,6 +110,36 @@ class Settings(BaseSettings):
     # "bounded staleness beats a DB round trip per request" trade-off.
     production_version_cache_ttl_seconds: float = 5.0
 
+    # --- IN-08: drift & model monitoring (FR-MON-04) ----------------------
+    # There is no Alertmanager/Grafana deployed anywhere in this monorepo
+    # (see ai_inference.monitoring module docstring) -- these thresholds
+    # drive in-process Gauges that ARE the alert surface. NOT calibrated
+    # against real production traffic (same "tune later" status as
+    # `similarity_threshold`/`liveness_threshold` above).
+    #
+    # Number of recent /recognize outcomes kept per rolling-window detector
+    # (unknown-rate, latency SLO) and the size of BOTH the frozen baseline
+    # window and the rolling window for score-distribution drift.
+    monitoring_window_size: int = 100
+    # Minimum samples in a rolling window before evaluating it at all --
+    # avoids a noisy/meaningless rate or percentile off a near-empty window
+    # right after process startup.
+    monitoring_min_samples: int = 20
+    # Population Stability Index threshold for score-distribution drift.
+    # >0.2 is the standard industry "significant shift" cutoff (0.1-0.2 is
+    # "moderate", <0.1 is "no significant change") -- see
+    # `ai_inference.monitoring`'s PSI implementation.
+    score_drift_psi_threshold: float = 0.2
+    # Fraction of UNKNOWN decisions in the rolling window above which an
+    # unknown-rate spike is flagged. 0.5 is a conservative placeholder
+    # (more than half of recent attempts failing to match anyone is
+    # unambiguously worth an operator's attention) pending real-traffic
+    # calibration.
+    unknown_rate_alert_threshold: float = 0.5
+    # p95 decision latency (ms) above which a latency SLO breach is
+    # flagged -- matches NFR-PRF-01's 300ms budget (IN-05).
+    latency_slo_p95_ms: int = 300
+
 
 @lru_cache
 def get_settings() -> Settings:
