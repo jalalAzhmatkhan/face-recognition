@@ -61,6 +61,19 @@ class Settings(BaseSettings):
     # decision to be GRANTED for that user.
     min_frames_for_grant: int = 2
 
+    # --- IN-04: passive liveness / anti-spoofing (PAD) --------------------
+    # Per-frame liveness score (from `ai_training.liveness.detector`, real
+    # backend selected via TRN_LIVENESS__BACKEND=minifasnet on the
+    # ai-training side, see training_bridge.build_training_settings) below
+    # which a frame is flagged spoof-suspect. Same "tune later against real
+    # data" status as `similarity_threshold` above -- NOT YET calibrated
+    # against real print/replay attack data (recommendations.md §8 point 2:
+    # FAS carries a real domain gap, calibration against this deployment's
+    # own capture hardware/lighting is required before production, not
+    # optional). 0.5 is a placeholder midpoint, not a validated operating
+    # point.
+    liveness_threshold: float = 0.5
+
 
 @lru_cache
 def get_settings() -> Settings:

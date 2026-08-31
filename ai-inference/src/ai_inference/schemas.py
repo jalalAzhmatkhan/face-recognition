@@ -35,14 +35,17 @@ class RecognizeResponse(BaseModel):
 
     ``decision`` is intentionally restricted to a SUBSET of backend's full
     ``AccessDecision`` enum (``GRANTED | DENIED | UNKNOWN | SPOOF_SUSPECTED``):
-    only ``GRANTED``/``UNKNOWN`` are ever produced here. ``DENIED`` requires
-    a real liveness/spoof signal this task does not have (IN-04), and
-    ``SPOOF_SUSPECTED`` requires the same. See
+    ``GRANTED``/``UNKNOWN``/``SPOOF_SUSPECTED`` are produced here as of
+    IN-04 (see ``ai_inference.pipeline.recognize.decide_from_scores`` for the
+    exact voting rule and its ``SPOOF_SUSPECTED`` > ``GRANTED`` > ``UNKNOWN``
+    priority). ``DENIED`` still requires a signal this endpoint does not
+    produce (an active/interactive liveness check, or a revoked/blocklisted
+    identity match) and remains out of scope. See
     ``ai_inference.pipeline.recognize`` module docstring for the full list
     of gaps this endpoint deliberately does not close.
     """
 
-    decision: str  # "GRANTED" | "UNKNOWN"
+    decision: str  # "GRANTED" | "UNKNOWN" | "SPOOF_SUSPECTED"
     user_id: str | None = None
     similarity: float
     liveness_score: float

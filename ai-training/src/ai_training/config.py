@@ -155,6 +155,32 @@ class EmbedderSettings(BaseModel):
     adaface_weights_path: str = ""
 
 
+class LivenessSettings(BaseModel):
+    """Selects the passive liveness/anti-spoofing (PAD) backend (IN-04).
+
+    Mirrors `EmbedderSettings` above: `backend="stub"` remains the DEFAULT
+    on purpose. `MiniFASNetLivenessDetector` needs the `ml` extra (torch +
+    opencv) AND the two committed weight files on disk; test/CI environments
+    use the stub instead so the pipeline plumbing is testable without them.
+    An operator opts in to the real detector via `TRN_LIVENESS__BACKEND=minifasnet`.
+
+    `minifasnet_v2_weights_path`/`minifasnet_v1se_weights_path` default
+    (when left `""`) to the repo-bundled, git-committed (see root
+    `.gitignore`'s MiniFASNet exception block — these two files are small
+    and Apache-2.0, unlike AdaFace's checkpoint, so they ARE committed and
+    need no separate download step) paths
+    `ai-training/models/2.7_80x80_MiniFASNetV2.pth` and
+    `ai-training/models/4_0_0_80x80_MiniFASNetV1SE.pth`, resolved the same
+    way as `QCSettings.face_landmarker_model_path` /
+    `download_adaface_weights.default_weights_path` (path relative to this
+    package's installed location, not the current working directory).
+    """
+
+    backend: str = "stub"
+    minifasnet_v2_weights_path: str = ""
+    minifasnet_v1se_weights_path: str = ""
+
+
 class EvaluationSettings(BaseModel):
     """Open-set 1:N identification benchmark knobs (TR-07).
 
@@ -192,6 +218,7 @@ class Settings(BaseSettings):
     training: TrainingSettings = TrainingSettings()
     qc: QCSettings = QCSettings()
     embedder: EmbedderSettings = EmbedderSettings()
+    liveness: LivenessSettings = LivenessSettings()
     evaluation: EvaluationSettings = EvaluationSettings()
     # Celery broker/result-backend (TR-02/TR-03 worker). Deliberately a
     # plain top-level field (mirrors backend's `Settings.redis_url`, see

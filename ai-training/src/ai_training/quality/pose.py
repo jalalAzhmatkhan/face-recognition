@@ -151,6 +151,12 @@ class FaceDetection:
     left_mouth: tuple[float, float]
     right_mouth: tuple[float, float]
     bbox_wh: tuple[float, float]
+    # Top-left corner (x_min, y_min) of the landmark bounding box, in the
+    # same pixel coordinates as bbox_wh (min(xs), min(ys) below). Added for
+    # IN-04: MiniFASNetLivenessDetector's patch-crop step needs the full
+    # (x, y, w, h) box, not just (w, h). Backward-compatible addition (new
+    # field, existing bbox_wh untouched).
+    bbox_xy: tuple[float, float]
 
     def solve_pnp_landmarks(self) -> np.ndarray:
         """6-point subset, in the same order as `_GENERIC_3D_FACE_MODEL`."""
@@ -275,6 +281,7 @@ def detect_face_and_landmarks(
         xs = [lm.x * w for lm in landmarks]
         ys = [lm.y * h for lm in landmarks]
         bbox_wh = (max(xs) - min(xs), max(ys) - min(ys))
+        bbox_xy = (min(xs), min(ys))
 
         return FaceDetection(
             nose_tip=_px(_MP_NOSE_TIP),
@@ -284,6 +291,7 @@ def detect_face_and_landmarks(
             left_mouth=_px(_MP_LEFT_MOUTH),
             right_mouth=_px(_MP_RIGHT_MOUTH),
             bbox_wh=bbox_wh,
+            bbox_xy=bbox_xy,
         )
 
 

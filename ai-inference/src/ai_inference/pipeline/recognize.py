@@ -1,6 +1,6 @@
-"""`/recognize` pipeline: decode -> detect -> align -> (fake) liveness ->
-embed -> ANN gallery search -> threshold/margin decision -> temporal voting
-(IN-03, FR-INF-01/02/03).
+"""`/recognize` pipeline: decode -> detect -> liveness -> align -> embed ->
+ANN gallery search -> threshold/margin decision -> temporal voting (IN-03,
+FR-INF-01/02/03; liveness/PAD landed in IN-04, closing gap 2/5 below).
 
 **Deliberate gaps, NOT implemented here** (see the IN-03 task brief for the
 tracking tickets):
@@ -9,8 +9,13 @@ tracking tickets):
    The router (`ai_inference.main`) documents this at the endpoint
    definition; this module has no auth concept at all. MUST be closed
    before production.
-2. **IN-04 (real liveness/anti-spoofing)**: `placeholder_liveness_score()`
-   below is a FIXED constant, not a real check. See its docstring.
+2. ~~IN-04 (real liveness/anti-spoofing)~~ **CLOSED (IN-04)**: every frame
+   is now scored by `ai_training.liveness.detector.LivenessDetector`
+   (default real backend: `MiniFASNetLivenessDetector`, an ensemble of two
+   MiniFASNet models -- see that module's docstring for the full
+   procedure/reinterpretation of the upstream score). A frame whose score
+   falls below `settings.liveness_threshold` is flagged spoof-suspect and
+   is EXCLUDED from identity voting entirely (see `decide_from_scores`).
 3. **IN-06 (event emission)**: this module never calls backend's
    `POST /access-events`. It only computes and returns a decision.
 4. **IN-07 (atomic model+gallery switch)**: the PRODUCTION model version is
@@ -18,15 +23,16 @@ tracking tickets):
    (`gallery.get_current_production_model_version`) -- no caching, no
    atomic blue/green switch mechanism. Good enough for v1; IN-07 can add
    caching later.
-5. **`SPOOF_SUSPECTED`**: never produced here (needs IN-04's real liveness).
-   The only decisions this module ever returns are `GRANTED` and `UNKNOWN`.
+5. ~~`SPOOF_SUSPECTED`~~ **CLOSED (IN-04)**: `decide_from_scores` can now
+   return `"SPOOF_SUSPECTED"` -- see its docstring for the exact voting
+   rule and priority order.
 
 `decide_from_scores` (and its `FrameCandidate`/`RecognitionResult` types) is
 pure Python -- no cv2/torch/DB -- and is fully unit tested
 (`tests/test_recognize.py`). `run_recognition` is the real orchestration
-(decode/detect/align/embed/DB) and is NOT covered by automated tests (needs
-cv2 + torch + a real Postgres gallery) -- it is verified live, per this
-project's established convention for this class of code (see
+(decode/detect/liveness/align/embed/DB) and is NOT covered by automated
+tests (needs cv2 + torch + a real Postgres gallery) -- it is verified live,
+per this project's established convention for this class of code (see
 `ai_training.quality.pipeline`'s module docstring for the same convention).
 """
 
@@ -40,23 +46,14 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ai_inference.config import Settings
 
-# Liveness is NOT implemented until IN-04. This constant is deliberately
-# named to make misuse loud: importing/using it anywhere near "this proves
-# the subject is live" would be wrong. It always returns the same value
-# regardless of input.
-_LIVENESS_PLACEHOLDER_SCORE = 1.0
-
-
-def placeholder_liveness_score(_aligned_crop: Any) -> float:
-    """**NOT A REAL LIVENESS/ANTI-SPOOFING CHECK.** Always returns a fixed
-    score (`1.0`) no matter what is passed in. This exists only so the
-    `/recognize` response shape has a `liveness_score` field populated
-    ahead of IN-04, which will implement real passive/active PAD (e.g.
-    MiniFASNet). Do NOT treat this value as evidence of anything, and do
-    NOT derive a `SPOOF_SUSPECTED` decision from it -- see module docstring
-    gap list, item 2 and 5.
-    """
-    return _LIVENESS_PLACEHOLDER_SCORE
+# Fallback used ONLY when no real `LivenessDetector` handle is available at
+# all (e.g. `run_recognition` called without one -- should not happen on the
+# real `/recognize` path, where `ai_inference.main` always loads
+# `ModelKind.LIVENESS` first, see that module). Kept named/scoped narrowly
+# (not reused as a "the subject is live" claim anywhere) so misuse stays
+# loud, same spirit as IN-03's original `placeholder_liveness_score`, which
+# this replaces as the primary mechanism now that IN-04 has landed.
+_LIVENESS_FALLBACK_SCORE = 1.0
 
 
 @dataclass(frozen=True)
@@ -66,16 +63,26 @@ class FrameCandidate:
     `user_id`, keeping each user's best score) and reduced to the top-1 and
     top-2 (different users). `top1_user_id`/`top1_similarity` are both
     `None` when the frame contributed no candidate at all (no face detected
-    in the frame, or no PRODUCTION model / empty gallery)."""
+    in the frame, or no PRODUCTION model / empty gallery, OR the frame was
+    flagged spoof-suspect and therefore never reached gallery search --
+    see `spoof_suspect` below and `run_recognition`).
+
+    `spoof_suspect` (IN-04): `True` when this frame's liveness score fell
+    below `settings.liveness_threshold`. Such a frame is a "spoof vote" --
+    completely separate from the identity vote (`top1_user_id` is always
+    `None` on a spoof-suspect frame; identity matching is skipped entirely
+    for it, see `run_recognition`, per NFR-SEC-06: a photo/screen replay of
+    an otherwise-authorized person must still be rejected)."""
 
     top1_user_id: str | None
     top1_similarity: float | None
     top2_similarity: float | None = None
+    spoof_suspect: bool = False
 
 
 @dataclass(frozen=True)
 class RecognitionResult:
-    decision: str  # "GRANTED" | "UNKNOWN"
+    decision: str  # "GRANTED" | "UNKNOWN" | "SPOOF_SUSPECTED"
     user_id: str | None
     similarity: float
 
@@ -105,14 +112,31 @@ def decide_from_scores(
     margin: float,
     min_frames_for_grant: int,
 ) -> RecognitionResult:
-    """Pure decision logic (task brief steps 7+8): per-frame threshold+margin
-    check, then cross-frame temporal voting. No DB/torch/cv2 involved --
-    fully unit-testable with hand-computed inputs.
+    """Pure decision logic (task brief steps 7+8, extended by IN-04): per-frame
+    threshold+margin check plus a separate per-frame "spoof vote", then
+    cross-frame temporal voting on BOTH. No DB/torch/cv2 involved -- fully
+    unit-testable with hand-computed inputs.
 
-    Voting rule (recommendations.md SS5: accept if >=2 of 3-5 frames pass
-    tau): a `user_id` is GRANTED only if it passes the per-frame check in at
-    least `min_frames_for_grant` of the submitted frames. If no user_id
-    reaches that count, the final decision is `UNKNOWN` with `user_id=None`.
+    **Decision priority (IN-04, documented here because it is the one
+    non-obvious rule this function implements): `SPOOF_SUSPECTED` > `GRANTED`
+    > `UNKNOWN`.** Security wins over convenience: if enough frames look
+    spoofed to reach `min_frames_for_grant`, the final decision is
+    `SPOOF_SUSPECTED` (`user_id=None`, `similarity=0.0`) EVEN IF some other
+    frames in the same batch separately voted a real user_id all the way to
+    GRANTED-eligibility -- an attacker should not be able to "drown out" a
+    spoof signal by mixing in enough live-looking frames (e.g. holding up a
+    photo for most of the capture window but glancing at the camera for a
+    couple of real frames). The spoof vote reuses the SAME
+    `min_frames_for_grant` threshold as identity voting (no separate voting
+    config, per task brief) -- both express "how many of the submitted
+    frames must agree before we act on it".
+
+    Identity voting rule (recommendations.md SS5: accept if >=2 of 3-5
+    frames pass tau), unchanged from IN-03: a `user_id` is GRANTED only if
+    it passes the per-frame threshold+margin check in at least
+    `min_frames_for_grant` of the submitted frames. If no user_id reaches
+    that count (and the spoof vote also didn't reach it), the final decision
+    is `UNKNOWN` with `user_id=None`.
 
     `similarity` on a GRANTED result is the MAX `top1_similarity` among the
     frames that voted for the winner (chosen over "average": it reports the
@@ -125,6 +149,10 @@ def decide_from_scores(
     iteration) because Python's `max()` compares the full `(votes, score)`
     tuple.
     """
+    spoof_votes = sum(1 for candidate in candidates if candidate.spoof_suspect)
+    if spoof_votes >= min_frames_for_grant:
+        return RecognitionResult(decision="SPOOF_SUSPECTED", user_id=None, similarity=0.0)
+
     votes: dict[str, list[float]] = {}
     for candidate in candidates:
         passed = frame_passes_threshold(candidate, threshold=threshold, margin=margin)
@@ -201,18 +229,32 @@ def run_recognition(
     *,
     embedder: Any,
     cursor: Any,
-) -> tuple[RecognitionResult, str]:
-    """Full orchestration for `POST /recognize` (task brief steps 1-8).
+    liveness_detector: Any = None,
+) -> tuple[RecognitionResult, str, list[float]]:
+    """Full orchestration for `POST /recognize` (task brief steps 1-8, plus
+    IN-04's liveness gate between detect and embed).
 
     `embedder` is anything exposing `.embed(aligned_crop) -> list[float]`
     (real: `ai_training.embedding.embedder.EmbedderInterface`, e.g. from
     `AdaFaceModelLoader.load(ModelKind.EMBEDDER).handle`).
+    `liveness_detector` is anything exposing
+    `.score(frame_bgr, bbox_xy, bbox_wh) -> float`
+    (real: `ai_training.liveness.detector.LivenessDetector`, e.g. from
+    `AdaFaceModelLoader.load(ModelKind.LIVENESS).handle`) -- `None` is
+    accepted (falls back to `_LIVENESS_FALLBACK_SCORE` for every frame, see
+    that constant's docstring) but the real `/recognize` endpoint
+    (`ai_inference.main`) always passes a real detector.
     `cursor` is a `ai_inference.gallery.Cursor`-shaped DB-API cursor already
     connected via the `ai_inference_ro` role.
 
-    Returns `(RecognitionResult, model_version)` -- `model_version` is `""`
-    when there is no PRODUCTION model (fail-secure: every frame is treated
-    as UNKNOWN, this is never a 500 -- task brief step 6).
+    Returns `(RecognitionResult, model_version, liveness_scores)` --
+    `model_version` is `""` when there is no PRODUCTION model (fail-secure:
+    every frame is treated as UNKNOWN, this is never a 500 -- task brief
+    step 6). `liveness_scores` is the per-frame liveness score for every
+    frame that made it far enough to have a detected face (parallel to, but
+    not 1:1 positionally with, `frames_base64` -- frames with no decodable
+    image or no detected face contribute nothing to it, same as they
+    contribute no `FrameCandidate`).
 
     Not covered by automated tests (needs cv2 + torch + a real DB) -- see
     module docstring.
@@ -221,12 +263,13 @@ def run_recognition(
 
     production_version = gallery.get_current_production_model_version(cursor)
     if production_version is None:
-        return RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0), ""
+        return RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0), "", []
 
     from ai_training.embedding.alignment import align_face
     from ai_training.quality.pose import detect_face_and_landmarks
 
     candidates: list[FrameCandidate] = []
+    liveness_scores: list[float] = []
     for frame_b64 in frames_base64:
         frame_bgr = _decode_frame_bgr(frame_b64)
         if frame_bgr is None:
@@ -236,13 +279,28 @@ def run_recognition(
         if detection is None:
             continue  # no face in this frame: skip, not a hard failure (step 2)
 
-        aligned = align_face(frame_bgr, detection.alignment_landmarks_5pt())
-        # Liveness placeholder -- see module docstring gap list, item 2.
-        # Deliberately not used in any decision below; computed only so a
-        # real value (rather than a hardcoded literal duplicated at the call
-        # site) backs the response field.
-        placeholder_liveness_score(aligned)
+        # IN-04 liveness gate: score BEFORE embedding/gallery search. A
+        # spoof-suspect frame contributes a spoof vote but is NEVER passed
+        # to gallery search -- no identity match from a suspected spoof
+        # frame may contribute to a GRANTED decision (NFR-SEC-06).
+        if liveness_detector is not None:
+            live_score = liveness_detector.score(
+                frame_bgr, detection.bbox_xy, detection.bbox_wh
+            )
+        else:
+            live_score = _LIVENESS_FALLBACK_SCORE
+        liveness_scores.append(live_score)
 
+        if live_score < settings.liveness_threshold:
+            candidates.append(
+                FrameCandidate(
+                    top1_user_id=None, top1_similarity=None, top2_similarity=None,
+                    spoof_suspect=True,
+                )
+            )
+            continue  # do NOT reach gallery search for this frame
+
+        aligned = align_face(frame_bgr, detection.alignment_landmarks_5pt())
         vector = embedder.embed(aligned)
         rows = gallery.search_top_k(
             cursor,
@@ -258,7 +316,7 @@ def run_recognition(
         margin=settings.margin_threshold,
         min_frames_for_grant=settings.min_frames_for_grant,
     )
-    return result, production_version
+    return result, production_version, liveness_scores
 
 
 def run_recognition_timed(
@@ -267,21 +325,37 @@ def run_recognition_timed(
     *,
     embedder: Any,
     cursor: Any,
+    liveness_detector: Any = None,
 ) -> dict[str, Any]:
     """`run_recognition` wrapped with the FR-INF-02 `latency_ms` measurement
     and assembled into the exact `/recognize` response dict (task brief step
     9). Split out from `run_recognition` so the pure timing/assembly concern
-    doesn't complicate that function's already-long orchestration body."""
+    doesn't complicate that function's already-long orchestration body.
+
+    **`liveness_score` representation (IN-04 decision)**: the MINIMUM
+    liveness score among all frames that had a detected face (not the mean,
+    and not just the winning frame's score). Chosen because this field's
+    purpose is to help an operator/auditor spot spoofing risk in a
+    response, and averaging would let a handful of clearly-live frames mask
+    one clearly-spoofed frame -- the same "don't let good frames drown out
+    a bad one" security principle `decide_from_scores`'s
+    `SPOOF_SUSPECTED`-priority rule already applies to the decision itself.
+    Falls back to `_LIVENESS_FALLBACK_SCORE` when no frame had a detected
+    face at all (nothing was scored, decision is already `UNKNOWN` in that
+    case).
+    """
     start = time.perf_counter()
-    result, model_version = run_recognition(
-        frames_base64, settings, embedder=embedder, cursor=cursor
+    result, model_version, liveness_scores = run_recognition(
+        frames_base64, settings, embedder=embedder, cursor=cursor,
+        liveness_detector=liveness_detector,
     )
     latency_ms = int((time.perf_counter() - start) * 1000)
+    reported_liveness_score = min(liveness_scores) if liveness_scores else _LIVENESS_FALLBACK_SCORE
     return {
         "decision": result.decision,
         "user_id": result.user_id,
         "similarity": result.similarity,
-        "liveness_score": _LIVENESS_PLACEHOLDER_SCORE,
+        "liveness_score": reported_liveness_score,
         "model_version": model_version,
         "latency_ms": latency_ms,
     }

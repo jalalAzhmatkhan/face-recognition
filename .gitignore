@@ -32,6 +32,11 @@ target/
 *.onnx
 *.ckpt
 *.h5
+# MiniFASNet liveness weights (IN-04): kecil (~1.8MB masing-masing) & Apache-2.0,
+# tidak ada masalah lisensi/prosedur unduh seperti AdaFace — commit langsung,
+# presenden sama dengan ai-training/models/face_landmarker.task.
+!ai-training/models/2.7_80x80_MiniFASNetV2.pth
+!ai-training/models/4_0_0_80x80_MiniFASNetV1SE.pth
 data/
 datasets/
 *.mp4
