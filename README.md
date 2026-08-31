@@ -170,6 +170,15 @@ docker compose -f docker-compose.dev.yml --profile app up -d \
   File hasil unduhan masuk ke `ai-training/models/` di host (bind-mount), jadi tetap ada walau container di-rebuild.
 - `ai-inference`/`ai-training` tidak dikonfigurasi dengan GPU passthrough (`nvidia-container-toolkit`) — keduanya jalan CPU-only di dalam compose ini; training GPU sungguhan memakai infra pelatihan khusus (lihat fase TSD), bukan compose dev ini.
 
+**Device tidak pernah jadi Online sendiri?** Status `ONLINE` sebuah device **hanya** diubah oleh device itu sendiri lewat `POST /devices/{id}/heartbeat` (kredensial device, bukan JWT staff) — sengaja tidak ada tombol/endpoint staff untuk "paksa online" (fail-secure). Karena firmware kamera pintu sungguhan tidak ada di monorepo ini, dev bisa mensimulasikannya dengan `scripts/device_simulator.py` (stdlib Python, tanpa dependency tambahan):
+
+```bash
+# kredensial (<credential_id>.<secret>) ditampilkan SEKALI saat POST /devices atau POST /devices/{id}/rotate-credential
+python3 scripts/device_simulator.py --device-id <uuid> --credential <credential_id>.<secret>
+```
+
+Berjalan terus mengirim heartbeat tiap 30 detik (`--interval` bisa diubah, tapi jaga tetap di bawah 90 detik — ambang basi `Settings.device_heartbeat_stale_after_seconds`) sampai dihentikan (Ctrl+C), atau pakai `--once` untuk sekali kirim lalu keluar.
+
 ### 5.3 Menjalankan Manual per Service
 
 **Backend (Core API):**
