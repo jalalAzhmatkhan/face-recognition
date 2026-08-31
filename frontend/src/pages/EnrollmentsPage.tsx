@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import PagePlaceholder from './PagePlaceholder'
@@ -12,8 +12,40 @@ import { canCreateEnrollment } from '../features/enrollment-management/roleGatin
 import StateBadge from '../features/enrollment-management/StateBadge'
 import { ENROLLMENT_STATES } from '../features/enrollment-management/types'
 import type { EnrollmentState } from '../features/enrollment-management/types'
+import { describeApiError as describeUserApiError, listUsers } from '../features/user-management/api'
 
 const PAGE_SIZE = 20
+// Both `GET /users` and `GET /enrollments` cap `limit` at 200 server-side
+// (same convention across this codebase's list endpoints) -- the "belum
+// pernah dienroll" dropdown below is built from a single unfiltered page
+// of each, so an org with >200 ACTIVE users or >200 total enrollment
+// sessions could see an incomplete (not incorrect -- just possibly
+// missing some eligible users) dropdown. No pagination loop here since
+// that's a lot of complexity for a dev-console convenience dropdown;
+// revisit if this project ever operates at that scale.
+const MAX_LOOKUP = 200
+
+/** States that mean "this user already has an enrollment in progress or
+ * completed" -- i.e. every `EnrollmentState` except the two genuinely
+ * abandoned ones. Deliberately broader than the frontend's own
+ * `TERMINAL_STATES` (which only lists CANCELLED/REVOKED, for a different
+ * "no further FSM transition" purpose) -- ENROLLED counts as "blocked"
+ * here even though it's also terminal, since a successfully enrolled user
+ * should not be offered for re-enrollment. There is no backend rule
+ * preventing a second enrollment session for the same user today (no DB
+ * uniqueness constraint, no service-level check) -- this dropdown is the
+ * enforcement point on the frontend side. */
+const BLOCKING_STATES: ReadonlySet<EnrollmentState> = new Set([
+  'CREATED',
+  'CONSENTED',
+  'CAPTURING',
+  'CAPTURED',
+  'QC_RUNNING',
+  'REJECTED_QUALITY',
+  'QC_PASSED',
+  'EMBEDDING',
+  'ENROLLED',
+])
 
 function formatDate(iso: string): string {
   try {
@@ -49,6 +81,32 @@ export default function EnrollmentsPage() {
       }),
   })
 
+  // "Buat Enrollment Baru" dropdown data: ACTIVE users minus anyone with an
+  // in-progress-or-completed enrollment session (see BLOCKING_STATES). Only
+  // fetched when the create-form is actually visible to this role.
+  const canCreate = canCreateEnrollment(role)
+  const eligibleUsersQuery = useQuery({
+    queryKey: ['users', 'active-for-enrollment'],
+    queryFn: () => listUsers({ status: 'ACTIVE', limit: MAX_LOOKUP }),
+    enabled: canCreate,
+  })
+  const allEnrollmentsQuery = useQuery({
+    queryKey: ['enrollments', 'all-for-eligibility-check'],
+    queryFn: () => listEnrollments({ limit: MAX_LOOKUP }),
+    enabled: canCreate,
+  })
+
+  const availableUsers = useMemo(() => {
+    const blockedUserIds = new Set(
+      (allEnrollmentsQuery.data?.items ?? [])
+        .filter((session) => BLOCKING_STATES.has(session.state))
+        .map((session) => session.user_id),
+    )
+    return (eligibleUsersQuery.data?.items ?? [])
+      .filter((user) => !blockedUserIds.has(user.id))
+      .sort((a, b) => a.full_name.localeCompare(b.full_name))
+  }, [eligibleUsersQuery.data, allEnrollmentsQuery.data])
+
   const createMutation = useMutation({
     mutationFn: (userId: string) => createEnrollment(userId),
     onSuccess: (session) => {
@@ -71,7 +129,7 @@ export default function EnrollmentsPage() {
         description="Daftar sesi enrollment: filter, pagination, dan aksi berbasis role."
       />
 
-      {canCreateEnrollment(role) && (
+      {canCreate && (
         <section
           style={{
             marginTop: 'var(--space-6)',
@@ -94,21 +152,37 @@ export default function EnrollmentsPage() {
             style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}
           >
             <label htmlFor="new-enrollment-user-id" style={{ display: 'none' }}>
-              User ID
+              User
             </label>
-            <input
+            <select
               id="new-enrollment-user-id"
               value={newUserId}
               onChange={(event) => setNewUserId(event.target.value)}
-              placeholder="User ID"
+              disabled={eligibleUsersQuery.isLoading || allEnrollmentsQuery.isLoading}
               style={{
                 minHeight: 'var(--touch-target)',
                 padding: '0 var(--space-3)',
                 borderRadius: 'var(--radius-md)',
                 border: 'var(--border-w) solid var(--border-default)',
-                flex: '1 1 240px',
+                background: 'var(--bg-surface)',
+                color: 'var(--text-primary)',
+                flex: '1 1 280px',
               }}
-            />
+            >
+              <option value="">
+                {eligibleUsersQuery.isLoading || allEnrollmentsQuery.isLoading
+                  ? 'Memuat daftar user...'
+                  : availableUsers.length === 0
+                    ? 'Tidak ada user yang bisa dienroll'
+                    : 'Pilih user...'}
+              </option>
+              {availableUsers.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.full_name}
+                  {user.external_ref ? ` (${user.external_ref})` : ''}
+                </option>
+              ))}
+            </select>
             <button
               type="submit"
               disabled={!newUserId.trim() || createMutation.isPending}
@@ -126,6 +200,25 @@ export default function EnrollmentsPage() {
               {createMutation.isPending ? 'Membuat...' : 'Buat Sesi'}
             </button>
           </form>
+          <p style={{ margin: 0, color: 'var(--text-muted)', font: 'var(--text-caption)' }}>
+            Hanya menampilkan user berstatus ACTIVE yang belum punya sesi enrollment berjalan
+            atau selesai (sesi yang dibatalkan/CANCELLED tidak menghalangi user muncul lagi di
+            sini).
+          </p>
+          {eligibleUsersQuery.isError && (
+            // `listUsers` throws user-management's OWN `ApiError` class (a
+            // different reference than enrollment-management's) -- must use
+            // its matching `describeApiError`, same bug/fix already
+            // documented in UsersPage.tsx for the mirror-image case.
+            <p role="alert" style={{ color: 'var(--danger)', margin: 0 }}>
+              {describeUserApiError(eligibleUsersQuery.error)}
+            </p>
+          )}
+          {allEnrollmentsQuery.isError && (
+            <p role="alert" style={{ color: 'var(--danger)', margin: 0 }}>
+              {describeApiError(allEnrollmentsQuery.error)}
+            </p>
+          )}
           {createMutation.isError && (
             <p role="alert" style={{ color: 'var(--danger)', margin: 0 }}>
               {describeApiError(createMutation.error)}
