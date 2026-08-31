@@ -32,6 +32,12 @@ export interface AccessEventPayload {
   liveness_score: number | null
   model_version: string | null
   latency_ms: number | null
+  /** BE-10's `AccessEventResponse` does serialize this (see
+   * `backend/app/schemas/access_events.py`), but there is no backend
+   * endpoint to retrieve/presign the referenced `media_objects` row (FE-10
+   * gap) -- kept here purely so the S-41 drawer can show a "frame
+   * retained, preview not yet available" note rather than nothing at all. */
+  frame_media_id: string | null
   door_command_issued: boolean
 }
 

@@ -65,6 +65,13 @@ def _publish_access_event(redis_client: RedisLike, event: AccessEvent) -> None:
     never allowed to fail the `POST /access-events` request. The live
     stream is a "nice to have" on top of that persisted row, not a
     dependency of it.
+
+    This dict MUST stay a superset of every field `AccessEventResponse`
+    (`app/schemas/access_events.py`) exposes over `GET /access-events` --
+    otherwise an event arriving live via SSE would carry LESS detail than
+    the same row fetched later over REST. `frame_media_id` was missing
+    here until FE-10 (frontend's access-event detail drawer) needed it for
+    events arriving live, not just ones re-fetched via the list endpoint.
     """
     payload = {
         "id": str(event.id),
@@ -76,6 +83,7 @@ def _publish_access_event(redis_client: RedisLike, event: AccessEvent) -> None:
         "liveness_score": event.liveness_score,
         "model_version": event.model_version,
         "latency_ms": event.latency_ms,
+        "frame_media_id": str(event.frame_media_id) if event.frame_media_id else None,
         "door_command_issued": event.door_command_issued,
     }
     try:

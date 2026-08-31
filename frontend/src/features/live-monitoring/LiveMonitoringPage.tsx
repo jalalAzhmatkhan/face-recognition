@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import AccessEventDrawer from './AccessEventDrawer'
 import AccessEventFeed from './AccessEventFeed'
 import DeviceStatusPanel from './DeviceStatusPanel'
 import FilterBar from './FilterBar'
@@ -43,6 +44,7 @@ export default function LiveMonitoringPage() {
   const [events, setEvents] = useState<AccessEventPayload[]>([])
   const [newIds, setNewIds] = useState<Set<string>>(new Set())
   const [reviewedSpoofIds, setReviewedSpoofIds] = useState<Set<string>>(new Set())
+  const [selectedEvent, setSelectedEvent] = useState<AccessEventPayload | null>(null)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting')
   const [localIncrements, setLocalIncrements] = useState<TodaySummary>(EMPTY_TODAY_SUMMARY)
 
@@ -172,6 +174,7 @@ export default function LiveMonitoringPage() {
             reviewedSpoofIds={reviewedSpoofIds}
             onMarkReviewed={markReviewed}
             newIds={newIds}
+            onSelectEvent={setSelectedEvent}
           />
         </div>
         <aside className="live-monitoring-page__sidebar">
@@ -183,6 +186,16 @@ export default function LiveMonitoringPage() {
           />
         </aside>
       </div>
+
+      {selectedEvent && (
+        <AccessEventDrawer
+          event={selectedEvent}
+          deviceName={deviceNames.get(selectedEvent.device_id) ?? null}
+          reviewed={reviewedSpoofIds.has(selectedEvent.id)}
+          onMarkReviewed={markReviewed}
+          onClose={() => setSelectedEvent(null)}
+        />
+      )}
     </section>
   )
 }

@@ -67,7 +67,7 @@ export default function UserDetailPage() {
 
   if (detailQuery.data && detailQuery.data.updated_at !== seededFromUpdatedAt) {
     setSeededFromUpdatedAt(detailQuery.data.updated_at)
-    setExternalRef(detailQuery.data.external_ref)
+    setExternalRef(detailQuery.data.external_ref ?? '')
     setFullName(detailQuery.data.full_name)
     setStatus(detailQuery.data.status)
   }
@@ -131,7 +131,9 @@ export default function UserDetailPage() {
   const canEnroll = canStartEnrollment(role)
   const anyMutationPending = updateMutation.isPending || offboardMutation.isPending || enrollMutation.isPending
   const hasChanges =
-    externalRef.trim() !== user.external_ref || fullName.trim() !== user.full_name || status !== user.status
+    externalRef.trim() !== (user.external_ref ?? '') ||
+    fullName.trim() !== user.full_name ||
+    status !== user.status
 
   return (
     <>

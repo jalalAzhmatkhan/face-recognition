@@ -181,6 +181,32 @@
   font: var(--text-small);
 }
 
+/* FE-10: the row is a real <button> (see AccessEventItem.tsx) so it opens
+ * the S-41 detail drawer with native click/keyboard semantics, without
+ * nesting it inside the separate "Tandai ditinjau" button below (avoids an
+ * interactive-inside-interactive a11y violation). Reset to look identical
+ * to the plain flex row it replaced. */
+.access-event-item__row--clickable {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.access-event-item__row--clickable:hover {
+  background: var(--bg-sunken);
+}
+
+.access-event-item__row--clickable:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 .access-event-item__time {
   color: var(--text-muted);
   min-width: 5.5em;
@@ -313,4 +339,118 @@
 .device-status-list__heartbeat {
   color: var(--text-muted);
   font-size: 0.8em;
+}
+
+/* S-41 Access Event Detail drawer (FE-10) — right-anchored 480px panel,
+ * same overlay/dialog mechanics as `training-models`'s centered dialog
+ * (`role="presentation"` scrim + `role="dialog" aria-modal="true"` panel)
+ * but positioned at the right edge instead of centered. */
+
+.access-event-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-scrim);
+  z-index: 100;
+}
+
+.access-event-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 480px;
+  max-width: 100%;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-6);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  /* MUST exceed the overlay's z-index (100) -- both are `position: fixed`
+   * siblings, and a positioned box with `z-index: auto` stacks BELOW an
+   * explicitly z-indexed sibling regardless of DOM order, which silently
+   * made the overlay intercept every click meant for the drawer's own
+   * content (confirmed via `document.elementFromPoint` during live
+   * verification — a real, non-obvious bug, not just theoretical). */
+  z-index: 101;
+}
+
+.access-event-drawer__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.access-event-drawer__decision {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-h1);
+}
+
+.access-event-drawer__close {
+  min-height: var(--touch-target);
+  min-width: var(--touch-target);
+  border: none;
+  background: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.access-event-drawer__time {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.access-event-drawer dl.access-event-drawer__fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.access-event-drawer__fields div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.access-event-drawer__fields dt {
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.access-event-drawer__fields dd {
+  margin: 0;
+}
+
+.access-event-drawer__frame-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-small);
+}
+
+.access-event-drawer__actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: var(--border-w) solid var(--border-default);
+}
+
+.access-event-drawer__actions button,
+.access-event-drawer__actions a {
+  min-height: var(--touch-target);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.access-event-drawer__reviewed-note {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-caption);
 }

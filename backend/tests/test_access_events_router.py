@@ -632,6 +632,12 @@ def test_ingest_publishes_event_to_redis_after_persisting(
     assert payload["decision"] == "DENIED"
     assert payload["device_id"] == str(device.id)
     assert payload["door_command_issued"] is False
+    # FE-10 regression: the SSE payload must carry every field
+    # `AccessEventResponse` exposes over `GET /access-events`, including
+    # `frame_media_id` -- previously missing, meaning a live-arriving event
+    # carried less detail than the same row re-fetched over REST.
+    assert "frame_media_id" in payload
+    assert payload["frame_media_id"] is None
 
 
 def test_ingest_publish_failure_does_not_fail_the_request(
