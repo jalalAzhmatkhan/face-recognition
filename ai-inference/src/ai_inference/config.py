@@ -100,6 +100,16 @@ class Settings(BaseSettings):
     # started from the app lifespan) attempts to drain the fallback buffer.
     access_event_retry_interval_seconds: float = 5.0
 
+    # --- IN-07: atomic model+gallery switch (TSD, FR-TRN-06) --------------
+    # TTL for `ai_inference.model_switch.ProductionVersionCache`, bounding
+    # how long a promotion in backend can take to be NOTICED by this
+    # process (see that module's docstring for why "noticed" -- not
+    # "reloaded" -- is the correct word: there is no weight hot-swap here,
+    # only a fail-secure guard once the mismatch is detected). Mirrors
+    # backend's own cached-policy-snapshot TTL (<=30s) for the same
+    # "bounded staleness beats a DB round trip per request" trade-off.
+    production_version_cache_ttl_seconds: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:

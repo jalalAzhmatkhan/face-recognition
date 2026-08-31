@@ -85,3 +85,14 @@ access_events_total = Counter(
     labelnames=("result",),
     registry=registry,
 )
+
+model_version_mismatches_total = Counter(
+    "inference_model_version_mismatches_total",
+    "IN-07 (FR-TRN-06): count of /recognize calls that detected this "
+    "process's loaded embedder version no longer matches the current "
+    "PRODUCTION models.version, and fail-secure UNKNOWN'd rather than risk "
+    "comparing embeddings across two different model versions. Non-zero "
+    "means this replica needs a restart/redeploy pointed at the newly "
+    "promoted model's weights -- see ai_inference.model_switch.",
+    registry=registry,
+)
