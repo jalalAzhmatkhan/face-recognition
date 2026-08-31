@@ -10,6 +10,7 @@ import EnrollmentDetailPage from '../pages/EnrollmentDetailPage'
 import EnrollmentCapturePage from '../features/enrollment-capture/EnrollmentCapturePage'
 import MonitoringPage from '../pages/MonitoringPage'
 import LiveMonitoringPage from '../features/live-monitoring/LiveMonitoringPage'
+import AccessLogPage from '../pages/AccessLogPage'
 import DevicesPage from '../pages/DevicesPage'
 import ModelsPage from '../pages/ModelsPage'
 import TrainingJobDetailPage from '../pages/TrainingJobDetailPage'
@@ -43,6 +44,7 @@ export const routes: RouteObject[] = [
           { path: 'enrollments/:id', element: <EnrollmentDetailPage /> },
           { path: 'monitoring', element: <MonitoringPage /> },
           { path: 'monitoring/live', element: <LiveMonitoringPage /> },
+          { path: 'monitoring/events', element: <AccessLogPage /> },
           { path: 'devices', element: <DevicesPage /> },
           { path: 'models', element: <ModelsPage /> },
           { path: 'models/jobs/:id', element: <TrainingJobDetailPage /> },

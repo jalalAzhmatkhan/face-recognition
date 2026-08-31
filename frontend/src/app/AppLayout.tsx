@@ -11,6 +11,7 @@ import './AppLayout.css'
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/monitoring/live', label: 'Monitoring' },
+  { to: '/monitoring/events', label: 'Access Log' },
   { to: '/users', label: 'Users' },
   { to: '/enrollments', label: 'Enrollment' },
   { to: '/models', label: 'Models & Training' },

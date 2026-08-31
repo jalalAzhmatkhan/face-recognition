@@ -1,0 +1,139 @@
+/* S-42 Access Log — plain CSS per project convention, uses tokens.css
+ * vars. Filter bar reuses `live-monitoring-filterbar` classes from
+ * `LiveMonitoring.css` (also imported by this page) rather than
+ * duplicating that layout. */
+
+.access-log-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.access-log-page__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.access-log-page__screen-id {
+  margin: 0;
+  font: var(--text-caption);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.access-log-page__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.access-log-page__export-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.access-log-page__section {
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.access-log-table-wrap {
+  overflow-x: auto;
+}
+
+.access-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--text-small);
+}
+
+.access-log-table th,
+.access-log-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.access-log-table thead tr {
+  border-bottom: var(--border-w) solid var(--border-default);
+  color: var(--text-muted);
+  font: var(--text-caption);
+}
+
+.access-log-table tbody tr {
+  border-bottom: var(--border-w) solid var(--border-default);
+}
+
+.access-log-table__row {
+  cursor: pointer;
+}
+
+.access-log-table__row:hover {
+  background: var(--bg-sunken);
+}
+
+.access-log-table__row:focus-visible {
+  outline: none;
+  box-shadow: inset var(--shadow-focus);
+}
+
+.access-log-table--skeleton {
+  width: 100%;
+}
+
+.access-log-table__skeleton-cell {
+  height: 36px;
+  background: var(--bg-sunken);
+  opacity: 0.6;
+}
+
+.access-log-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-12) var(--space-4);
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.access-log-empty__title {
+  margin: 0;
+  font: var(--text-h3);
+  color: var(--text-primary);
+}
+
+.access-log-empty__hint {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.access-log-page__pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.access-log-page__pagination-count {
+  color: var(--text-muted);
+  font: var(--text-small);
+}
+
+.access-log-page__pagination-buttons {
+  display: flex;
+  gap: var(--space-2);
+}
