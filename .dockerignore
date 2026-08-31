@@ -1,0 +1,37 @@
+# Root .dockerignore -- only applies to images built with the REPO ROOT as
+# build context. Today that's just `ai-inference/Dockerfile` (it needs the
+# sibling `ai-training/` source tree present, see that Dockerfile's own
+# comment) -- backend/frontend/ai-training each build from their own
+# subdirectory context and use their own per-directory .dockerignore.
+
+.git/
+.gitignore
+
+# Unrelated service trees -- excluding them just keeps the build-context
+# upload fast; ai-inference's build never reads them.
+backend/
+frontend/
+qa/
+documentation/
+graphify-out/
+
+# Never bake secrets into an image.
+.env
+.env.*
+!.env.example
+
+# Host-native, platform-incompatible, or just large/irrelevant to a build.
+**/.venv/
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/htmlcov/
+**/.coverage
+
+# AdaFace's ~250MB checkpoint (gitignored, downloaded on demand into the
+# bind-mounted models/ dir at runtime -- see ai-training/Dockerfile) has no
+# business inside an image layer.
+**/*.ckpt

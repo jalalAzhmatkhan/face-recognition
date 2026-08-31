@@ -69,6 +69,22 @@ ml = [
 [project.scripts]
 ai-training = "ai_training.cli:main"
 
+# Docker images (ai-training/Dockerfile) install the `ml` extra with no GPU
+# passthrough configured -- PyPI's default `torch` wheel bundles the full
+# CUDA runtime (~40 transitive `nvidia-*` packages, several GB) that's
+# useless without a GPU anyway. Pinning torch to PyTorch's own CPU-only
+# wheel index cuts that dead weight; real GPU training runs belong on
+# dedicated training infra (TSD's phasing), not this dev image. `explicit
+# = true` means this index is used ONLY for packages that reference it by
+# name below, never searched for anything else.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [dependency-groups]
 dev = [
     "pytest>=8.2",

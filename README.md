@@ -142,16 +142,33 @@ Semua service Python dimanage `uv`; frontend dengan `npm`.
 - Docker + Docker Compose (untuk infra dev: Postgres, Redis, MinIO, MLflow)
 - (Opsional, hanya untuk `ai-training` extra `ml`) GPU + CUDA bila memakai PyTorch — CPU tetap bisa jalan untuk pipeline QC (OpenCV + MediaPipe)
 
-### 5.2 Menjalankan via Docker Compose (infra dasar)
+### 5.2 Menjalankan via Docker Compose
+
+**Opsi A — infra saja** (Postgres+pgvector, Redis, MinIO, MLflow), lalu jalankan service aplikasi manual (§5.3) untuk iterasi tercepat:
 
 ```bash
-# Nyalakan Postgres+pgvector, Redis, MinIO (S3-compatible dev), MLflow
 docker compose -f docker-compose.dev.yml up -d postgres redis minio minio-init mlflow
 ```
 
 Bucket `frac-media` otomatis dibuat oleh service `minio-init`. Kredensial default (**hanya untuk dev**, jangan dipakai di produksi) ada di `.env.example`.
 
-> Catatan: `docker-compose.dev.yml` memuat definisi service aplikasi (`backend`, `frontend`, dll.) di bawah profile `app` — jalankan `docker compose --profile app up` bila ingin containerize seluruh stack aplikasi juga. Alur pengembangan sehari-hari yang dipakai tim adalah menjalankan **infra via Docker**, lalu **service aplikasi secara manual** (lihat 5.3) agar hot-reload cepat.
+**Opsi B — seluruh stack via Docker** (`backend`, `frontend`, `celery-worker`, `ai-inference`, `ai-training`, di bawah profile `app`), semuanya dengan hot-reload (bind-mount source ke container, jadi edit kode di host langsung tercermin tanpa rebuild):
+
+```bash
+docker compose -f docker-compose.dev.yml --profile app up -d \
+  backend-migrate backend celery-worker frontend ai-inference ai-training
+```
+
+- `backend-migrate` adalah job one-shot (`alembic upgrade head`) yang jalan sekali sebelum `backend`/`celery-worker`/`ai-inference` start — tidak perlu dijalankan manual.
+- Frontend: **http://localhost:5173** · Backend: **http://localhost:8000/healthz** · Inference: **http://localhost:8100/healthz**.
+- `ai-inference`/`ai-training` meng-install extra `ml` (PyTorch — versi **CPU-only** dari index resmi PyTorch, bukan wheel default PyPI yang membawa ~40 paket `nvidia-*` CUDA berukuran total beberapa GB yang tidak berguna tanpa GPU — lihat `[tool.uv.sources]` di `pyproject.toml` masing-masing; jadi GPU **tidak** dipakai lewat compose ini) + `mediapipe`/`opencv`/`mlflow`/`onnxruntime` — image besar (beberapa ratus MB–1GB-an), build pertama kali cukup lama.
+- Bobot image ditekan lewat **multi-stage build** di tiap `Dockerfile` (`builder` → `runtime`): stage `builder` menjalankan `uv sync`/`npm ci` (termasuk cache unduhan paket yang bisa sebesar venv/`node_modules` itu sendiri), lalu stage `runtime` hanya meng-copy hasil akhirnya (`.venv`/`node_modules` + source) — cache & binary `uv` tidak pernah ikut ke image final.
+- Checkpoint AdaFace (~250MB, tidak di-commit — lisensi non-komersial diprocure terpisah) **tidak** ikut di-build ke image. Setelah `ai-training` up, unduh sekali:
+  ```bash
+  docker compose exec ai-training ai-training download-adaface-weights
+  ```
+  File hasil unduhan masuk ke `ai-training/models/` di host (bind-mount), jadi tetap ada walau container di-rebuild.
+- `ai-inference`/`ai-training` tidak dikonfigurasi dengan GPU passthrough (`nvidia-container-toolkit`) — keduanya jalan CPU-only di dalam compose ini; training GPU sungguhan memakai infra pelatihan khusus (lihat fase TSD), bukan compose dev ini.
 
 ### 5.3 Menjalankan Manual per Service
 

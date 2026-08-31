@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+graphify-out/
+
+# Downloaded on demand at runtime (see Dockerfile) -- never bake into a
+# layer; the committed .pth/.task assets under models/ are NOT excluded
+# here (MiniFASNet weights + MediaPipe's face_landmarker.task ship
+# committed and are needed in the image).
+models/*.ckpt
+
+.env
+.env.*
+!.env.example
+
+.git/
+.gitignore
