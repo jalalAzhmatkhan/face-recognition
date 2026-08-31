@@ -4,17 +4,19 @@ Endpoints:
 - ``GET /healthz`` - liveness/readiness probe with loaded-model versions.
 - ``GET /metrics`` - Prometheus exposition (per-stage latency histograms etc.).
 - ``POST /recognize`` - face recognition pipeline (IN-03, liveness/PAD added
-  IN-04). See the endpoint docstring below for the IN-02/IN-06/IN-07 gaps it
-  deliberately does NOT close.
+  IN-04, access-event emission added IN-06). See the endpoint docstring below
+  for the IN-07 gap it deliberately does NOT close.
 """
 
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from ai_inference import __version__, gallery
-from ai_inference.auth_dependency import get_current_device_id
+from ai_inference import __version__, events, gallery
+from ai_inference.auth_dependency import get_current_device_bearer_token, get_current_device_id
 from ai_inference.config import Settings, get_settings
 from ai_inference.metrics import model_loads_total, registry
 from ai_inference.models import ModelKind, build_model_loader
@@ -32,7 +34,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for kind in ModelKind:
             loader.load(kind)
             model_loads_total.labels(kind=kind.value, result="ok").inc()
-        yield
+
+        # IN-06: periodic retry of the in-memory access-event fallback
+        # buffer, for the lifetime of the app (cancelled at shutdown below).
+        events.configure_buffer(settings.access_event_buffer_max_size)
+        flush_task = asyncio.create_task(events.run_flush_loop(settings))
+        try:
+            yield
+        finally:
+            flush_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await flush_task
 
     app = FastAPI(title=settings.service_name, version=__version__, lifespan=lifespan)
     app.state.settings = settings
@@ -55,7 +67,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/recognize", response_model=RecognizeResponse)
     async def recognize(
         request: RecognizeRequest,
+        background_tasks: BackgroundTasks,
         device_id: str = Depends(get_current_device_id),
+        device_bearer_token: str | None = Depends(get_current_device_bearer_token),
     ) -> RecognizeResponse:
         """Face recognition over 1+ base64 frames (IN-03, FR-INF-01/02/03).
 
@@ -66,13 +80,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         malformed/unknown/wrong-secret credentials -> 401; a credential
         belonging to an administratively DISABLED device -> 403
         (NFR-SEC-04). `device_id` is resolved but not yet used to scope the
-        gallery search or attributed to an `access_events` row -- that lands
-        with IN-06 (event emission).
+        gallery search.
 
-        See `ai_inference.pipeline.recognize` module docstring for the full
-        list of other deliberate gaps (no IN-06 event emission, no IN-07
-        atomic model switch). IN-04 (real liveness/PAD, `SPOOF_SUSPECTED`)
-        is now closed -- see that module for the MiniFASNet-based gate.
+        **IN-06 (access-event emission)**: after computing the decision, the
+        SAME device bearer token is forwarded to backend's own
+        `POST /access-events` (BE-10) via `BackgroundTasks` -- fire-and-forget,
+        after this response is already returned, per TSD SS1.3/NFR-PRF-01. A
+        failed/slow backend never delays or fails this response; see
+        `ai_inference.events` module docstring for the fallback-buffer
+        mechanism.
+
+        See `ai_inference.pipeline.recognize` module docstring for the
+        remaining deliberate gap (no IN-07 atomic model switch). IN-04 (real
+        liveness/PAD, `SPOOF_SUSPECTED`) is now closed -- see that module for
+        the MiniFASNet-based gate.
         """
         if not settings.db_dsn:
             raise HTTPException(
@@ -121,6 +142,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
         finally:
             conn.close()
+
+        if device_bearer_token is not None:
+            background_tasks.add_task(
+                events.emit_access_event_background,
+                settings,
+                device_bearer_token,
+                {
+                    "decision": response_dict["decision"],
+                    "matched_user_id": response_dict["user_id"],
+                    "similarity": response_dict["similarity"],
+                    "liveness_score": response_dict["liveness_score"],
+                    "model_version": response_dict["model_version"] or None,
+                    "latency_ms": response_dict["latency_ms"],
+                },
+            )
         return RecognizeResponse(**response_dict)
 
     # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set and the `otel` extra is installed.

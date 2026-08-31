@@ -74,6 +74,32 @@ class Settings(BaseSettings):
     # point.
     liveness_threshold: float = 0.5
 
+    # --- IN-06: access-event emission (TSD SS1.3, FR-INF-04) --------------
+    # Base URL of the `backend/` Core API this service reports decisions to,
+    # e.g. "http://localhost:8000". Empty (the default) means event emission
+    # is a no-op -- see `ai_inference.events.emit_access_event_background`
+    # docstring for why that's a silent skip rather than a buffered failure.
+    backend_base_url: str = ""
+    # Path of BE-10's ingest endpoint, mounted under the backend's own
+    # `API_V1_PREFIX` (default `/api/v1`, see backend/.env.example) -- kept
+    # configurable here rather than hardcoded in case that prefix changes.
+    backend_access_events_path: str = "/api/v1/access-events"
+    # Short timeout so a slow/unresponsive backend can never meaningfully
+    # delay the retry loop or (transitively) the next `/recognize` request --
+    # this call already runs off the hot path via BackgroundTasks, but an
+    # unbounded timeout would still let a stuck backend pile up in-flight
+    # background tasks indefinitely.
+    access_event_timeout_seconds: float = 2.0
+    # Bound on the in-memory fallback buffer (TSD SS1.3: "local fallback
+    # buffer in memory"). Once full, the OLDEST buffered event is evicted to
+    # make room for the newest -- see `ai_inference.events` module docstring
+    # for why this is a deliberate, observable trade-off (not silent data
+    # loss) rather than an attempt at a durable/unbounded outbox.
+    access_event_buffer_max_size: int = 1000
+    # How often the background retry loop (`ai_inference.events.run_flush_loop`,
+    # started from the app lifespan) attempts to drain the fallback buffer.
+    access_event_retry_interval_seconds: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:
