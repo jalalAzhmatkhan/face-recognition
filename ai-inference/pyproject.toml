@@ -16,10 +16,22 @@ dependencies = [
 # Heavy runtime deps: declared here, installed on demand (`uv sync --extra ml`).
 # All imports of these packages in src/ are lazy so the service skeleton,
 # smoke tests, and CI stay green without them.
+#
+# IN-03 decision: ai-inference does NOT duplicate ai-training's detection/
+# alignment/embedding code. It depends on `ai-training` itself as a `uv`
+# **path dependency** (see `[tool.uv.sources]` below) for the already-live
+# `ai_training.embedding.*` / `ai_training.quality.pose` pipeline. That
+# dependency (with ai-training's own heavy `ml` extra active, which pulls in
+# torch/opencv-python-headless/mediapipe/psycopg[binary]/pgvector/boto3/etc
+# transitively) is listed HERE, under ai-inference's own `ml` extra, not in
+# `[project.dependencies]` above — so a base `uv sync` (no extras) never
+# needs it, keeping the service skeleton + smoke tests + base CI as light as
+# they are today.
 ml = [
     "torch>=2.2",
     "mlflow>=2.14",
     "onnxruntime>=1.18",
+    "ai-training[ml]",
 ]
 # OTel tracing is fully optional/lazy (src/ai_inference/tracing.py): the
 # service stays runnable in dev/CI without a collector or these packages.
@@ -35,6 +47,12 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.5",
 ]
+
+[tool.uv.sources]
+# Path dependency onto the sibling ai-training package (editable, monorepo-
+# local — never published to a package index). See the `ml` extra comment
+# above for why this lives under an optional extra rather than base deps.
+ai-training = { path = "../ai-training", editable = true }
 
 [build-system]
 requires = ["hatchling"]
