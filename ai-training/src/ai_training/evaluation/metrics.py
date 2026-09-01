@@ -98,13 +98,25 @@ class EvalReport(BaseModel):
 def _split_gallery_and_probes(
     snapshot: DatasetSnapshot, gallery_media_per_identity: int
 ) -> tuple[dict[str, list[MediaEntry]], list[tuple[str | None, MediaEntry]]]:
-    """See module docstring for the split rule this implements."""
+    """See module docstring for the split rule this implements.
+
+    An entry with no `user_id` (EC-TR-05: a `source=event_frame` probe
+    `access_events` never matched to an identity) is always an
+    unconditional impostor probe on its own - it must never be grouped
+    with other such entries under one shared key, which would silently
+    treat every unmatched identity in the snapshot as if they were the
+    same person once two or more of them show up together.
+    """
     by_identity: dict[str, list[MediaEntry]] = {}
+    unmatched_probes: list[tuple[str | None, MediaEntry]] = []
     for entry in snapshot.media:
+        if entry.user_id is None:
+            unmatched_probes.append((None, entry))
+            continue
         by_identity.setdefault(entry.user_id, []).append(entry)
 
     gallery_entries: dict[str, list[MediaEntry]] = {}
-    probes: list[tuple[str | None, MediaEntry]] = []
+    probes: list[tuple[str | None, MediaEntry]] = list(unmatched_probes)
     for user_id, media in by_identity.items():
         if len(media) < 2:
             # Held out entirely: impostor probe(s), never enter the gallery.

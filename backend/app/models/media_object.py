@@ -15,10 +15,16 @@ from app.models.mixins import CreatedAtMixin, UUIDPKMixin
 class MediaObject(UUIDPKMixin, CreatedAtMixin, Base):
     __tablename__ = "media_objects"
 
-    session_id: Mapped[uuid.UUID] = mapped_column(
+    # Nullable since EC-TR-05 (migration b2e6f9a1c4d7): NULL means this row
+    # is an EVENT_FRAME (a door-camera frame captured at recognition time,
+    # linked instead via `AccessEvent.frame_media_id`) rather than
+    # enrollment media - see that migration's docstring. No code path
+    # writes a NULL session_id yet; every row written via the enrollment
+    # presign flow (app/services/media_service.py) still always sets one.
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("enrollment_sessions.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     kind: Mapped[MediaKind] = mapped_column(

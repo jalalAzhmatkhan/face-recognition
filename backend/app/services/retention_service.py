@@ -56,15 +56,14 @@ enrollment lifecycle. Its retention clock therefore anchors on
 `media_objects.created_at` (when the frame object itself was recorded), not
 on any enrollment session field.
 
-**Known schema gap (out of scope for BE-14, noted here for whoever picks up
-IN-06):** `media_objects.session_id` is currently `NOT NULL` (a mandatory FK
-to `enrollment_sessions`), which is incompatible with an EVENT_FRAME that
-has no enrollment session at all. No code today actually inserts EVENT_FRAME
-rows (`ai-inference/` — the would-be producer, IN-06 — doesn't exist yet), so
-there is no live data to migrate; but `session_id` will need to become
-nullable before IN-06 can create real EVENT_FRAME rows. The cleanup logic
-below is written generically against `kind == EVENT_FRAME` so it needs no
-changes once that schema fix lands — it simply starts seeing real rows.
+**Schema gap CLOSED by EC-TR-05 (migration `b2e6f9a1c4d7`):**
+`media_objects.session_id` is now nullable, which is what representing an
+EVENT_FRAME (no enrollment session) actually requires. No code today still
+inserts EVENT_FRAME rows (`ai-inference/` — the would-be producer,
+IN-06-style event ingestion — doesn't exist yet), so there is no live data
+to migrate yet. The cleanup logic below is written generically against
+`kind == EVENT_FRAME` so it needs no changes once that ingestion lands — it
+simply starts seeing real rows.
 """
 
 from __future__ import annotations
