@@ -826,6 +826,222 @@ def test_dual_mode_enabled_device_class_override_used_for_threshold(monkeypatch)
     assert result.decision == "UNKNOWN"
 
 
+def test_device_class_config_resolution_disabled_by_default_no_db_read(monkeypatch) -> None:
+    """EC-IN-06 regression: default settings (both flags False) never call
+    `gallery.get_device_class`/`get_recognition_config_override` at all --
+    byte-identical to pre-EC-IN-04/06 behavior even when a `device_id` IS
+    supplied."""
+    from ai_inference.config import Settings
+
+    settings = Settings(min_frames_for_grant=1)
+    assert settings.dual_mode_threshold_enabled is False
+    assert settings.device_class_config_resolution_enabled is False
+
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=False)
+
+    from ai_inference import gallery as gallery_module
+
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("must not read device_class/recognition_configs when both flags off")
+
+    monkeypatch.setattr(gallery_module, "get_device_class", _must_not_be_called)
+    monkeypatch.setattr(gallery_module, "get_recognition_config_override", _must_not_be_called)
+    monkeypatch.setattr(
+        gallery_module, "search_top_k", lambda cursor, **kwargs: [("u1", 0.9)]
+    )
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = run_recognition(
+        ["frame_a", "frame_b"],
+        settings,
+        embedder=embedder,
+        cursor=_FiqaFakeCursor(embedder.model_version),
+        liveness_detector=_AlwaysLiveLivenessDetector(),
+        device_id="device-1",
+    )
+    assert result.decision == "GRANTED"
+
+
+def test_device_class_config_resolution_enabled_alone_applies_override_without_dual_mode(
+    monkeypatch,
+) -> None:
+    """EC-IN-06: `device_class_config_resolution_enabled` on its own (dual
+    -mode masked/normal experiment still OFF) resolves a device_class
+    `recognition_configs` override for the ordinary path -- an operator
+    does not have to opt into the separate masked-mode experiment just to
+    get per-device_class threshold overrides."""
+    from ai_inference.config import Settings
+
+    settings = Settings(
+        min_frames_for_grant=1,
+        dual_mode_threshold_enabled=False,
+        device_class_config_resolution_enabled=True,
+        similarity_threshold=0.35,
+    )
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=False)
+    _patch_gallery_config_lookups(
+        monkeypatch,
+        device_class="attendance",
+        override={
+            "similarity_threshold": 0.99,
+            "margin": None,
+            "liveness_threshold": None,
+            "min_frames": None,
+        },
+    )
+
+    from ai_inference import gallery as gallery_module
+
+    monkeypatch.setattr(gallery_module, "search_top_k", lambda cursor, **kwargs: [("u1", 0.5)])
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = run_recognition(
+        ["frame_a", "frame_b"],
+        settings,
+        embedder=embedder,
+        cursor=_FiqaFakeCursor(embedder.model_version),
+        liveness_detector=_AlwaysLiveLivenessDetector(),
+        device_id="device-1",
+    )
+    # 0.5 clears the DEFAULT 0.35 but not the DEVICE_CLASS override's 0.99.
+    assert result.decision == "UNKNOWN"
+
+
+def test_device_class_config_resolution_enabled_never_switches_to_masked_mode(monkeypatch) -> None:
+    """EC-IN-06: the masked-vs-normal MODE decision stays exclusively
+    `dual_mode_threshold_enabled`'s job -- with only `device_class_config_
+    resolution_enabled` on, a frame flagged `masked` must still resolve
+    `mode="normal"` (no masked-filtered gallery search, no masked-mode
+    threshold)."""
+    from ai_inference.config import Settings
+
+    settings = Settings(
+        min_frames_for_grant=1,
+        dual_mode_threshold_enabled=False,
+        device_class_config_resolution_enabled=True,
+        similarity_threshold_masked=0.99,  # would DENY at 0.5 if wrongly selected
+        similarity_threshold=0.35,
+    )
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=True)
+    _patch_gallery_config_lookups(monkeypatch)
+
+    from ai_inference import gallery as gallery_module
+
+    calls: list[dict] = []
+
+    def fake_search(cursor, **kwargs):
+        calls.append(kwargs)
+        return [("u1", 0.5)]
+
+    monkeypatch.setattr(gallery_module, "search_top_k", fake_search)
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = run_recognition(
+        ["frame_a", "frame_b"],
+        settings,
+        embedder=embedder,
+        cursor=_FiqaFakeCursor(embedder.model_version),
+        liveness_detector=_AlwaysLiveLivenessDetector(),
+        device_id="device-1",
+    )
+    assert all("masked" not in c for c in calls)  # unfiltered gallery search, normal mode
+    assert result.decision == "GRANTED"  # 0.5 clears the 0.35 normal-mode threshold
+
+
+def test_device_without_class_behaves_identically_to_no_override(monkeypatch) -> None:
+    """EC-IN-06 acceptance criterion: "device tanpa class -> perilaku
+    identik existing" -- a device with no `device_class` on record resolves
+    to the exact same threshold as if the flag were off entirely."""
+    from ai_inference.config import Settings
+
+    settings = Settings(
+        min_frames_for_grant=1,
+        device_class_config_resolution_enabled=True,
+        similarity_threshold=0.35,
+    )
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=False)
+    _patch_gallery_config_lookups(monkeypatch, device_class=None, override=None)
+
+    from ai_inference import gallery as gallery_module
+
+    monkeypatch.setattr(gallery_module, "search_top_k", lambda cursor, **kwargs: [("u1", 0.5)])
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = run_recognition(
+        ["frame_a", "frame_b"],
+        settings,
+        embedder=embedder,
+        cursor=_FiqaFakeCursor(embedder.model_version),
+        liveness_detector=_AlwaysLiveLivenessDetector(),
+        device_id="device-1",
+    )
+    assert result.decision == "GRANTED"  # 0.5 clears the unoverridden default 0.35
+
+
+def test_multiple_device_classes_resolve_independent_overrides(monkeypatch) -> None:
+    """EC-IN-06 acceptance criterion: "teruji multi-class" -- two different
+    device_classes each resolve their OWN configured override, not each
+    other's."""
+    from ai_inference import gallery as gallery_module
+    from ai_inference.config import Settings
+
+    overrides_by_class = {
+        "door_entry": {
+            "similarity_threshold": 0.99,
+            "margin": None,
+            "liveness_threshold": None,
+            "min_frames": None,
+        },
+        "attendance": {
+            "similarity_threshold": 0.10,
+            "margin": None,
+            "liveness_threshold": None,
+            "min_frames": None,
+        },
+    }
+    settings = Settings(
+        min_frames_for_grant=1,
+        device_class_config_resolution_enabled=True,
+        similarity_threshold=0.35,
+    )
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=False)
+    monkeypatch.setattr(
+        gallery_module,
+        "get_recognition_config_override",
+        lambda cursor, *, mode, device_class: overrides_by_class.get(device_class),
+    )
+    monkeypatch.setattr(gallery_module, "search_top_k", lambda cursor, **kwargs: [("u1", 0.5)])
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+
+    monkeypatch.setattr(gallery_module, "get_device_class", lambda cursor, device_id: "door_entry")
+    door_result, _mv, _ls = run_recognition(
+        ["frame_a", "frame_b"],
+        settings,
+        embedder=embedder,
+        cursor=_FiqaFakeCursor(embedder.model_version),
+        liveness_detector=_AlwaysLiveLivenessDetector(),
+        device_id="door-device",
+    )
+    assert door_result.decision == "UNKNOWN"  # 0.5 fails door_entry's strict 0.99 override
+
+    monkeypatch.setattr(gallery_module, "get_device_class", lambda cursor, device_id: "attendance")
+    attendance_result, _mv, _ls = run_recognition(
+        ["frame_a", "frame_b"],
+        settings,
+        embedder=embedder,
+        cursor=_FiqaFakeCursor(embedder.model_version),
+        liveness_detector=_AlwaysLiveLivenessDetector(),
+        device_id="attendance-device",
+    )
+    assert attendance_result.decision == "GRANTED"  # 0.5 clears attendance's loose 0.10 override
+
+
 def test_decide_no_spoof_frames_behaves_exactly_as_before() -> None:
     # Regression: identical to test_decide_grants_when_same_user_wins_min_frames
     # above but with spoof_suspect explicitly False everywhere -- confirms

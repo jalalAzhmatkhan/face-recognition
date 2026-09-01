@@ -230,6 +230,28 @@ class Settings(BaseSettings):
     margin_threshold_masked: float = 0.0
     min_frames_for_grant_masked: int = 2
 
+    # --- EC-IN-06: per-device_class `recognition_configs` resolution,
+    # DECOUPLED from `dual_mode_threshold_enabled` (TSD-edge-cases.md D-5) --
+    # A device_class-scoped operator override (BE-04's `recognition_configs`
+    # table) should be adoptable on its own, WITHOUT also opting into the
+    # masked/normal dual-mode experiment above (which is gated separately,
+    # pending its own EC-TR-01 benchmark validation) -- the two features
+    # ship independently and this flag governs only "read `recognition_
+    # configs`/resolve `device_class` at all", never the masked-vs-normal
+    # MODE choice itself (that stays exclusively `dual_mode_threshold_
+    # enabled`'s job, see `ai_inference.pipeline.recognize`).
+    #
+    # Default False: `run_recognition`'s decision path is BYTE-FOR-BYTE
+    # identical to before this flag existed -- no device_class lookup, no
+    # `recognition_configs` DB read, same as `dual_mode_threshold_enabled=
+    # False`'s existing "zero regression by default" contract. Once True (a
+    # device WITHOUT a `device_class` set, or with a class but no matching
+    # `recognition_configs` row) resolves to the exact same
+    # `similarity_threshold`/`margin_threshold`/`min_frames_for_grant`
+    # values as before -- only a device whose class HAS a configured
+    # override sees a different effective threshold.
+    device_class_config_resolution_enabled: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

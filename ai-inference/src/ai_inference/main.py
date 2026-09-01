@@ -91,9 +91,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         belonging to an administratively DISABLED device -> 403
         (NFR-SEC-04). `device_id` is NOT used to scope the gallery search
         itself (still one shared gallery for every device), but IS passed
-        to `run_recognition_timed` (EC-IN-04) to resolve that device's
-        `device_class` for the DEVICE_CLASS-scoped `recognition_configs`
-        threshold override, when `settings.dual_mode_threshold_enabled`.
+        to `run_recognition_timed` (EC-IN-04/EC-IN-06) to resolve that
+        device's `device_class` for the DEVICE_CLASS-scoped
+        `recognition_configs` threshold override, when EITHER
+        `settings.dual_mode_threshold_enabled` OR
+        `settings.device_class_config_resolution_enabled` is on (the latter,
+        EC-IN-06, lets an operator adopt per-device_class overrides without
+        also opting into the masked/normal dual-mode experiment).
 
         **IN-06 (access-event emission)**: after computing the decision, the
         SAME device bearer token is forwarded to backend's own
