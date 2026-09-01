@@ -556,3 +556,36 @@ def run_gallery_reembed_job(self: Task, model_version: str) -> dict:
         "check that ai-training's Celery worker is running and consuming the "
         "'frac_default' queue."
     )
+
+
+# --- run_backfill_masked_templates_job (D-4.5, TSD-edge-cases.md) ----------
+#
+# Same name-only-proxy wiring as run_training_evaluation_job/
+# run_gallery_reembed_job directly above — the real implementation is
+# ai_training.worker.tasks.run_backfill_masked_templates_job, which reuses
+# EC-TR-02's mask-overlay/embedding pipeline (PyTorch/cv2/mediapipe, none of
+# which backend carries). This body must never actually run; it only exists
+# so app/services/training_queue.py has a real task object to call
+# `.delay()` on for job_type=BACKFILL_MASKED_TEMPLATES (EC-BE-03 created the
+# `training_jobs` row/enum value for this but deliberately left the actual
+# Celery dispatch as this task's — D-4.5's — own follow-up, see
+# app/services/training_service.py::create_training_job's docstring).
+@celery_app.task(
+    name="app.worker.tasks.run_backfill_masked_templates_job",
+    base=DeadLetterTask,
+    bind=True,
+)
+def run_backfill_masked_templates_job(self: Task, job_id: str) -> dict:
+    """Proxy registration ONLY — see the module comment directly above.
+
+    The real implementation is
+    `ai_training.worker.tasks.run_backfill_masked_templates_job` (registered
+    under this exact same task name), which is the only process that should
+    ever be subscribed to consume it.
+    """
+    raise RuntimeError(
+        "run_backfill_masked_templates_job must be executed by the ai-training worker "
+        "(ai_training.worker.tasks.run_backfill_masked_templates_job), not backend's — "
+        "check that ai-training's Celery worker is running and consuming the "
+        "'frac_default' queue."
+    )

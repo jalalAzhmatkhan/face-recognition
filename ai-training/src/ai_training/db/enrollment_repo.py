@@ -22,6 +22,8 @@ All functions take a DB-API `Cursor`-shaped object so tests can pass a
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 
@@ -107,3 +109,94 @@ def get_latest_finalized_video(cursor: Cursor, session_id: str) -> tuple[str, st
     )
     row = cursor.fetchone()
     return (row[0], row[1]) if row else None
+
+
+@dataclass(frozen=True)
+class VideoMedia:
+    """One FINALIZED video `media_objects` row, with its retention info
+    (D-4.5 backfill, TSD-edge-cases.md D-4.5/ASM-10) -- a superset of what
+    `get_latest_finalized_video` returns, added separately rather than
+    changing that function's signature/callers (TR-08's
+    `run_gallery_reembed_job_core` and its tests depend on the 2-tuple
+    shape as-is)."""
+
+    bucket: str
+    key: str
+    retention_expires_at: datetime | None
+
+
+def get_latest_finalized_video_with_retention(cursor: Cursor, session_id: str) -> VideoMedia | None:
+    """Like `get_latest_finalized_video`, plus `retention_expires_at`
+    (D-4.5's "prasyarat: media masih dalam retensi 90 hari" check).
+
+    `None` here covers BOTH "this session never had a FINALIZED video" and
+    "it had one but `retention_service.purge_expired_media` (BE-14) already
+    hard-deleted the row" -- purge deletes the `media_objects` row entirely,
+    so there is no distinguishing tombstone left behind. For a session that
+    is `ENROLLED` (the only sessions D-4.5 iterates -- see
+    `list_enrolled_sessions`), reaching ENROLLED is only possible after a
+    FINALIZED video existed at some point, so for THIS caller specifically,
+    `None` is treated as "media lewat retensi" (the legacy fallback D-4.5's
+    caller applies), not as a data-integrity error.
+
+    A row that still exists but whose `retention_expires_at` has already
+    passed (the purge job runs hourly, not instantly) is returned as-is
+    (not filtered out here) -- the caller checks `retention_expires_at`
+    against `now()` itself so it can log/count that case distinctly from
+    "row genuinely gone".
+    """
+    cursor.execute(
+        "SELECT s3_bucket, s3_key, retention_expires_at FROM media_objects "
+        "WHERE session_id = %s AND kind = 'video' AND status = 'FINALIZED' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (session_id,),
+    )
+    row = cursor.fetchone()
+    return VideoMedia(bucket=row[0], key=row[1], retention_expires_at=row[2]) if row else None
+
+
+def mark_user_reenroll_due(cursor: Cursor, *, user_id: str, reason: str) -> bool:
+    """D-4.5's permanent fallback (TSD-edge-cases.md D-4.5/A-5): flag a
+    legacy user whose enrollment video has passed retention (ASM-10, so it
+    can never be backfilled) as needing re-enrollment, via EC-BE-05's
+    `reenroll_due` mechanism (`features/ec-be-05-reenroll-due-policy`,
+    migration `d8e1f3a6c2b5`).
+
+    **Cross-service integration, confirmed live with EC-BE-05's author**:
+    `users.reenroll_due` (bool) / `users.reenroll_due_reason` (free-text-ish
+    short code, deliberately not an enum) / `users.reenroll_due_marked_at`
+    (set once, at first flagging). Written via direct SQL, same convention
+    as every other cross-service write ai-training makes (`face_embeddings`,
+    `enrollment_sessions.state`, `training_jobs`, `audit_logs` -- all direct
+    SQL against tables backend's migrations grant to the
+    `ai_training_embeddings_write` role, never an HTTP call to backend).
+
+    **Idempotency contract (EC-BE-05's, shared with its own
+    `reenroll_due_service.evaluate_reenroll_due` producer)**: if
+    `reenroll_due` is already `true` for this user, this does NOT overwrite
+    `reenroll_due_reason`/`reenroll_due_marked_at` and does NOT write a
+    duplicate audit entry -- first-to-flag wins, so two independent
+    producers (this backfill job and EC-BE-05's own age/score-based job)
+    never clobber each other's record. Returns `True` iff this call is the
+    one that actually flipped the flag false->true (the caller uses this to
+    decide whether to write the shared `user.reenroll_due_marked` audit
+    entry -- see EC-BE-05's payload shape, which this does not need to
+    match exactly beyond the `action` name, so ops can query both producers
+    with one `WHERE action = 'user.reenroll_due_marked'`); `False` means
+    "already flagged by someone, this call was a no-op".
+
+    Deliberately does not catch/suppress a schema-mismatch error itself --
+    `run_backfill_masked_templates_job_core`'s per-session try/except is
+    what turns that into a `failed`-counted session instead of aborting the
+    whole batch, exactly like every other per-session failure mode there.
+    """
+    cursor.execute("SELECT reenroll_due FROM users WHERE id = %s", (user_id,))
+    row = cursor.fetchone()
+    if row is not None and row[0]:
+        return False
+    cursor.execute(
+        "UPDATE users SET reenroll_due = true, reenroll_due_reason = %s, "
+        "reenroll_due_marked_at = now() WHERE id = %s",
+        (reason, user_id),
+    )
+    return True

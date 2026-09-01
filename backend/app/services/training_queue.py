@@ -42,3 +42,32 @@ def enqueue_training_job(job_id: uuid.UUID, model_version: str, benchmark_id: st
             "remains PENDING until the job is (re)dispatched",
             job_id,
         )
+
+
+def enqueue_backfill_masked_templates_job(job_id: uuid.UUID) -> None:
+    """Enqueue the async D-4.5 backfill job for `job_id`
+    (`job_type=BACKFILL_MASKED_TEMPLATES`, EC-BE-03/this task).
+
+    Mirrors `enqueue_training_job` exactly (same best-effort/never-raises
+    dispatch against the shared Redis broker) — the actual backfill logic
+    (`ai_training.embedding.synthetic_masked` reuse + per-session
+    iteration) runs entirely in ai-training's own Celery worker
+    (`ai_training/worker/tasks.py::run_backfill_masked_templates_job`),
+    registered under the identical task name — see
+    `app/worker/tasks.py`'s `run_backfill_masked_templates_job` docstring
+    for why backend's own copy of that task name must never actually
+    execute. Unlike `enqueue_training_job`, there is no `model_version`/
+    `benchmark_id` to pass through — the backfill job takes only `job_id`
+    and discovers every legacy `ENROLLED` session itself.
+    """
+    try:
+        from app.worker.tasks import run_backfill_masked_templates_job
+
+        run_backfill_masked_templates_job.delay(job_id=str(job_id))
+    except Exception:
+        logger.exception(
+            "training_queue.enqueue_backfill_masked_templates_job: failed to dispatch "
+            "run_backfill_masked_templates_job for job_id=%s (broker unavailable?) — job "
+            "remains PENDING until the job is (re)dispatched",
+            job_id,
+        )

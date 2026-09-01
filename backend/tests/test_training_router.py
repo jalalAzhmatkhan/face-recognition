@@ -154,6 +154,21 @@ def _no_real_gallery_dispatch(monkeypatch: pytest.MonkeyPatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def _no_real_backfill_masked_dispatch(monkeypatch: pytest.MonkeyPatch):
+    """Never touch a real Redis broker for the D-4.5 backfill dispatch
+    either (EC-TR-03 wired `create_training_job` to call this for
+    `job_type=BACKFILL_MASKED_TEMPLATES`) — same rationale as
+    `_no_real_celery_dispatch`/`_no_real_gallery_dispatch` above."""
+    calls: list[uuid.UUID] = []
+
+    def _fake_enqueue(job_id):
+        calls.append(job_id)
+
+    monkeypatch.setattr(training_queue, "enqueue_backfill_masked_templates_job", _fake_enqueue)
+    return calls
+
+
 @pytest.fixture
 def job_repo() -> FakeTrainingJobRepository:
     return FakeTrainingJobRepository()
@@ -322,9 +337,13 @@ def test_create_gallery_reembed_job_succeeds_with_model_version(
 
 
 def test_create_backfill_masked_templates_job_succeeds_with_no_fields(
-    admin_client: TestClient, _no_real_celery_dispatch
+    admin_client: TestClient, _no_real_celery_dispatch, _no_real_backfill_masked_dispatch
 ) -> None:
-    """No required fields beyond job_type itself (D-4.5)."""
+    """No required fields beyond job_type itself (D-4.5). EC-TR-03 wired
+    this job_type to dispatch `run_backfill_masked_templates_job` (unlike
+    GALLERY_REEMBED/FINETUNE_*, which still persist a row with no
+    dispatch) — verified via `_no_real_backfill_masked_dispatch` instead of
+    `_no_real_celery_dispatch` (that one is EVALUATION-only)."""
     response = admin_client.post(
         "/api/v1/training/jobs",
         json={"job_type": "BACKFILL_MASKED_TEMPLATES"},
@@ -335,6 +354,8 @@ def test_create_backfill_masked_templates_job_succeeds_with_no_fields(
     assert body["model_version"] is None
     assert body["benchmark_id"] is None
     assert len(_no_real_celery_dispatch) == 0
+    assert len(_no_real_backfill_masked_dispatch) == 1
+    assert str(_no_real_backfill_masked_dispatch[0]) == body["id"]
 
 
 def test_create_job_with_snapshot_id_is_persisted(

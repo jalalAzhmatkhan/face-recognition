@@ -31,6 +31,32 @@ def has_embeddings_for_model(cursor: Cursor, *, session_id: str, model_version: 
     return cursor.fetchone() is not None
 
 
+def user_has_synthetic_masked_embeddings(cursor: Cursor, *, user_id: str) -> bool:
+    """D-4.5 backfill idempotency check (TSD-edge-cases.md D-4.5 acceptance
+    criteria: "skip user yg sudah punya"): has this user got AT LEAST one
+    `synthetic_masked` template already, from ANY prior run/model_version?
+
+    Deliberately USER-scoped, not `(session_id, model_version)`-scoped like
+    `has_embeddings_for_model` (TR-08) -- D-4.5 is a one-time gap-fill job
+    for legacy users, not something that should redo itself on every
+    embedder upgrade the way the ordinary gallery re-embed job does. This
+    check runs BEFORE any download/decode/mask-overlay work per session, so
+    a re-run of the backfill job skips already-backfilled users cheaply,
+    rather than relying only on `upsert_synthetic_masked_embeddings`'s
+    delete-then-insert to make a redundant re-run merely wasteful instead of
+    wrong -- for D-4.5 specifically we want the redundant work never to
+    happen at all (task-breakdown.md's "durasi <= orde menit utk <=5k user"
+    budget assumes already-done users are skipped up front, not
+    re-downloaded and re-processed every run).
+    """
+    cursor.execute(
+        "SELECT 1 FROM face_embeddings WHERE user_id = %s AND template_kind = 'synthetic_masked' "
+        "LIMIT 1",
+        (user_id,),
+    )
+    return cursor.fetchone() is not None
+
+
 def upsert_embeddings(
     cursor: Cursor,
     *,

@@ -30,6 +30,20 @@ def mark_job_succeeded(cursor: Cursor, job_id: str, *, mlflow_run_id: str) -> No
     )
 
 
+def mark_job_succeeded_without_run(cursor: Cursor, job_id: str) -> None:
+    """Like `mark_job_succeeded`, for job types that never produce an MLflow
+    run (D-4.5 `BACKFILL_MASKED_TEMPLATES` -- it writes `face_embeddings`
+    rows directly, no training/evaluation run to record). Kept as a
+    separate function rather than making `mlflow_run_id` optional on
+    `mark_job_succeeded`, so every EVALUATION call site keeps requiring one
+    explicitly (a training-evaluation job silently succeeding with no
+    run id would be a real bug worth a type error, not a valid state)."""
+    cursor.execute(
+        "UPDATE training_jobs SET status = 'SUCCEEDED', completed_at = now() WHERE id = %s",
+        (job_id,),
+    )
+
+
 def mark_job_failed(cursor: Cursor, job_id: str, *, error_message: str) -> None:
     cursor.execute(
         "UPDATE training_jobs SET status = 'FAILED', completed_at = now(), "
