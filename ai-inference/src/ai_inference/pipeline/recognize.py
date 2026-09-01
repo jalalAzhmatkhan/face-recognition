@@ -448,6 +448,17 @@ def run_recognition(
                 merge_condition_flags,
             )
 
+            # EC-IN-03 (TSD-edge-cases.md C-2): the trained masked/
+            # sunglasses classifier, if a model is configured and loads
+            # successfully -- `get_classifier()` returns `None` (logging a
+            # warning once) when it isn't, and `compute_condition_flags`
+            # falls back to the EC-IN-01 heuristic in that case, so this
+            # never changes behavior when no model is shipped. Cached
+            # singleton (`lru_cache`): this import + call is cheap on every
+            # frame after the first.
+            from ai_inference.pipeline.mask_sunglasses import get_classifier
+
+            classifier = get_classifier()
             frame_flags = compute_condition_flags(
                 frame_bgr,
                 bbox_xy=detection.bbox_xy,
@@ -456,6 +467,7 @@ def run_recognition(
                 right_eye=detection.right_eye,
                 left_mouth=detection.left_mouth,
                 right_mouth=detection.right_mouth,
+                classifier=classifier.classify if classifier is not None else None,
             )
             aggregated_condition_flags = merge_condition_flags(
                 aggregated_condition_flags, frame_flags

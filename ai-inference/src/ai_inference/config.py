@@ -168,6 +168,32 @@ class Settings(BaseSettings):
     # threshold in this file.
     quality_gate_fiqa_min_feature_norm: float = 15.0
 
+    # --- EC-IN-03: masked/sunglasses classifier (TSD-edge-cases.md C-2/
+    # OQ-4) -- replaces EC-IN-01's placeholder landmark-intensity heuristic
+    # in `condition_flags.masked`/`condition_flags.sunglasses` when a model
+    # is configured and loads successfully; see
+    # `ai_inference.pipeline.mask_sunglasses` module docstring for the
+    # fail-safe (never-crash, fall back to the heuristic) contract. ------
+    # Filesystem path to the exported ONNX model
+    # (`ai_training.classifiers.mask_sunglasses.export_onnx`'s output).
+    # Empty by default (no model shipped in this sandbox/repo yet) -- an
+    # empty path is a normal, expected "not configured" state, not an
+    # error: `load_classifier` logs a warning and this service falls back
+    # to the EC-IN-01 heuristic for every frame, same as today.
+    mask_sunglasses_model_path: str = ""
+    # Crop size (px) the model was exported for -- MUST match the `img_size`
+    # `export_onnx` was called with (TSD-edge-cases.md C-2's 64-96px range;
+    # `ai_training.classifiers.mask_sunglasses.DEFAULT_IMG_SIZE` is 96).
+    mask_sunglasses_img_size: int = 96
+    # Sigmoid-probability cutoffs for the model's 2 independent multi-label
+    # outputs (`ai_training.classifiers.mask_sunglasses.LABEL_NAMES`).
+    # 0.5 is the standard uncalibrated midpoint -- NOT yet calibrated
+    # against real validation data (same "tune later" status as
+    # `similarity_threshold`/`liveness_threshold` above), pending a real
+    # trained checkpoint + EC-TR-01's benchmark slice harness.
+    mask_sunglasses_masked_threshold: float = 0.5
+    mask_sunglasses_sunglasses_threshold: float = 0.5
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -19,19 +19,31 @@ condition_flags: dict[str, bool] | None`` expects -- keys ``dark``,
 ``blurry``, ``low_res``, ``masked``, ``sunglasses`` (TSD-edge-cases.md
 D-1/D-3's canonical set).
 
-**`masked`/`sunglasses` are a PLACEHOLDER heuristic only** (EC-IN-01 task
+**`masked`/`sunglasses` were a PLACEHOLDER heuristic only** (EC-IN-01 task
 brief, TSD-edge-cases.md D-3/C-2): cheap intensity/texture checks around the
 eye and mouth landmarks -- NOT a trained classifier. TSD-edge-cases.md D-3
 explicitly designates the real signal as a dedicated 3-class classifier
 (``masked``/``sunglasses``/``none``, EC-IN-03) and calls out landmark-based
 heuristics as "secondary/sanity-check signal only... a landmark detector
 guesses features under a mask with confidence that does not reliably drop"
-(NIST IR 8311). Treat these two flags as low-confidence, log-only signals;
-do not use them for any security-relevant gating, and replace them with
-EC-IN-03's classifier output as soon as it lands.
+(NIST IR 8311).
+
+**EC-IN-03 update**: ``compute_condition_flags`` now accepts an optional
+``classifier`` callable (see the ``classifier`` parameter below). When
+given, it is tried FIRST for ``masked``/``sunglasses`` -- the heuristic
+above becomes the fallback, used only when no classifier is supplied, or
+the classifier call fails/returns ``None`` (model not loaded, inference
+error, etc.). This module itself stays classifier-agnostic and importable
+with zero ``ml``-extra dependency: the classifier is injected by the
+caller (``ai_inference.pipeline.recognize``, via
+``ai_inference.pipeline.mask_sunglasses.get_classifier``), never imported
+here. Per ASM-EC-09, the heuristic remains explicitly a secondary
+sanity-check signal, not the primary one, once a classifier is configured.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import numpy as np
 
@@ -162,13 +174,25 @@ def compute_condition_flags(
     sunglasses_mean_max: float = SUNGLASSES_MEAN_MAX,
     sunglasses_vol_max: float = SUNGLASSES_VOL_MAX,
     masked_mouth_vol_max: float = MASKED_MOUTH_VOL_MAX,
+    classifier: Callable[[np.ndarray], tuple[bool, bool] | None] | None = None,
 ) -> dict[str, bool]:
     """One frame's `condition_flags` (TSD-edge-cases.md D-1): `dark`,
     `blurry`, `low_res` are cheap, reasonably-trustworthy signals; `masked`/
-    `sunglasses` are the placeholder heuristic described in the module
-    docstring. All inputs are plain pixel-coordinate tuples (as returned by
-    `ai_training.quality.pose.FaceDetection`) rather than that dataclass
-    itself, so this module has zero dependency on the `ml` extra.
+    `sunglasses` come from `classifier` (EC-IN-03) when supplied and it
+    succeeds, else fall back to the placeholder heuristic described in the
+    module docstring. All inputs are plain pixel-coordinate tuples (as
+    returned by `ai_training.quality.pose.FaceDetection`) rather than that
+    dataclass itself, so this module has zero dependency on the `ml`
+    extra -- `classifier`, if passed, is the caller's responsibility to
+    build (see `ai_inference.pipeline.mask_sunglasses.get_classifier`).
+
+    `classifier` receives the BGR face crop (`frame_bgr[y0:y1, x0:x1]`,
+    same box used for the heuristic's own luma conversion) and must return
+    `(masked, sunglasses)` or `None` (meaning "could not classify this
+    frame, use the heuristic instead") -- it must never raise; this
+    function wraps the call in `try`/`except` anyway as a second layer of
+    defense so a misbehaving classifier can NEVER crash condition-flag
+    computation (and by extension `/recognize`).
 
     Never raises on a degenerate/edge-of-frame bbox or landmark -- an
     unmeasurable flag simply defaults to `False` (see `_clamp_box`), since
@@ -237,6 +261,22 @@ def compute_condition_flags(
         masked = bool(_variance_of_laplacian(mouth_patch) < masked_mouth_vol_max)
     else:
         masked = False
+
+    # EC-IN-03: prefer the trained classifier's output over the heuristic
+    # above when one is supplied and it succeeds. `classifier` is trusted
+    # to already do its own error handling and return `None` on failure
+    # (see `ai_inference.pipeline.mask_sunglasses.MaskSunglassesClassifier
+    # .classify`'s docstring) but this is wrapped in `try`/`except` anyway
+    # as defense-in-depth -- see this function's own docstring.
+    if classifier is not None:
+        try:
+            classifier_result = classifier(frame_bgr[fy0:fy1, fx0:fx1])
+        except Exception:
+            classifier_result = None
+        if classifier_result is not None:
+            masked, sunglasses = classifier_result
+            masked = bool(masked)
+            sunglasses = bool(sunglasses)
 
     return {
         "dark": dark,
