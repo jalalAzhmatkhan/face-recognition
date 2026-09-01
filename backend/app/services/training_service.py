@@ -137,6 +137,28 @@ def promote_model(
          current PRODUCTION model at all (this is the first-ever
          promotion; there is no baseline to regress against).
       4. `latency_ms_p95 <= settings.promotion_latency_budget_ms` (NFR-PRF-01).
+      5. EC-QA-01: `slice_gate_report["passes"]` must not be `False` — the
+         per-slice no-regression-bertoleransi-CI gate
+         (`ai_training.evaluation.regression_gate.evaluate_slice_regression_gate`)
+         computed and persisted by the ai-training worker
+         (`ai_training.db.training_job_repo.upsert_model_slice_gate_report`)
+         onto `models.slice_gate_report`. This can reject a candidate that
+         passes gate 3 (overall Recall) but regresses badly on one critical
+         condition (masked-riil/dark/low-res/hijab/per-demografi-utama) that
+         is a small slice of the overall benchmark. `slice_gate_report is
+         None` (no report computed for this candidate yet — e.g. evaluated
+         before EC-QA-01 shipped, or the harness has no data for any
+         critical slice this run) is explicitly NOT a failure: backend has
+         no way to independently verify slice Recall (that needs the ML
+         stack ai-training carries and this service does not), so it can
+         only check a report that already exists, never fabricate one.
+         Cross-service note: ai-training and backend are separate `uv`
+         projects/environments with no shared Python import path, so this
+         is NOT a Python function call into `ai_training.evaluation.*` —
+         it reads a plain JSON column the other service already writes into
+         the SAME Postgres `models` table (identical mechanism the existing
+         `recall`/`f1`/`precision`/`latency_ms_p95` gates already rely on),
+         rather than adding a new HTTP round-trip between the two services.
 
     On success: sets `stage=PRODUCTION`, `promoted_by`, `promoted_at`; if a
     different model was PRODUCTION, it is demoted to RETIRED (invariant: at
@@ -195,6 +217,26 @@ def promote_model(
             f"the {budget}ms budget (NFR-PRF-01)."
         )
 
+    slice_gate_report = candidate.slice_gate_report
+    if slice_gate_report is not None and slice_gate_report.get("passes") is False:
+        failed_slices = slice_gate_report.get("failed_slices") or []
+        per_slice = slice_gate_report.get("per_slice") or {}
+        for slice_name in failed_slices:
+            detail = per_slice.get(slice_name, {})
+            slice_reason = detail.get("reason") or (
+                f"slice '{slice_name}' regressed beyond tolerance"
+            )
+            reasons.append(f"EC-QA-01 slice regression gate failed: {slice_reason}")
+        if not failed_slices:
+            # Defensive fallback: passes=False with no failed_slices listed
+            # would be an internal inconsistency in the report itself — do
+            # not silently ignore it, but also do not pretend to know which
+            # slice caused it.
+            reasons.append(
+                "EC-QA-01 slice regression gate reported passes=False without "
+                "identifying which slice(s) failed."
+            )
+
     if reasons:
         raise PromotionGateError(reasons)
 
@@ -223,6 +265,7 @@ def promote_model(
             "precision": candidate.precision,
             "latency_ms_p95": candidate.latency_ms_p95,
             "first_promotion": is_first_promotion,
+            "slice_gate_report_present": slice_gate_report is not None,
         },
     )
 

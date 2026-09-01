@@ -10,6 +10,8 @@ Postgres role, widened by backend migration 7e2c4a91f3d0 to cover
 
 from __future__ import annotations
 
+import json
+
 from ai_training.db.enrollment_repo import Cursor
 
 
@@ -80,3 +82,34 @@ def upsert_model_metrics(
             "latency_ms_p95 = %s WHERE version = %s",
             (mlflow_run_id, recall, f1, precision, latency_ms_p95_int, version),
         )
+
+
+def upsert_model_slice_gate_report(
+    cursor: Cursor,
+    *,
+    version: str,
+    slice_gate_report: dict,
+) -> None:
+    """Persist an EC-QA-01 `SliceRegressionGateReport` (already
+    `.model_dump(mode="json")`-ed to a plain dict by the caller) onto the
+    `models` row for `version`, into the `slice_gate_report` JSONB column
+    (backend migration — see `backend/migrations/versions/`, additive per
+    TSD-EC D-10 convention).
+
+    Unlike `upsert_model_metrics`, this NEVER inserts a new `models` row —
+    a slice gate report is only meaningful for a model version that already
+    has (or is being evaluated alongside) overall metrics; if no row exists
+    yet this silently no-ops via a 0-rowcount UPDATE, matching the "backend
+    only ever reads this table, ai-training worker writes it" ownership
+    split documented in `app/repositories/model_versions.py` without
+    inventing a second insert path for the same table.
+
+    **Caller is responsible for using the SAME evaluation mode (`e2e` or
+    `per_stage`) for both the candidate report going in here and whatever
+    baseline it was compared against** — this function has no way to check
+    that consistency itself, it only serializes+writes the dict it's given.
+    """
+    cursor.execute(
+        "UPDATE models SET slice_gate_report = %s WHERE version = %s",
+        (json.dumps(slice_gate_report), version),
+    )
