@@ -97,12 +97,14 @@ class TrainingJobType(enum.StrEnum):
     already runs this as a side effect of promotion, this just lets it be
     triggered/tracked as a first-class job) or do not exist yet
     (`FINETUNE_EMBEDDER`/B-2, `FINETUNE_LIVENESS`/B-3,
-    `BACKFILL_MASKED_TEMPLATES`/D-4.5) — this task (B-1) only adds the
-    schema + request validation for them; the Celery tasks that actually
-    execute `FINETUNE_EMBEDDER`/`FINETUNE_LIVENESS`/
-    `BACKFILL_MASKED_TEMPLATES` are separate, later tasks (see
-    `app/services/training_queue.py`), so creating a job of one of those
-    types today persists a validated row but does not dispatch anything.
+    `BACKFILL_MASKED_TEMPLATES`/D-4.5) — this task (B-1) only added the
+    schema + request validation for them. `BACKFILL_MASKED_TEMPLATES`'s
+    Celery task and dispatch have since landed (EC-TR-03/D-4.5, see
+    `ai_training/worker/tasks.py::run_backfill_masked_templates_job` +
+    `app/services/training_queue.py::enqueue_backfill_masked_templates_job`);
+    `FINETUNE_EMBEDDER`/`FINETUNE_LIVENESS` remain separate, later tasks —
+    creating a job of either of those two types today still persists a
+    validated row without dispatching anything.
     """
 
     EVALUATION = "EVALUATION"

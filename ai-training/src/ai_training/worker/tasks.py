@@ -19,6 +19,7 @@ not silently papered over here.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from celery import Task
@@ -30,19 +31,23 @@ from ai_training.db.embedding_repo import (
     has_embeddings_for_model,
     upsert_embeddings,
     upsert_synthetic_masked_embeddings,
+    user_has_synthetic_masked_embeddings,
 )
 from ai_training.db.enrollment_repo import (
     Cursor,
     get_latest_finalized_video,
+    get_latest_finalized_video_with_retention,
     get_state,
     get_user_id,
     guarded_transition,
     list_enrolled_sessions,
+    mark_user_reenroll_due,
 )
 from ai_training.db.training_job_repo import (
     mark_job_failed,
     mark_job_running,
     mark_job_succeeded,
+    mark_job_succeeded_without_run,
     upsert_model_metrics,
 )
 from ai_training.embedding.embedder import build_embedder
@@ -738,6 +743,259 @@ def run_gallery_reembed_job(self: Task, model_version: str) -> dict[str, int]:
     try:
         with conn.cursor() as cursor:
             counts = run_gallery_reembed_job_core(cursor, settings, model_version)
+        conn.commit()
+        return counts
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+BACKFILL_MASKED_ACTOR = "system:ai-training-worker"
+
+# EC-BE-05's confirmed reason-code/actor/action convention (see
+# db.enrollment_repo.mark_user_reenroll_due's docstring) -- kept as module
+# constants here, not in enrollment_repo, since the audit-log write itself
+# happens at this orchestration layer (mirrors how every other audit entry
+# in this file is written by the task, not by the repo function it follows).
+REENROLL_DUE_REASON_VIDEO_RETENTION_EXPIRED = "video_retention_expired"
+REENROLL_DUE_ACTOR = "system:masked-template-backfill-job"
+REENROLL_DUE_MARKED_ACTION = "user.reenroll_due_marked"
+
+
+def run_backfill_masked_templates_job_core(
+    cursor: Cursor,
+    settings: Settings,
+    job_id: str,
+    *,
+    downloader: Any = _default_download_video,
+    mask_overlay_provider: MaskOverlayProvider | None = None,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """D-4.5 core logic (TSD-edge-cases.md D-4.5, `training_jobs.job_type
+    ='BACKFILL_MASKED_TEMPLATES'`, EC-BE-03): one-time batch that gives
+    every legacy `ENROLLED` user (enrolled BEFORE A-4/EC-TR-02 existed) the
+    same `synthetic_masked` templates a NEW enrollment gets today.
+
+    **Pure orchestration, no new masking logic** -- per-session it reuses
+    EXACTLY the same building blocks EC-TR-02's `run_enrollment_qc_core`
+    uses for a fresh enrollment: `run_quality_check` to decode/QC the
+    video into `frames_by_position`, then
+    `embedding.synthetic_masked.generate_synthetic_masked_templates`
+    (A-4's `select_masked_source_frames` + mask-overlay + re-detect +
+    align + embed pipeline, entirely UNCHANGED) to produce templates, then
+    `embedding_repo.upsert_synthetic_masked_embeddings` to write them. This
+    function's own job is the four things EC-TR-02 never had to do because
+    it only ever saw one brand-new session at a time: iterate every legacy
+    session, decide per-session whether to skip, isolate one session's
+    failure from the rest, and report the summary onto the `training_jobs`
+    row + `audit_logs`.
+
+    **Idempotent** (acceptance criteria: "skip user yg sudah punya"):
+    `user_has_synthetic_masked_embeddings` is checked BEFORE any
+    download/decode/mask work, per user (not per session, not scoped to
+    the current embedder `model_version`) -- this is deliberately a
+    coarser, cheaper, "has this legacy gap already been closed at all"
+    check than TR-08's `has_embeddings_for_model`, matching the fact that
+    D-4.5 is a one-off gap-fill, not something meant to redo itself on
+    every embedder promotion. A user for whom masking never actually
+    succeeded (all combinations failed/degraded, `upsert_...` inserted 0
+    rows -- e.g. THIS sandbox, `MaskTheFaceProvider` always raising, see
+    `ai_training.quality.mask_overlay`'s module docstring) still has ZERO
+    `synthetic_masked` rows afterwards, so a re-run correctly retries them
+    rather than wrongly treating "we tried once" as "done".
+
+    **Per-session failure isolation** (acceptance criteria): every session
+    is processed inside its own try/except, mirroring
+    `run_gallery_reembed_job_core`'s identical guarantee -- one session's
+    video being undecodable, its DB row being inconsistent, or any other
+    unexpected error never aborts the batch; it is logged and counted as
+    `failed`, and the loop moves on to the next session.
+
+    **Media past retention -> permanent `reenroll_due` fallback**
+    (acceptance criteria; TSD D-4.5: "bila video sudah terhapus -> fallback
+    interim ... berlaku permanen untuk user tsb sampai re-enroll (tandai
+    `reenroll_due` via A-5)"): `get_latest_finalized_video_with_retention`
+    returning `None`, or returning a row whose `retention_expires_at` has
+    already passed (the hourly purge job, BE-14, may not have run yet),
+    means this session's raw video can never be backfilled -- the session
+    is skipped WITHOUT counting as a `failed` error, and
+    `mark_user_reenroll_due` is called so the user surfaces in enrollment
+    management (REC 6.2) instead of silently staying gap-filled-never. See
+    `mark_user_reenroll_due`'s docstring for the current EC-BE-05
+    cross-service integration status.
+
+    **Scale target** ("durasi <= orde menit utk <=5k user"): not
+    load-tested here for the same reason as `run_gallery_reembed_job_core`
+    -- no 5k-session dataset exists in this environment. The idempotency
+    short-circuit above is what keeps a RE-RUN over an already-backfilled
+    population cheap (a single indexed `SELECT ... LIMIT 1` per user, no
+    S3/decode/embed work) rather than a full re-pass every time; validating
+    the FIRST-run throughput target at 5k scale is QA's job, not this
+    task's, consistent with TR-08's identical accepted scope cut above.
+
+    Returns counts for the `training_jobs`/audit-log summary:
+    `processed` (pipeline ran to completion for this session, regardless of
+    how many templates it produced -- 0 is a valid, non-error outcome, see
+    `generate_synthetic_masked_templates`'s docstring), `templates_inserted`
+    (total `synthetic_masked` rows written across all processed sessions),
+    `skipped_already_has_masked`, `skipped_media_retention_expired` (covers
+    BOTH "no FINALIZED video row at all" and "row exists but already past
+    `retention_expires_at`" -- see `get_latest_finalized_video_with_retention`'s
+    docstring for why those two collapse into one category for THIS caller),
+    and `failed` (a FINALIZED, not-yet-expired video that fails to
+    download/decode -- a genuine content/infra problem, distinct from the
+    expected "media aged out" case above).
+    """
+    now = now or datetime.now(UTC)
+    mark_job_running(cursor, job_id)
+    insert_audit_log(
+        cursor,
+        actor=BACKFILL_MASKED_ACTOR,
+        action="backfill_masked.job_running",
+        entity=f"training_job:{job_id}",
+        payload={},
+    )
+
+    embedder = build_embedder(settings)
+    provider = (
+        mask_overlay_provider
+        if mask_overlay_provider is not None
+        else build_mask_overlay_provider()
+    )
+
+    counts = {
+        "processed": 0,
+        "templates_inserted": 0,
+        "skipped_already_has_masked": 0,
+        "skipped_media_retention_expired": 0,
+        "failed": 0,
+    }
+
+    for session_id, user_id in list_enrolled_sessions(cursor):
+        try:
+            if user_has_synthetic_masked_embeddings(cursor, user_id=user_id):
+                counts["skipped_already_has_masked"] += 1
+                continue
+
+            media = get_latest_finalized_video_with_retention(cursor, session_id)
+            if media is None or (
+                media.retention_expires_at is not None and media.retention_expires_at <= now
+            ):
+                counts["skipped_media_retention_expired"] += 1
+                flipped = mark_user_reenroll_due(
+                    cursor,
+                    user_id=user_id,
+                    reason=REENROLL_DUE_REASON_VIDEO_RETENTION_EXPIRED,
+                )
+                if flipped:
+                    # EC-BE-05's shared audit convention: one
+                    # "user.reenroll_due_marked" row per false->true flip,
+                    # never a duplicate for a user some OTHER producer (or
+                    # an earlier run of this same job) already flagged --
+                    # see mark_user_reenroll_due's idempotency contract.
+                    insert_audit_log(
+                        cursor,
+                        actor=REENROLL_DUE_ACTOR,
+                        action=REENROLL_DUE_MARKED_ACTION,
+                        entity=f"user:{user_id}",
+                        payload={
+                            "user_id": user_id,
+                            "reasons": [REENROLL_DUE_REASON_VIDEO_RETENTION_EXPIRED],
+                            "session_id": session_id,
+                        },
+                    )
+                logger.info(
+                    "ai_training.worker.backfill_masked_media_retention_expired "
+                    "session_id=%s user_id=%s reenroll_due_flipped=%s",
+                    session_id,
+                    user_id,
+                    flipped,
+                )
+                continue
+
+            video_bytes = downloader(media.bucket, media.key, settings)
+
+            try:
+                _report, frames_by_position = run_quality_check(
+                    video_bytes, session_id=session_id, settings=settings.qc
+                )
+            except RuntimeError:
+                # Same "content problem, not a worker fault" classification
+                # as run_gallery_reembed_job_core's identical guard -- the
+                # video passed QC once at original enrollment time, so a
+                # decode failure here means the stored object itself is now
+                # bad (corrupted/replaced), not something a retry fixes.
+                logger.warning(
+                    "ai_training.worker.backfill_masked_video_undecodable "
+                    "session_id=%s bucket=%s key=%s",
+                    session_id,
+                    media.bucket,
+                    media.key,
+                )
+                counts["failed"] += 1
+                continue
+
+            templates = generate_synthetic_masked_templates(
+                frames_by_position, embedder, provider, session_id=session_id
+            )
+            inserted = upsert_synthetic_masked_embeddings(
+                cursor,
+                user_id=user_id,
+                session_id=session_id,
+                model_version=embedder.model_version,
+                templates=templates,
+            )
+            counts["processed"] += 1
+            counts["templates_inserted"] += inserted
+        except Exception:  # noqa: BLE001 - one session must never sink the whole batch
+            logger.exception(
+                "ai_training.worker.backfill_masked_session_failed session_id=%s", session_id
+            )
+            counts["failed"] += 1
+
+    mark_job_succeeded_without_run(cursor, job_id)
+    insert_audit_log(
+        cursor,
+        actor=BACKFILL_MASKED_ACTOR,
+        action="backfill_masked.job_completed",
+        entity=f"training_job:{job_id}",
+        payload=dict(counts),
+    )
+    return counts
+
+
+@celery_app.task(
+    name="app.worker.tasks.run_backfill_masked_templates_job",
+    base=DeadLetterTask,
+    bind=True,
+)
+def run_backfill_masked_templates_job(self: Task, job_id: str) -> dict[str, int]:
+    """D-4.5: backfill `synthetic_masked` templates for every legacy
+    `ENROLLED` user, dispatched by backend when a `training_jobs` row is
+    created with `job_type='BACKFILL_MASKED_TEMPLATES'` (EC-BE-03),
+    registered under the exact task name backend's proxy/dispatcher uses --
+    see `run_gallery_reembed_job`'s docstring for the full two-Celery-apps
+    wiring rationale this mirrors.
+
+    Unlike `run_gallery_reembed_job` (no `training_jobs` row, dispatched
+    directly with a bare `model_version`), this DOES have a job row from
+    the moment it's created via `POST /training/jobs` -- so, like
+    `run_training_evaluation_job`, an unexpected exception here is caught
+    by `run_backfill_masked_templates_job_core`'s own per-session isolation
+    for every EXPECTED failure mode; only a truly unexpected error above
+    that loop (e.g. `build_embedder`/`build_mask_overlay_provider`
+    construction itself failing) reaches this wrapper's `except`, which
+    rolls back and re-raises into `DeadLetterTask.on_failure` -- leaving
+    `training_jobs.status` at RUNNING for an operator to investigate rather
+    than papering over a genuine worker-level bug as a clean FAILED.
+    """
+    settings = get_settings()
+    conn = get_connection(settings.db.dsn)
+    try:
+        with conn.cursor() as cursor:
+            counts = run_backfill_masked_templates_job_core(cursor, settings, job_id)
         conn.commit()
         return counts
     except Exception:

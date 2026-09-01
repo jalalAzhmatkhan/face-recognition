@@ -73,16 +73,16 @@ def create_training_job(
     `params` — see TrainingJobCreateRequest for the per-type required-field
     validation that already ran before this is called).
 
-    Celery dispatch only happens for `EVALUATION` today
-    (`run_training_evaluation_job`) — UNCHANGED from pre-EC-BE-03 behaviour.
-    The other four job types persist a validated row but do not dispatch
-    anything yet: `FINETUNE_EMBEDDER`/`FINETUNE_LIVENESS`/
-    `BACKFILL_MASKED_TEMPLATES` have no Celery task implemented at all
-    (B-2/B-3/D-4.5 are separate follow-up tasks), and `GALLERY_REEMBED` is
+    Celery dispatch happens for `EVALUATION` (`run_training_evaluation_job`,
+    UNCHANGED from pre-EC-BE-03 behaviour) and, as of D-4.5 (EC-TR-03), for
+    `BACKFILL_MASKED_TEMPLATES` (`run_backfill_masked_templates_job`, via
+    `training_queue.enqueue_backfill_masked_templates_job`). The remaining
+    two job types persist a validated row but do not dispatch anything yet:
+    `FINETUNE_EMBEDDER`/`FINETUNE_LIVENESS` have no Celery task implemented
+    at all (B-2/B-3 are separate follow-up tasks), and `GALLERY_REEMBED` is
     already dispatched elsewhere as a side effect of `promote_model`
     (`gallery_queue.enqueue_gallery_reembed`) — wiring a *second*,
-    independent dispatch path for it here is out of scope for this task
-    (B-1 is schema + validation only, per the task brief).
+    independent dispatch path for it here remains out of scope.
     """
     job = TrainingJob(
         job_type=job_type,
@@ -110,6 +110,14 @@ def create_training_job(
 
     if job_type == TrainingJobType.EVALUATION:
         training_queue.enqueue_training_job(job.id, model_version, benchmark_id)
+    elif job_type == TrainingJobType.BACKFILL_MASKED_TEMPLATES:
+        # D-4.5 (this task): the one job type EC-BE-03's docstring above
+        # explicitly deferred dispatch for. FINETUNE_EMBEDDER/
+        # FINETUNE_LIVENESS still have no Celery task at all (B-2/B-3, still
+        # separate follow-ups) and GALLERY_REEMBED is still dispatched only
+        # from `promote_model` (`gallery_queue.enqueue_gallery_reembed`), so
+        # neither of those branches changes here.
+        training_queue.enqueue_backfill_masked_templates_job(job.id)
 
     return job
 
