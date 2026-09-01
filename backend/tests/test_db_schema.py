@@ -70,6 +70,10 @@ def test_users_table_matches_tsd_columns() -> None:
         "status",
         "created_at",
         "updated_at",
+        # EC-BE-05 (TSD-edge-cases.md A-5/D-9): re-enrollment-due policy flag.
+        "reenroll_due",
+        "reenroll_due_reason",
+        "reenroll_due_marked_at",
     }
 
 

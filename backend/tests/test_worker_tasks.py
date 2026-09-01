@@ -498,6 +498,27 @@ def test_purge_expired_media_task_is_registered_and_dead_letter_based() -> None:
     assert task.name == worker_tasks.purge_expired_media_task.name
 
 
+# --- reenroll-due policy (EC-BE-05, TSD-edge-cases.md A-5) — Celery Beat
+# schedule + task wiring. The service function itself
+# (app/services/reenroll_due_service.py) has its own thorough unit tests in
+# tests/test_reenroll_due_service.py; this only proves the task is wired
+# into beat/registered/dead-letter-based, same level of coverage as the two
+# retention-job wiring tests directly above.
+
+
+def test_beat_schedule_registers_reenroll_due_job() -> None:
+    schedule = celery_app.conf.beat_schedule
+    assert "reenroll-due-check" in schedule
+    assert schedule["reenroll-due-check"]["task"] == "app.worker.tasks.reenroll_due_task"
+    assert schedule["reenroll-due-check"]["schedule"] > 0
+
+
+def test_reenroll_due_task_is_registered_and_dead_letter_based() -> None:
+    task = celery_app.tasks["app.worker.tasks.reenroll_due_task"]
+    assert issubclass(task.__class__, worker_tasks.DeadLetterTask)
+    assert task.name == worker_tasks.reenroll_due_task.name
+
+
 def test_backfill_retention_expiry_task_end_to_end(monkeypatch, eager_celery) -> None:
     """Runs the real task body (in eager mode) against monkeypatched repos to
     prove the task wires settings + repos into retention_service correctly,
