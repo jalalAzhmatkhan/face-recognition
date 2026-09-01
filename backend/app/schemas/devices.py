@@ -9,23 +9,34 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.device import Device
 from app.models.enums import DeviceClass, DeviceStatus
 
-# EC-BE-01 (TSD-edge-cases.md D-8): canonical `commissioning_checklist`
-# field set. The DB column (app/models/device.py) is a loose jsonb blob on
-# purpose, so this is documentation/convention rather than an enforced
-# sub-model — kept here (not validated field-by-field) until
-# `documentation/operations/camera-placement-guide.md` (EC-OPS-01) exists
-# and either confirms this shape or requires reconciling with it:
-#   camera_height_m: float | None        — target 1.5-1.6m (KRITIS absensi)
-#   fill_light_installed: bool | None
-#   backlight_avoided: bool | None       — camera not facing windows/backlight
-#   wdr_hdr_enabled: bool | None
-#   ae_lock_on_face: bool | None
-#   shutter_speed_ok: bool | None        — target >= 1/250s
-#   stopping_point_marked: bool | None   — a marked stop point, not a corridor
-#   attendance_zone_drawn: bool | None   — only meaningful for device_class=attendance
-#   commissioned_by: str | None
-#   commissioned_at: str | None          — ISO 8601
-#   notes: str | None
+# EC-BE-01 (TSD-edge-cases.md D-8): `commissioning_checklist` canonical
+# shape now FINALIZED by `documentation/operations/camera-placement-guide.md`
+# §5 (EC-OPS-01, not committed — gitignored like the rest of
+# `documentation/operations/`). The DB column (app/models/device.py) stays a
+# loose jsonb blob on purpose (no DB-level JSON Schema, per that doc's §5.5)
+# — structural validation happens at this Pydantic layer instead, but is
+# NOT yet implemented as a nested sub-model here (still `dict[str, Any]`);
+# tracked as follow-up so EC-FE-01's form and any backend validation agree
+# on the exact contract. Top-level shape (see camera-placement-guide.md §5.1
+# for the full field table + §5.6 for a worked example):
+#   schema_version: str                      — e.g. "1.0"
+#   device_class: "access_control" | "attendance"
+#   overall_status: "pending" | "passed" | "failed"
+#   commissioned_at: str | None               — ISO 8601, required unless pending
+#   commissioned_by_staff_id: str | None      — UUID, required unless pending
+#   commissioned_by_name: str | None
+#   site_notes: str | None
+#   checks: list[dict]                        — one entry per checklist item,
+#       each: id, category, label, applicable_device_classes, required,
+#       value_type, unit?, expected_range?/expected_value?/enum_options?,
+#       measured_value, status ("pass"|"fail"|"na"|None), notes,
+#       checked_at, checked_by_staff_id — canonical `id` catalog is
+#       camera-placement-guide.md §5.4
+#   queue_zone: dict | None                   — required (non-null) only when
+#       device_class == "attendance"; see §5.3 for its own field set
+#       (stop_point_marked, stop_point_distance_m, single_face_zone_defined,
+#       zone_shape, zone_reference_photo_s3_key, notes)
+#   reverify_due_at: str | None                — ISO 8601 date/datetime
 
 
 class DeviceCreateRequest(BaseModel):
