@@ -1,5 +1,6 @@
 """Celery tasks: real QC (TR-02) + embedding extraction (TR-03) + synthetic
-masked-template generation (A-4, TSD-edge-cases.md).
+masked-template generation (A-4, TSD-edge-cases.md) + high-similarity pair
+check (D-4.4, TSD-edge-cases.md, EC-TR-04).
 
 Registered under the exact task name backend dispatches
 (`app.worker.tasks.run_enrollment_qc`) — see `celery_app.py` docstring for
@@ -55,6 +56,7 @@ from ai_training.embedding.extractor import extract_gallery_embeddings
 from ai_training.embedding.synthetic_masked import generate_synthetic_masked_templates
 from ai_training.quality.mask_overlay import MaskOverlayProvider, build_mask_overlay_provider
 from ai_training.quality.pipeline import run_quality_check
+from ai_training.similarity.high_similarity_check import run_high_similarity_check_core
 from ai_training.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -424,6 +426,25 @@ def run_enrollment_qc_core(
             "synthetic_templates_generated": synthetic_templates_generated,
         },
     )
+
+    # --- D-4.4 (TSD-edge-cases.md D-4.4/REC 13): high-similarity pair check,
+    # strictly AFTER the session has already reached ENROLLED above. Wrapped
+    # in its own try/except that swallows EVERY exception, same rationale
+    # and same "must never fail enrollment" acceptance criterion as A-4's
+    # synthetic-masked-template block a few lines up -- flagging a
+    # look-alike pair and tightening tau is a pure audit/policy side effect,
+    # never a gate on whether enrollment itself succeeded.
+    try:
+        run_high_similarity_check_core(
+            cursor, settings, user_id=user_id, model_version=embedder.model_version
+        )
+    except Exception:  # noqa: BLE001 - D-4.4 must never fail enrollment, see comment above
+        logger.exception(
+            "ai_training.worker.high_similarity_check_failed session_id=%s user_id=%s",
+            session_id,
+            user_id,
+        )
+
     return "enrolled"
 
 
@@ -672,6 +693,25 @@ def run_gallery_reembed_job_core(
                 model_version=embedder.model_version,
                 embeddings=templates,
             )
+
+            # D-4.4 re-embed leg (TSD-edge-cases.md D-4.4: "pada akhir
+            # embedding enrollment (TR-03) + pada re-embed"). Same
+            # never-fail-the-batch rationale as this loop's own outer
+            # try/except (a re-embed's job is to refresh the gallery; a
+            # look-alike flag failing must not turn a successful re-embed
+            # into a counted `failed` session).
+            try:
+                run_high_similarity_check_core(
+                    cursor, settings, user_id=user_id, model_version=embedder.model_version
+                )
+            except Exception:  # noqa: BLE001 - see comment above
+                logger.exception(
+                    "ai_training.worker.high_similarity_check_failed "
+                    "session_id=%s user_id=%s",
+                    session_id,
+                    user_id,
+                )
+
             counts["processed"] += 1
         except Exception:  # noqa: BLE001 - one session must never sink the whole batch
             logger.exception(
