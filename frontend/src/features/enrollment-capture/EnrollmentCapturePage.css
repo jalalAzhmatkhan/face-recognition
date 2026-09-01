@@ -142,6 +142,53 @@
   50% { opacity: 0.4; }
 }
 
+/* Directional guidance animation ("animasi arahan") -- a chevron pointing
+ * at the next not-yet-covered clock position, pulsing + nudging outward
+ * along its own radial direction so it reads as "move this way" rather
+ * than a static marker. `transform-box: fill-box` keeps the nudge relative
+ * to the shape itself, not the SVG's (0,0) origin, since the <g> already
+ * carries its own translate/rotate to the target angle. */
+.capture-ring-target-marker {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    capture-pulse 1s ease-in-out infinite,
+    capture-target-nudge 1s ease-in-out infinite;
+}
+
+@keyframes capture-target-nudge {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -6px; }
+}
+
+.capture-countdown-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  background: var(--capture-scrim);
+  color: var(--text-inverse);
+}
+
+.capture-countdown-number {
+  font-size: 96px;
+  font-weight: 700;
+  line-height: 1;
+  animation: capture-countdown-tick var(--dur-slow, 0.3s) var(--ease-spring, ease-out);
+}
+
+@keyframes capture-countdown-tick {
+  0% { opacity: 0; transform: scale(1.6); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.capture-countdown-text {
+  font: var(--text-body);
+}
+
 .capture-checklist {
   background: var(--bg-surface);
   border: var(--border-w) solid var(--border-default);
@@ -150,6 +197,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+.capture-target-hint {
+  margin: 0;
+  font: var(--text-small);
+  color: var(--text-secondary);
 }
 
 .capture-checklist ul {

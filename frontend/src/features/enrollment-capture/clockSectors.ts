@@ -150,3 +150,17 @@ export function countDone(status: SectorState): number {
   return CLOCK_POSITIONS.filter((position) => status[position] === 'done')
     .length
 }
+
+/** Clockwise sweep order starting at 12 (FSD-AI.md ASM-03: "mulai jam 12
+ * lalu berputar searah jarum jam"). Used ONLY to pick which position the
+ * directional guide animation (`ProgressRing`'s `targetPosition` prop)
+ * points at next — it does not gate `updateSectorState` itself, which
+ * still accepts a sample landing on any position regardless of order. */
+export const SWEEP_ORDER: ClockPosition[] = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+/** The next position the directional guide should point at: the first
+ * not-yet-`done` position in sweep order, or `null` once all 12 are done
+ * (nothing left to point at). */
+export function nextTargetPosition(status: SectorState): ClockPosition | null {
+  return SWEEP_ORDER.find((position) => status[position] !== 'done') ?? null
+}
