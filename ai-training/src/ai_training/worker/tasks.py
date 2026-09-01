@@ -1,4 +1,5 @@
-"""Celery tasks: real QC (TR-02) + embedding extraction (TR-03).
+"""Celery tasks: real QC (TR-02) + embedding extraction (TR-03) + synthetic
+masked-template generation (A-4, TSD-edge-cases.md).
 
 Registered under the exact task name backend dispatches
 (`app.worker.tasks.run_enrollment_qc`) — see `celery_app.py` docstring for
@@ -25,7 +26,11 @@ from celery import Task
 from ai_training.config import Settings, get_settings
 from ai_training.db.audit_repo import insert_audit_log
 from ai_training.db.connection import get_connection
-from ai_training.db.embedding_repo import has_embeddings_for_model, upsert_embeddings
+from ai_training.db.embedding_repo import (
+    has_embeddings_for_model,
+    upsert_embeddings,
+    upsert_synthetic_masked_embeddings,
+)
 from ai_training.db.enrollment_repo import (
     Cursor,
     get_latest_finalized_video,
@@ -42,6 +47,8 @@ from ai_training.db.training_job_repo import (
 )
 from ai_training.embedding.embedder import build_embedder
 from ai_training.embedding.extractor import extract_gallery_embeddings
+from ai_training.embedding.synthetic_masked import generate_synthetic_masked_templates
+from ai_training.quality.mask_overlay import MaskOverlayProvider, build_mask_overlay_provider
 from ai_training.quality.pipeline import run_quality_check
 from ai_training.worker.celery_app import celery_app
 
@@ -138,6 +145,7 @@ def run_enrollment_qc_core(
     session_id: str,
     *,
     downloader: Any = _default_download_video,
+    mask_overlay_provider: MaskOverlayProvider | None = None,
 ) -> str:
     """Core QC + embedding logic, DB-cursor-injected for unit testing
     without a Celery task context or a real Postgres connection (mirrors
@@ -154,6 +162,12 @@ def run_enrollment_qc_core(
     re-checks the expected state in its own `WHERE` clause, so even a
     concurrent duplicate delivery racing THIS run cannot double-apply a
     transition.
+
+    `mask_overlay_provider` (A-4, TSD-edge-cases.md A-4/OQ-1) is injected
+    the same way `downloader` is, defaulting to `None` -- which means "lazily
+    build the real one via `build_mask_overlay_provider()` at the point of
+    use" -- so importing this module never requires `dlib`/MaskTheFace, and
+    tests can substitute a fake without touching either.
     """
     current_state = get_state(cursor, session_id)
     if current_state is None:
@@ -337,7 +351,53 @@ def run_enrollment_qc_core(
         embeddings=templates,
     )
 
-    if not guarded_transition(cursor, session_id, expected_state="EMBEDDING", new_state="ENROLLED"):
+    # --- A-4 (TSD-edge-cases.md A-4/OQ-1): synthetic masked-template
+    # generation, on top of the ordinary `enrolled` templates just written
+    # above. Deliberately wrapped in its own try/except that swallows
+    # EVERY exception: this whole feature must degrade to "0 synthetic
+    # templates" rather than ever fail the enrollment itself (acceptance
+    # criteria explicitly calls this out). `generate_synthetic_masked_templates`
+    # already catches per-combination failures internally (see its own
+    # docstring) -- this outer catch is the last-resort net for anything
+    # unexpected in the selection/DB-write plumbing around it (e.g. a bug
+    # in `select_masked_source_frames`, or a DB error in the upsert).
+    synthetic_templates_generated = 0
+    try:
+        provider = (
+            mask_overlay_provider
+            if mask_overlay_provider is not None
+            else build_mask_overlay_provider()
+        )
+        synthetic_templates = generate_synthetic_masked_templates(
+            frames_by_position, embedder, provider, session_id=session_id
+        )
+        synthetic_templates_generated = upsert_synthetic_masked_embeddings(
+            cursor,
+            user_id=user_id,
+            session_id=session_id,
+            model_version=embedder.model_version,
+            templates=synthetic_templates,
+        )
+    except Exception:  # noqa: BLE001 - A-4 must never fail enrollment, see comment above
+        logger.exception(
+            "ai_training.worker.synthetic_masked_templates_failed session_id=%s", session_id
+        )
+        synthetic_templates_generated = 0
+
+    # Recorded on the FINAL qc_report (the one that lands on the ENROLLED
+    # row) rather than the QC_PASSED-time report written earlier -- A-4
+    # runs strictly after that write, so this is the only point where the
+    # count is known. Acceptance criteria: "qc_report mencatat
+    # synthetic_templates_generated".
+    qc_report_dict["synthetic_templates_generated"] = synthetic_templates_generated
+
+    if not guarded_transition(
+        cursor,
+        session_id,
+        expected_state="EMBEDDING",
+        new_state="ENROLLED",
+        qc_report=qc_report_dict,
+    ):
         insert_audit_log(
             cursor,
             actor=ACTOR,
@@ -356,6 +416,7 @@ def run_enrollment_qc_core(
             "pose_buckets": [t.pose_bucket for t in templates],
             "embeddings_written": inserted,
             "model_version": embedder.model_version,
+            "synthetic_templates_generated": synthetic_templates_generated,
         },
     )
     return "enrolled"

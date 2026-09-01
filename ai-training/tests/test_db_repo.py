@@ -4,7 +4,7 @@ per task instructions, automated tests never touch real Postgres/Redis)."""
 from unittest.mock import MagicMock
 
 from ai_training.db.audit_repo import insert_audit_log
-from ai_training.db.embedding_repo import upsert_embeddings
+from ai_training.db.embedding_repo import upsert_embeddings, upsert_synthetic_masked_embeddings
 from ai_training.db.enrollment_repo import (
     get_latest_finalized_video,
     get_state,
@@ -12,6 +12,7 @@ from ai_training.db.enrollment_repo import (
     guarded_transition,
 )
 from ai_training.embedding.extractor import PoseBucketEmbedding
+from ai_training.embedding.synthetic_masked import SyntheticMaskedTemplate
 
 
 def test_get_state_returns_none_when_no_row() -> None:
@@ -93,6 +94,49 @@ def test_upsert_embeddings_deletes_then_inserts() -> None:
     assert cursor.execute.call_count == 3
     delete_call = cursor.execute.call_args_list[0]
     assert "DELETE FROM face_embeddings" in delete_call[0][0]
+
+
+def test_upsert_synthetic_masked_embeddings_deletes_then_inserts_with_flags() -> None:
+    cursor = MagicMock()
+    templates = [
+        SyntheticMaskedTemplate(
+            pose_bucket="12", vector=[0.1, 0.2], model_version="stub-v1", mask_type="surgical"
+        ),
+        SyntheticMaskedTemplate(
+            pose_bucket="02", vector=[0.3, 0.4], model_version="stub-v1", mask_type="cloth_dark"
+        ),
+    ]
+    count = upsert_synthetic_masked_embeddings(
+        cursor,
+        user_id="user-1",
+        session_id="session-1",
+        model_version="stub-v1",
+        templates=templates,
+    )
+    assert count == 2
+    # 1 scoped DELETE + 2 INSERTs
+    assert cursor.execute.call_count == 3
+    delete_call = cursor.execute.call_args_list[0]
+    assert "DELETE FROM face_embeddings" in delete_call[0][0]
+    assert "synthetic_masked" in delete_call[0][0]
+    insert_call = cursor.execute.call_args_list[1]
+    assert "masked" in insert_call[0][0] and "template_kind" in insert_call[0][0]
+    # masked=True, template_kind='synthetic_masked' are the last 2 bind params.
+    assert insert_call[0][1][-2:] == (True, "synthetic_masked")
+
+
+def test_upsert_synthetic_masked_embeddings_never_touches_enrolled_rows() -> None:
+    """The DELETE must be scoped to masked=true/template_kind='synthetic_masked'
+    -- it must never be a bare (session_id, model_version) delete like
+    upsert_embeddings' (which would wipe the ordinary `enrolled` templates
+    written moments earlier by the same enrollment job)."""
+    cursor = MagicMock()
+    upsert_synthetic_masked_embeddings(
+        cursor, user_id="user-1", session_id="session-1", model_version="stub-v1", templates=[]
+    )
+    delete_query = cursor.execute.call_args_list[0][0][0]
+    assert "masked = true" in delete_query
+    assert "template_kind = 'synthetic_masked'" in delete_query
 
 
 def test_insert_audit_log_calls_execute_with_action() -> None:

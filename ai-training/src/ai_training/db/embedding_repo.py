@@ -15,6 +15,7 @@ from ai_training.db.enrollment_repo import Cursor
 
 if TYPE_CHECKING:
     from ai_training.embedding.extractor import PoseBucketEmbedding
+    from ai_training.embedding.synthetic_masked import SyntheticMaskedTemplate
 
 
 def has_embeddings_for_model(cursor: Cursor, *, session_id: str, model_version: str) -> bool:
@@ -64,6 +65,52 @@ def upsert_embeddings(
                 model_version,
                 embedding.pose_bucket,
                 embedding.vector,
+            ),
+        )
+        inserted += 1
+    return inserted
+
+
+def upsert_synthetic_masked_embeddings(
+    cursor: Cursor,
+    *,
+    user_id: str,
+    session_id: str,
+    model_version: str,
+    templates: list[SyntheticMaskedTemplate],
+) -> int:
+    """A-4 (TSD-edge-cases.md A-4/D-4.5): replace this session's
+    `synthetic_masked` templates for `model_version`.
+
+    Scoped delete (`... AND masked = true AND template_kind =
+    'synthetic_masked'`) so this NEVER touches the ordinary `enrolled`
+    rows `upsert_embeddings` writes for the same `(session_id,
+    model_version)` — the two kinds coexist by design (TSD A-4: masked
+    probes prefer matching masked templates; ordinary probes still need
+    the ordinary `enrolled` templates). Same "delete-then-insert within
+    one transaction" idempotency rationale as `upsert_embeddings` — safe
+    to re-run for a retried/duplicate job on the same session.
+    """
+    cursor.execute(
+        "DELETE FROM face_embeddings WHERE session_id = %s AND model_version = %s "
+        "AND masked = true AND template_kind = 'synthetic_masked'",
+        (session_id, model_version),
+    )
+    inserted = 0
+    for template in templates:
+        cursor.execute(
+            "INSERT INTO face_embeddings "
+            "(id, user_id, session_id, model_version, pose_bucket, vector, masked, template_kind) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                str(uuid.uuid4()),
+                user_id,
+                session_id,
+                model_version,
+                template.pose_bucket,
+                template.vector,
+                True,
+                "synthetic_masked",
             ),
         )
         inserted += 1
