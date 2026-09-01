@@ -1,5 +1,6 @@
 import ActionsMenu, { ActionsMenuConfirm, ActionsMenuItem } from '../../components/ActionsMenu'
 import type { UserResponse, UserStatus } from './types'
+import { isReenrollDue } from './types'
 
 interface UserActionsMenuProps {
   user: UserResponse
@@ -92,7 +93,12 @@ export default function UserActionsMenu({
                 onEnroll()
               }}
             >
-              Mulai Enrollment
+              {/* EC-FE-03: same action (creates a new enrollment session,
+               * same wizard) as "Mulai Enrollment" — only the label changes
+               * when the user is flagged `reenroll_due`, so the operator's
+               * intent ("this person needs to redo enrollment") is clear
+               * without a second, separate flow. */}
+              {isReenrollDue(user) ? 'Mulai Re-enroll' : 'Mulai Enrollment'}
             </ActionsMenuItem>
           )}
 

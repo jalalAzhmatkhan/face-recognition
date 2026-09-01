@@ -18,6 +18,7 @@ import {
   canStartEnrollment,
 } from '../features/user-management/roleGating'
 import UserStatusBadge from '../features/user-management/UserStatusBadge'
+import ReenrollDueBadge from '../features/user-management/ReenrollDueBadge'
 import UserActionsMenu from '../features/user-management/UserActionsMenu'
 import { USER_STATUSES } from '../features/user-management/types'
 import type { UserStatus } from '../features/user-management/types'
@@ -285,7 +286,10 @@ export default function UsersPage() {
                     </td>
                     <td style={{ padding: 'var(--space-2) var(--space-3)' }}>{user.full_name}</td>
                     <td style={{ padding: 'var(--space-2) var(--space-3)' }}>
-                      <UserStatusBadge status={user.status} />
+                      <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                        <UserStatusBadge status={user.status} />
+                        <ReenrollDueBadge user={user} />
+                      </div>
                     </td>
                     <td style={{ padding: 'var(--space-2) var(--space-3)', color: 'var(--text-secondary)' }}>
                       {formatDate(user.created_at)}
