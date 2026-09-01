@@ -81,6 +81,20 @@ export default function EnrollmentsPage() {
       }),
   })
 
+  // Name lookup for the "Nama User" column below -- a session's user can be
+  // of ANY status (not just ACTIVE, unlike `eligibleUsersQuery`'s dropdown
+  // data), so this is deliberately a separate, unconditional, unfiltered
+  // fetch. Same MAX_LOOKUP dev-console-scale convention as the rest of this
+  // file: one bounded page of users, not a lookup per row.
+  const userNamesQuery = useQuery({
+    queryKey: ['users', 'all-for-name-lookup'],
+    queryFn: () => listUsers({ limit: MAX_LOOKUP }),
+  })
+  const userNameById = useMemo(
+    () => new Map((userNamesQuery.data?.items ?? []).map((user) => [user.id, user])),
+    [userNamesQuery.data],
+  )
+
   // "Buat Enrollment Baru" dropdown data: ACTIVE users minus anyone with an
   // in-progress-or-completed enrollment session (see BLOCKING_STATES). Only
   // fetched when the create-form is actually visible to this role.
@@ -322,20 +336,31 @@ export default function EnrollmentsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ textAlign: 'left', borderBottom: 'var(--border-w) solid var(--border-default)' }}>
-                  <th style={{ padding: 'var(--space-2) var(--space-3)' }}>User ID</th>
+                  <th style={{ padding: 'var(--space-2) var(--space-3)' }}>Nama User</th>
                   <th style={{ padding: 'var(--space-2) var(--space-3)' }}>Status</th>
                   <th style={{ padding: 'var(--space-2) var(--space-3)' }}>Dibuat</th>
                   <th style={{ padding: 'var(--space-2) var(--space-3)' }}>Aksi</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((session) => (
+                {items.map((session) => {
+                  const user = userNameById.get(session.user_id)
+                  return (
                   <tr
                     key={session.id}
                     style={{ borderBottom: 'var(--border-w) solid var(--border-default)' }}
                   >
-                    <td style={{ padding: 'var(--space-2) var(--space-3)', fontFamily: 'var(--font-mono)' }}>
-                      {session.user_id}
+                    <td style={{ padding: 'var(--space-2) var(--space-3)' }}>
+                      {user ? (
+                        <Link to={`/users/${session.user_id}`}>
+                          {user.full_name}
+                          {user.external_ref ? ` (${user.external_ref})` : ''}
+                        </Link>
+                      ) : (
+                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                          {session.user_id}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: 'var(--space-2) var(--space-3)' }}>
                       <StateBadge state={session.state} />
@@ -347,7 +372,8 @@ export default function EnrollmentsPage() {
                       <Link to={`/enrollments/${session.id}`}>Lihat detail</Link>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

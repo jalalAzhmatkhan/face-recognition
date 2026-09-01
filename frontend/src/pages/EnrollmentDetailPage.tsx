@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import EnrollmentConsentCopy from '../components/EnrollmentConsentCopy'
 import PagePlaceholder from './PagePlaceholder'
 import {
   cancelEnrollment,
@@ -11,6 +12,7 @@ import {
   startRecapture,
 } from '../features/enrollment-management/api'
 import { getCurrentRole } from '../features/enrollment-management/authToken'
+import { CURRENT_CONSENT_VERSION } from '../features/enrollment-capture/types'
 import { humanizeReasons } from '../features/enrollment-management/reasonHumanizer'
 import {
   canCancel,
@@ -19,6 +21,12 @@ import {
   canRevoke,
 } from '../features/enrollment-management/roleGating'
 import StateBadge from '../features/enrollment-management/StateBadge'
+import { getUser } from '../features/user-management/api'
+
+/** How close to the bottom (px) counts as "scrolled to the end" — a few px
+ * of slack absorbs sub-pixel rounding from browser zoom/scaling, so the
+ * button isn't stuck disabled when the user has visibly reached the end. */
+const SCROLL_BOTTOM_SLACK_PX = 4
 
 const REVOKE_CONFIRM_TEXT = 'REVOKE'
 
@@ -58,14 +66,52 @@ export default function EnrollmentDetailPage() {
   const queryClient = useQueryClient()
   const role = getCurrentRole()
 
-  const [consentVersion, setConsentVersion] = useState('')
   const [revokeConfirmText, setRevokeConfirmText] = useState('')
   const [showRevokeConfirm, setShowRevokeConfirm] = useState(false)
+  const [hasScrolledConsentToEnd, setHasScrolledConsentToEnd] = useState(false)
+  const consentScrollRef = useRef<HTMLDivElement>(null)
 
   const detailQuery = useQuery({
     queryKey: ['enrollment', id],
     queryFn: () => getEnrollment(id as string),
     enabled: Boolean(id),
+  })
+
+  // Reset whenever the session changes (e.g. navigating from one
+  // enrollment's detail page straight to another's, which React Router
+  // does without unmounting this component) so a previous session's
+  // scroll-read state can never carry over. A render-time adjustment (React's
+  // own idiom for "reset state when a prop changes", see
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
+  // rather than an effect -- this is a synchronous derived reset, not a
+  // side effect to synchronize with anything external.
+  const [lastSeenId, setLastSeenId] = useState(id)
+  if (id !== lastSeenId) {
+    setLastSeenId(id)
+    setHasScrolledConsentToEnd(false)
+  }
+
+  const consentSectionVisible = Boolean(
+    detailQuery.data && canGrantConsent(detailQuery.data.state, role),
+  )
+
+  // A short consent text might not need scrolling at all (fits entirely in
+  // the box already) -- treat that as "read" too, otherwise the button
+  // would be stuck disabled forever with nothing to scroll. Runs after the
+  // card (and therefore `consentScrollRef`'s node) actually exists in the
+  // DOM, which `detailQuery`'s loading state gates.
+  useEffect(() => {
+    if (!consentSectionVisible) return
+    const node = consentScrollRef.current
+    if (node && node.scrollHeight <= node.clientHeight + SCROLL_BOTTOM_SLACK_PX) {
+      setHasScrolledConsentToEnd(true)
+    }
+  }, [consentSectionVisible])
+
+  const userQuery = useQuery({
+    queryKey: ['user', detailQuery.data?.user_id],
+    queryFn: () => getUser(detailQuery.data?.user_id as string),
+    enabled: Boolean(detailQuery.data?.user_id),
   })
 
   const invalidate = () => {
@@ -74,11 +120,8 @@ export default function EnrollmentDetailPage() {
   }
 
   const consentMutation = useMutation({
-    mutationFn: (version: string) => grantConsent(id as string, version),
-    onSuccess: () => {
-      setConsentVersion('')
-      invalidate()
-    },
+    mutationFn: () => grantConsent(id as string, CURRENT_CONSENT_VERSION),
+    onSuccess: invalidate,
   })
 
   const recaptureMutation = useMutation({
@@ -152,19 +195,6 @@ export default function EnrollmentDetailPage() {
   return (
     <>
       <header style={{ marginBottom: 'var(--space-4)' }}>
-        <p
-          className="mono"
-          style={{
-            font: 'var(--text-caption)',
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--text-muted)',
-            margin: 0,
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
-          }}
-        >
-          S-31
-        </p>
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
           Detail Enrollment
           <StateBadge state={session.state} />
@@ -178,8 +208,16 @@ export default function EnrollmentDetailPage() {
           <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: 'var(--space-2) var(--space-4)', margin: 0 }}>
             <dt style={{ color: 'var(--text-secondary)' }}>Session ID</dt>
             <dd style={{ margin: 0, fontFamily: 'var(--font-mono)' }}>{session.id}</dd>
-            <dt style={{ color: 'var(--text-secondary)' }}>User ID</dt>
-            <dd style={{ margin: 0, fontFamily: 'var(--font-mono)' }}>{session.user_id}</dd>
+            <dt style={{ color: 'var(--text-secondary)' }}>Nama User</dt>
+            <dd style={{ margin: 0 }}>
+              {userQuery.data ? (
+                <Link to={`/users/${session.user_id}`}>{userQuery.data.full_name}</Link>
+              ) : (
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                  {session.user_id}
+                </span>
+              )}
+            </dd>
             <dt style={{ color: 'var(--text-secondary)' }}>Dibuat oleh</dt>
             <dd style={{ margin: 0, fontFamily: 'var(--font-mono)' }}>{session.created_by ?? '—'}</dd>
             <dt style={{ color: 'var(--text-secondary)' }}>Dibuat pada</dt>
@@ -251,45 +289,60 @@ export default function EnrollmentDetailPage() {
             <h2 style={{ margin: 0, font: 'var(--text-h3)' }}>Aksi</h2>
 
             {showConsent && (
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  if (consentVersion.trim()) consentMutation.mutate(consentVersion.trim())
-                }}
-                style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'center' }}
-              >
-                <label htmlFor="consent-version" style={{ display: 'none' }}>
-                  Versi Consent
-                </label>
-                <input
-                  id="consent-version"
-                  value={consentVersion}
-                  onChange={(event) => setConsentVersion(event.target.value)}
-                  placeholder="Versi teks consent, mis. v1.0"
-                  style={{
-                    minHeight: 'var(--touch-target)',
-                    padding: '0 var(--space-3)',
-                    borderRadius: 'var(--radius-md)',
-                    border: 'var(--border-w) solid var(--border-default)',
-                    flex: '1 1 220px',
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                <p style={{ margin: 0, font: 'var(--text-small)', color: 'var(--text-secondary)' }}>
+                  Baca teks consent berikut (versi terbaru: <strong>{CURRENT_CONSENT_VERSION}</strong>)
+                  sampai selesai sebelum mencatat persetujuan — tombol di bawah aktif setelah Anda
+                  scroll sampai bagian akhir.
+                </p>
+                <div
+                  ref={consentScrollRef}
+                  onScroll={(event) => {
+                    const el = event.currentTarget
+                    if (el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_BOTTOM_SLACK_PX) {
+                      setHasScrolledConsentToEnd(true)
+                    }
                   }}
-                />
-                <button
-                  type="submit"
-                  disabled={!consentVersion.trim() || anyMutationPending}
                   style={{
+                    maxHeight: 240,
+                    overflowY: 'auto',
+                    border: 'var(--border-w) solid var(--border-default)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: 'var(--space-4)',
+                    background: 'var(--bg-sunken)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 'var(--space-3)',
+                  }}
+                >
+                  <EnrollmentConsentCopy />
+                </div>
+                <button
+                  type="button"
+                  disabled={!hasScrolledConsentToEnd || anyMutationPending}
+                  onClick={() => consentMutation.mutate()}
+                  style={{
+                    alignSelf: 'flex-start',
                     minHeight: 'var(--touch-target)',
                     padding: '0 var(--space-5)',
                     borderRadius: 'var(--radius-md)',
                     border: 'var(--border-w) solid var(--accent)',
                     background: 'var(--accent)',
                     color: 'var(--text-inverse)',
-                    cursor: consentVersion.trim() ? 'pointer' : 'not-allowed',
+                    cursor: hasScrolledConsentToEnd && !anyMutationPending ? 'pointer' : 'not-allowed',
+                    opacity: hasScrolledConsentToEnd ? 1 : 0.5,
                   }}
                 >
-                  Catat Consent
+                  {consentMutation.isPending
+                    ? 'Mencatat...'
+                    : `Catat Consent (${CURRENT_CONSENT_VERSION})`}
                 </button>
-              </form>
+                {!hasScrolledConsentToEnd && (
+                  <p style={{ margin: 0, font: 'var(--text-caption)', color: 'var(--text-muted)' }}>
+                    Scroll teks consent di atas sampai bawah untuk mengaktifkan tombol.
+                  </p>
+                )}
+              </div>
             )}
 
             {showRecapture && (
