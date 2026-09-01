@@ -3,10 +3,11 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import DeviceStatus
+from app.models.enums import DeviceClass, DeviceStatus
 from app.models.mixins import UUIDPKMixin
 
 
@@ -43,3 +44,25 @@ class Device(UUIDPKMixin, Base):
         default=DeviceStatus.OFFLINE,
         server_default=DeviceStatus.OFFLINE.value,
     )
+    # EC-BE-01 (TSD-edge-cases.md D-5/D-10): drives per-device-class
+    # recognition-policy resolution (a later task) and is denormalized onto
+    # `access_events.device_class` at ingest time (see
+    # app/services/access_event_service.py) so funnel-logging queries never
+    # need to join `devices`. NOT NULL + `unknown` default so every existing
+    # device registered before this column existed gets a safe, non-error
+    # classification rather than NULL.
+    device_class: Mapped[DeviceClass] = mapped_column(
+        Enum(DeviceClass, name="device_class", native_enum=True),
+        nullable=False,
+        default=DeviceClass.UNKNOWN,
+        server_default=DeviceClass.UNKNOWN.value,
+    )
+    # EC-BE-01 (TSD-edge-cases.md D-8): operator-filled commissioning
+    # checklist (camera height, fill-light, WDR/HDR+AE-lock, shutter speed,
+    # stopping point, attendance-zone drawing — see D-8). NULL means "not
+    # commissioned yet". Schema is intentionally a loose jsonb blob (not a
+    # DB-level shape constraint) — see app/schemas/devices.py for the
+    # canonical field set, which MUST be kept in sync with whatever
+    # `documentation/operations/camera-placement-guide.md` (EC-OPS-01)
+    # ends up defining once that document exists.
+    commissioning_checklist: Mapped[dict | None] = mapped_column(JSONB)

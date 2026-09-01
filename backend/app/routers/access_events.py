@@ -87,6 +87,8 @@ def ingest_access_event(
         model_version=body.model_version,
         latency_ms=body.latency_ms,
         frame_media_id=body.frame_media_id,
+        condition_flags=body.condition_flags,
+        reject_stage=body.reject_stage,
     )
     return AccessEventIngestResponse(
         id=event.id,

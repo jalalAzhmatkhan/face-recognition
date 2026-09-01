@@ -92,6 +92,31 @@ def test_access_events_is_partitioned_with_composite_pk() -> None:
     assert pk_columns == {"id", "occurred_at"}
 
 
+def test_access_events_has_ec_be_01_funnel_logging_columns() -> None:
+    """EC-BE-01 (TSD-edge-cases.md D-1/D-10): additive funnel-logging
+    columns on `access_events` — condition_flags, reject_stage,
+    device_class."""
+    from app.models import Base
+
+    columns = Base.metadata.tables["access_events"].columns
+    for name in ("condition_flags", "reject_stage", "device_class"):
+        assert name in columns
+        assert columns[name].nullable is True
+
+
+def test_devices_has_ec_be_01_device_class_and_checklist_columns() -> None:
+    """EC-BE-01 (TSD-edge-cases.md D-5/D-8/D-10): devices.device_class is
+    NOT NULL (safe `unknown` default for pre-existing devices);
+    commissioning_checklist is nullable jsonb."""
+    from app.models import Base
+
+    columns = Base.metadata.tables["devices"].columns
+    assert "device_class" in columns
+    assert columns["device_class"].nullable is False
+    assert "commissioning_checklist" in columns
+    assert columns["commissioning_checklist"].nullable is True
+
+
 def test_audit_logs_repository_layer_exposes_no_update_delete() -> None:
     """No repository module may expose UPDATE/DELETE for audit_logs (NFR-SEC-05).
 
@@ -132,6 +157,15 @@ def test_alembic_upgrade_head_sql_dry_run_renders_full_chain() -> None:
     assert "REVOKE UPDATE, DELETE ON audit_logs FROM PUBLIC" in sql
     for table in EXPECTED_TABLES:
         assert f"CREATE TABLE {table}" in sql or f"CREATE TABLE {table} (" in sql
+
+    # EC-BE-01 (TSD-edge-cases.md D-1/D-10): additive events+devices schema.
+    assert "CREATE TYPE device_class AS ENUM" in sql
+    assert "CREATE TYPE reject_stage AS ENUM" in sql
+    assert "ALTER TABLE devices ADD COLUMN device_class" in sql
+    assert "ALTER TABLE devices ADD COLUMN commissioning_checklist" in sql
+    assert "ALTER TABLE access_events ADD COLUMN condition_flags" in sql
+    assert "ALTER TABLE access_events ADD COLUMN reject_stage" in sql
+    assert "ALTER TABLE access_events ADD COLUMN device_class" in sql
 
 
 def test_alembic_downgrade_full_sql_dry_run_renders_cleanly() -> None:

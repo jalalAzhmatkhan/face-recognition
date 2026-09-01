@@ -91,6 +91,43 @@ class DeviceStatus(enum.StrEnum):
     DISABLED = "DISABLED"
 
 
+class DeviceClass(enum.StrEnum):
+    """Denormalized device category (EC-BE-01, TSD-edge-cases.md D-5/D-10).
+
+    Drives per-device-class recognition-policy resolution (threshold/mode
+    overrides in `recognition_configs`, a later task) and the operational
+    commissioning checklist (D-8). `UNKNOWN` is the safe default for
+    devices registered before this column existed, or where the operator
+    hasn't classified the device yet — it must never be treated as an
+    error state.
+    """
+
+    DOOR_ENTRY = "door_entry"
+    ATTENDANCE = "attendance"
+    UNKNOWN = "unknown"
+
+
+class RejectStage(enum.StrEnum):
+    """Which pipeline stage produced a non-GRANTED `/recognize` decision
+    (EC-BE-01, TSD-edge-cases.md D-1). Populated by ai-inference on
+    `access_events.reject_stage` — NULL means "not a reject" (e.g.
+    decision=GRANTED) or "reported by a caller that predates this field".
+
+    Values per D-1 / EC-IN-01: `detection` (no face found), `liveness`
+    (spoof/PAD failure), `quality_gate` (frame gates C-1..C-3 — blur/dark/
+    low-res/masked-without-fallback), `threshold` (matched below
+    similarity threshold for the resolved mode), `policy` (matched +
+    passed threshold, but door policy/access-control denied it — mirrors
+    the existing `door_command_issued=False` fail-secure paths).
+    """
+
+    DETECTION = "detection"
+    LIVENESS = "liveness"
+    QUALITY_GATE = "quality_gate"
+    THRESHOLD = "threshold"
+    POLICY = "policy"
+
+
 class AccessDecision(enum.StrEnum):
     GRANTED = "GRANTED"
     DENIED = "DENIED"
