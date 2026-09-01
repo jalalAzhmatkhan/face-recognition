@@ -150,10 +150,6 @@ export default function EnrollmentCapturePage() {
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
       })
       streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
       setCameraError(null)
       setStep('preflight')
     } catch {
@@ -162,6 +158,22 @@ export default function EnrollmentCapturePage() {
       )
     }
   }, [enrollmentId])
+
+  // The <video> element only exists in the DOM once `step` is 'preflight'/
+  // 'video' (see the JSX below), but the stream is acquired one step
+  // earlier while still on 'consent' -- so `videoRef.current` was always
+  // null at the point `startCamera` used to try assigning `srcObject`
+  // directly, and the camera light would turn on with nothing ever
+  // rendered. Attach the already-acquired stream here instead, once the
+  // <video> element has actually mounted.
+  useEffect(() => {
+    const video = videoRef.current
+    const stream = streamRef.current
+    if ((step === 'preflight' || step === 'video') && video && stream && video.srcObject !== stream) {
+      video.srcObject = stream
+      void video.play()
+    }
+  }, [step])
 
   // Continuous face/quality sampling while camera is live (preflight + video steps).
   const sampleFrame = useCallback(async () => {

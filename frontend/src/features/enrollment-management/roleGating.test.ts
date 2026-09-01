@@ -4,6 +4,7 @@ import {
   canCreateEnrollment,
   canGrantConsent,
   canRecapture,
+  canResumeCapture,
   canRevoke,
   visibleActions,
 } from './roleGating'
@@ -37,6 +38,17 @@ describe('canRecapture', () => {
     expect(canRecapture('CONSENTED', 'VIEWER')).toBe(false)
     expect(canRecapture('CAPTURING', 'ADMIN')).toBe(false)
     expect(canRecapture('CREATED', 'ADMIN')).toBe(false)
+  })
+})
+
+describe('canResumeCapture', () => {
+  it('is true only for CAPTURING + ADMIN/OPERATOR (a session stuck mid-capture, e.g. browser back)', () => {
+    expect(canResumeCapture('CAPTURING', 'ADMIN')).toBe(true)
+    expect(canResumeCapture('CAPTURING', 'OPERATOR')).toBe(true)
+    expect(canResumeCapture('CAPTURING', 'VIEWER')).toBe(false)
+    expect(canResumeCapture('CAPTURING', null)).toBe(false)
+    expect(canResumeCapture('CONSENTED', 'ADMIN')).toBe(false)
+    expect(canResumeCapture('REJECTED_QUALITY', 'ADMIN')).toBe(false)
   })
 })
 
@@ -107,6 +119,10 @@ describe('visibleActions', () => {
 
   it('exposes only "cancel" for an in-flight state like QC_RUNNING + ADMIN', () => {
     expect(visibleActions('QC_RUNNING', 'ADMIN')).toEqual(['cancel'])
+  })
+
+  it('exposes "resume_capture" and "cancel" (not "recapture") for CAPTURING + ADMIN', () => {
+    expect(visibleActions('CAPTURING', 'ADMIN')).toEqual(['resume_capture', 'cancel'])
   })
 
   it('exposes nothing for terminal states regardless of role', () => {

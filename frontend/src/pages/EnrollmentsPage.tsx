@@ -352,14 +352,17 @@ export default function EnrollmentsPage() {
                   >
                     <td style={{ padding: 'var(--space-2) var(--space-3)' }}>
                       {user ? (
-                        <Link to={`/users/${session.user_id}`}>
+                        <Link to={`/enrollments/${session.id}`}>
                           {user.full_name}
                           {user.external_ref ? ` (${user.external_ref})` : ''}
                         </Link>
                       ) : (
-                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                        <Link
+                          to={`/enrollments/${session.id}`}
+                          style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}
+                        >
                           {session.user_id}
-                        </span>
+                        </Link>
                       )}
                     </td>
                     <td style={{ padding: 'var(--space-2) var(--space-3)' }}>

@@ -6,12 +6,14 @@ import EnrollmentDetailPage from './EnrollmentDetailPage'
 import type { EnrollmentResponse } from '../features/enrollment-management/types'
 import { CURRENT_CONSENT_VERSION } from '../features/enrollment-capture/types'
 
-const { getCurrentRoleMock, getEnrollmentMock, grantConsentMock, getUserMock } = vi.hoisted(() => ({
-  getCurrentRoleMock: vi.fn(),
-  getEnrollmentMock: vi.fn(),
-  grantConsentMock: vi.fn(),
-  getUserMock: vi.fn(),
-}))
+const { getCurrentRoleMock, getEnrollmentMock, grantConsentMock, startRecaptureMock, getUserMock } =
+  vi.hoisted(() => ({
+    getCurrentRoleMock: vi.fn(),
+    getEnrollmentMock: vi.fn(),
+    grantConsentMock: vi.fn(),
+    startRecaptureMock: vi.fn(),
+    getUserMock: vi.fn(),
+  }))
 
 vi.mock('../features/enrollment-management/authToken', () => ({
   getCurrentRole: getCurrentRoleMock,
@@ -25,6 +27,7 @@ vi.mock('../features/enrollment-management/api', async () => {
     ...actual,
     getEnrollment: getEnrollmentMock,
     grantConsent: grantConsentMock,
+    startRecapture: startRecaptureMock,
   }
 })
 
@@ -193,6 +196,38 @@ describe('EnrollmentDetailPage — consent flow', () => {
 
     button = await screen.findByRole('button', { name: `Catat Consent (${CURRENT_CONSENT_VERSION})` })
     expect(button).toBeDisabled()
+  })
+})
+
+describe('EnrollmentDetailPage — resume capture (CAPTURING recovery)', () => {
+  function renderPageWithCaptureRoute(path = '/enrollments/session-1') {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/enrollments/:id" element={<EnrollmentDetailPage />} />
+            <Route path="/enrollments/:id/capture" element={<p>CAPTURE_ROUTE</p>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('shows a resume-capture button (not the transition-triggering recapture button) when stuck in CAPTURING, and navigates straight into the wizard without calling startRecapture', async () => {
+    getCurrentRoleMock.mockReturnValue('ADMIN')
+    getEnrollmentMock.mockResolvedValue(session({ state: 'CAPTURING' }))
+    getUserMock.mockResolvedValue({ id: 'user-1', full_name: 'Budi Santoso', external_ref: null })
+    renderPageWithCaptureRoute()
+
+    expect(await screen.findByText('Sedang Capture')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Mulai / Ulangi Capture' })).not.toBeInTheDocument()
+
+    const button = screen.getByRole('button', { name: /Lanjutkan.*Capture/i })
+    fireEvent.click(button)
+
+    expect(await screen.findByText('CAPTURE_ROUTE')).toBeInTheDocument()
+    expect(startRecaptureMock).not.toHaveBeenCalled()
   })
 })
 

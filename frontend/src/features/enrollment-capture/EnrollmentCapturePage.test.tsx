@@ -143,6 +143,25 @@ describe('EnrollmentCapturePage — EC-FE-05 consent text + consent_version subm
     await waitFor(() => expect(grantConsentSpy).toHaveBeenCalledWith('session-123', 'v1.1'))
   })
 
+  it('attaches the acquired camera stream to the <video> element once the preflight step mounts (regression: the <video> element does not exist yet while still on the consent step, so assigning srcObject at that point was silently a no-op and the screen stayed blank)', async () => {
+    const fakeStream = { getTracks: () => [] } as unknown as MediaStream
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream)
+    Object.defineProperty(window.navigator, 'mediaDevices', {
+      value: { getUserMedia },
+      configurable: true,
+    })
+    vi.spyOn(apiClient, 'grantConsent').mockResolvedValue({ id: 'session-123', state: 'CONSENTED' })
+
+    const { container } = renderPage('session-123')
+    agreeAndStart()
+
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalled())
+    await waitFor(() => {
+      const video = container.querySelector('video')
+      expect(video?.srcObject).toBe(fakeStream)
+    })
+  })
+
   it('still starts the camera even if the best-effort consent grant fails (e.g. already consented)', async () => {
     const grantConsentSpy = vi
       .spyOn(apiClient, 'grantConsent')

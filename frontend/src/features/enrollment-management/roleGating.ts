@@ -16,7 +16,7 @@ import { TERMINAL_STATES } from './types'
 
 const WRITE_ROLES: readonly StaffRole[] = ['ADMIN', 'OPERATOR']
 
-export type EnrollmentAction = 'consent' | 'recapture' | 'cancel' | 'revoke'
+export type EnrollmentAction = 'consent' | 'recapture' | 'resume_capture' | 'cancel' | 'revoke'
 
 /** Create-enrollment button (S-30 "Buat enrollment baru"). */
 export function canCreateEnrollment(role: StaffRole | null): boolean {
@@ -37,6 +37,20 @@ export function canRecapture(state: EnrollmentState, role: StaffRole | null): bo
     role !== null &&
     WRITE_ROLES.includes(role)
   )
+}
+
+/** Resume capture — re-open the capture wizard for a session that is
+ * ALREADY `CAPTURING` (e.g. the browser was closed/backed-out of mid
+ * capture, or the camera never started) without calling the
+ * `/transition` endpoint: the backend's state machine only allows
+ * CAPTURING as a *target* from CONSENTED/REJECTED_QUALITY, not from
+ * CAPTURING itself (`enrollment_state_machine.py`'s `_TRANSITIONS` has
+ * no CAPTURING -> CAPTURING edge), so re-triggering the transition would
+ * 409. The wizard page itself doesn't require any particular source
+ * state, so simply navigating back into it is enough to let the
+ * operator retry. */
+export function canResumeCapture(state: EnrollmentState, role: StaffRole | null): boolean {
+  return state === 'CAPTURING' && role !== null && WRITE_ROLES.includes(role)
 }
 
 /** Cancel — allowed from any non-terminal state. ENROLLED has no `/cancel`
@@ -68,6 +82,7 @@ export function visibleActions(state: EnrollmentState, role: StaffRole | null): 
   const actions: EnrollmentAction[] = []
   if (canGrantConsent(state, role)) actions.push('consent')
   if (canRecapture(state, role)) actions.push('recapture')
+  if (canResumeCapture(state, role)) actions.push('resume_capture')
   if (canRevoke(state, role)) actions.push('revoke')
   if (canCancel(state, role)) actions.push('cancel')
   return actions
