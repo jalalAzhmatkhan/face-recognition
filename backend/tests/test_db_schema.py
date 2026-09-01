@@ -170,6 +170,44 @@ def test_training_jobs_has_ec_be_03_job_type_snapshot_params_columns() -> None:
     assert columns["params"].nullable is True
 
 
+def test_recognition_configs_and_identity_similarity_flags_tables_exist() -> None:
+    """EC-BE-04 (TSD-edge-cases.md D-4.2/D-4.4/D-10): two brand-new tables —
+    recognition_configs (policy override key + delta fields) and
+    identity_similarity_flags (high-similarity pair tracking)."""
+    from app.models import Base
+
+    table_names = set(Base.metadata.tables.keys())
+    assert "recognition_configs" in table_names
+    assert "identity_similarity_flags" in table_names
+
+    rc_columns = Base.metadata.tables["recognition_configs"].columns
+    for name in (
+        "scope",
+        "scope_ref",
+        "mode",
+        "similarity_threshold",
+        "margin",
+        "liveness_threshold",
+        "min_frames",
+        "created_by_staff_id",
+        "created_at",
+        "updated_at",
+    ):
+        assert name in rc_columns
+    assert rc_columns["scope"].nullable is False
+    assert rc_columns["scope_ref"].nullable is True
+    assert rc_columns["mode"].nullable is False
+    assert rc_columns["similarity_threshold"].nullable is True
+    assert rc_columns["created_by_staff_id"].nullable is False
+
+    isf_columns = Base.metadata.tables["identity_similarity_flags"].columns
+    for name in ("user_a_id", "user_b_id", "score", "flagged_at", "resolved_at", "notes"):
+        assert name in isf_columns
+    assert isf_columns["user_a_id"].nullable is False
+    assert isf_columns["user_b_id"].nullable is False
+    assert isf_columns["resolved_at"].nullable is True
+
+
 def test_audit_logs_repository_layer_exposes_no_update_delete() -> None:
     """No repository module may expose UPDATE/DELETE for audit_logs (NFR-SEC-05).
 
@@ -234,6 +272,15 @@ def test_alembic_upgrade_head_sql_dry_run_renders_full_chain() -> None:
     assert "ALTER TABLE training_jobs ALTER COLUMN benchmark_id DROP NOT NULL" in sql
     assert "ALTER TABLE training_jobs ADD COLUMN snapshot_id" in sql
     assert "ALTER TABLE training_jobs ADD COLUMN params" in sql
+
+    # EC-BE-04 (TSD-edge-cases.md D-4.2/D-4.4/D-10): recognition_configs +
+    # identity_similarity_flags.
+    assert "CREATE TYPE recognition_config_scope AS ENUM" in sql
+    assert "CREATE TABLE recognition_configs" in sql
+    assert "CREATE TABLE identity_similarity_flags" in sql
+    assert "CREATE UNIQUE INDEX ix_recognition_configs_scoped_key" in sql
+    assert "CREATE UNIQUE INDEX ix_recognition_configs_global_key" in sql
+    assert "GRANT SELECT ON recognition_configs TO ai_inference_ro" in sql
 
 
 def test_alembic_downgrade_full_sql_dry_run_renders_cleanly() -> None:
