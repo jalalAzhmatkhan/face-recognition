@@ -38,6 +38,7 @@ does nothing.
 
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from celery import Task
@@ -46,12 +47,14 @@ from app.core.aws import get_s3_client
 from app.core.config import get_settings
 from app.db.session import get_sessionmaker
 from app.models.enums import EnrollmentState
+from app.repositories.access_events import AccessEventRepository
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.enrollments import EnrollmentSessionRepository
 from app.repositories.face_embeddings import FaceEmbeddingRepository
 from app.repositories.media_objects import MediaObjectRepository
+from app.repositories.recognition_configs import RecognitionConfigRepository
 from app.repositories.users import UserRepository
-from app.services import retention_service
+from app.services import reenroll_due_service, retention_service
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -433,6 +436,55 @@ def purge_expired_media_task(self: Task) -> dict[str, int]:
         s3_client = get_s3_client()
         result = retention_service.purge_expired_media(media_repo, audit_repo, s3_client)
         return {"purged": result.purged, "failed": result.failed}
+    finally:
+        db.close()
+
+
+# --- Re-enrollment-due policy (EC-BE-05, TSD-edge-cases.md A-5) -----------
+#
+# Same shape/rationale as the two retention jobs directly above: a periodic
+# beat job wrapping a pure service function (`reenroll_due_service`), using
+# `DeadLetterTask` as its base WITHOUT `autoretry_for` (a task-level
+# catastrophic failure, e.g. DB unreachable for the whole run, is still
+# dead-lettered; a per-user issue can't really occur since the service loop
+# has no per-item try/except — see reenroll_due_service module docstring —
+# but the next scheduled run naturally retries the whole batch either way).
+
+
+@celery_app.task(
+    name="app.worker.tasks.reenroll_due_task",
+    base=DeadLetterTask,
+    bind=True,
+)
+def reenroll_due_task(self: Task) -> dict[str, int | float]:
+    """Scheduled job (daily by default): flag `users.reenroll_due=true` for
+    any ACTIVE user whose enrollment is stale (>24 months) or whose
+    moving-average genuine-match score has drifted toward the similarity
+    threshold. See `reenroll_due_service.evaluate_reenroll_due` for the full
+    two-criteria logic and idempotency contract."""
+    settings = get_settings()
+    session_factory = get_sessionmaker()
+    db = session_factory()
+    try:
+        result = reenroll_due_service.evaluate_reenroll_due(
+            UserRepository(db),
+            EnrollmentSessionRepository(db),
+            AccessEventRepository(db),
+            RecognitionConfigRepository(db),
+            AuditLogRepository(db),
+            now=datetime.now(UTC),
+            max_age_months=settings.reenroll_due_max_age_months,
+            score_window_days=settings.reenroll_due_score_window_days,
+            score_margin=settings.reenroll_due_score_margin,
+            min_events_for_score=settings.reenroll_due_min_events_for_score,
+            similarity_threshold_fallback=settings.reenroll_due_similarity_threshold_fallback,
+        )
+        return {
+            "newly_flagged": result.newly_flagged,
+            "already_flagged_skipped": result.already_flagged_skipped,
+            "evaluated_active_users": result.evaluated_active_users,
+            "resolved_similarity_threshold": result.resolved_similarity_threshold,
+        }
     finally:
         db.close()
 
