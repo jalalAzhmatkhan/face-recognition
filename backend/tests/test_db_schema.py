@@ -145,6 +145,31 @@ def test_face_embeddings_has_ec_be_02_masked_and_template_kind_columns() -> None
     assert columns["template_kind"].default.arg == TemplateKind.ENROLLED
 
 
+def test_training_jobs_has_ec_be_03_job_type_snapshot_params_columns() -> None:
+    """EC-BE-03 (TSD-edge-cases.md B-1/D-10): training_jobs.job_type (NOT
+    NULL, backfilled to 'EVALUATION' for pre-existing rows), snapshot_id
+    (nullable) and params (nullable jsonb). benchmark_id is relaxed to
+    nullable since only EVALUATION requires it now (enforced by
+    TrainingJobCreateRequest, not the DB)."""
+    from app.models import Base
+    from app.models.enums import TrainingJobType
+
+    columns = Base.metadata.tables["training_jobs"].columns
+
+    assert "job_type" in columns
+    assert columns["job_type"].nullable is False
+    assert columns["job_type"].default.arg == TrainingJobType.EVALUATION
+
+    assert "benchmark_id" in columns
+    assert columns["benchmark_id"].nullable is True
+
+    assert "snapshot_id" in columns
+    assert columns["snapshot_id"].nullable is True
+
+    assert "params" in columns
+    assert columns["params"].nullable is True
+
+
 def test_audit_logs_repository_layer_exposes_no_update_delete() -> None:
     """No repository module may expose UPDATE/DELETE for audit_logs (NFR-SEC-05).
 
@@ -201,6 +226,14 @@ def test_alembic_upgrade_head_sql_dry_run_renders_full_chain() -> None:
     assert "ALTER TABLE media_objects ADD COLUMN variant" in sql
     assert "ALTER TABLE face_embeddings ADD COLUMN masked" in sql
     assert "ALTER TABLE face_embeddings ADD COLUMN template_kind" in sql
+
+    # EC-BE-03 (TSD-edge-cases.md B-1/D-10): training_jobs job_type/
+    # snapshot_id/params.
+    assert "CREATE TYPE training_job_type AS ENUM" in sql
+    assert "ALTER TABLE training_jobs ADD COLUMN job_type" in sql
+    assert "ALTER TABLE training_jobs ALTER COLUMN benchmark_id DROP NOT NULL" in sql
+    assert "ALTER TABLE training_jobs ADD COLUMN snapshot_id" in sql
+    assert "ALTER TABLE training_jobs ADD COLUMN params" in sql
 
 
 def test_alembic_downgrade_full_sql_dry_run_renders_cleanly() -> None:
