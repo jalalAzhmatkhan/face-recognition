@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import EnrollmentConsentCopy from '../../components/EnrollmentConsentCopy'
 import ProgressRing from './ProgressRing'
 import {
   completeEnrollment,
@@ -371,42 +372,7 @@ export default function EnrollmentCapturePage() {
 
       {step === 'consent' && (
         <div className="capture-card">
-          <p style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}>
-            Subjek akan direkam foto wajah dan video orientasi kepala (menoleh
-            dan menunduk/mendongak mengikuti pola 12 posisi jam, wajah tetap
-            menghadap kamera sepanjang proses) untuk keperluan pendaftaran
-            biometrik. Media akan diunggah langsung ke penyimpanan aman dan
-            tidak disimpan pada perangkat ini.
-          </p>
-          <p
-            className="capture-matched-condition"
-            style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}
-          >
-            Tampil seperti Anda datang bekerja sehari-hari (hijab, kacamata,
-            jenggot seperti biasa boleh dipakai). <strong>Lepaskan masker dan
-            kacamata hitam (sunglasses)</strong> selama perekaman — wajah
-            harus terlihat jelas dari dagu sampai dahi.
-          </p>
-          <ul
-            className="capture-consent-clauses"
-            style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}
-          >
-            <li>
-              Sistem akan membuat <strong>template wajah sintetis</strong> (misalnya versi
-              bermasker) secara otomatis dari hasil rekaman ini, khusus untuk keperluan
-              pengenalan wajah saat memakai masker.
-            </li>
-            <li>
-              Frame gambar dari <strong>kamera pintu/absensi</strong> saat Anda berhasil
-              dikenali sistem dapat dipakai sebagai data kalibrasi kualitas pengenalan —
-              bukan disimpan sebagai identitas/enrollment baru tanpa kontrol.
-            </li>
-            <li>
-              Data pengenalan sementara (probe) dari beberapa kali Anda berhasil dikenali
-              sistem dapat dipakai untuk memperbarui/menyegarkan profil wajah Anda secara
-              otomatis, dengan pengaman dan kontrol tertentu.
-            </li>
-          </ul>
+          <EnrollmentConsentCopy />
           <label className="capture-checkbox">
             <input
               type="checkbox"
