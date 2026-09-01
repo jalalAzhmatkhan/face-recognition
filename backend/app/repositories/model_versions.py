@@ -15,7 +15,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.enums import ModelStage
+from app.models.enums import ModelKind, ModelStage
 from app.models.model_registry import ModelVersion
 
 
@@ -26,14 +26,26 @@ class ModelVersionRepository:
     def get(self, version: str) -> ModelVersion | None:
         return self._session.get(ModelVersion, version)
 
-    def list(self, *, stage: ModelStage | None = None) -> list[ModelVersion]:
+    def list(
+        self, *, stage: ModelStage | None = None, model_kind: ModelKind | None = None
+    ) -> list[ModelVersion]:
         stmt = select(ModelVersion).order_by(ModelVersion.version)
         if stage is not None:
             stmt = stmt.where(ModelVersion.stage == stage)
+        if model_kind is not None:
+            stmt = stmt.where(ModelVersion.model_kind == model_kind)
         return list(self._session.scalars(stmt))
 
-    def get_current_production(self) -> ModelVersion | None:
-        stmt = select(ModelVersion).where(ModelVersion.stage == ModelStage.PRODUCTION)
+    def get_current_production(self, *, model_kind: ModelKind) -> ModelVersion | None:
+        """The current PRODUCTION model of ONE kind. `model_kind` is
+        required (EC-BE-06): each kind has its own independent PRODUCTION
+        slot, so a caller must always say which one it means — there is no
+        sensible "the" production model across both an embedder and a
+        liveness model at once."""
+        stmt = select(ModelVersion).where(
+            ModelVersion.stage == ModelStage.PRODUCTION,
+            ModelVersion.model_kind == model_kind,
+        )
         return self._session.scalars(stmt).first()
 
     def update(self, model: ModelVersion) -> ModelVersion:

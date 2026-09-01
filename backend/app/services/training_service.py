@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.config import Settings
-from app.models.enums import ModelStage, TrainingJobStatus, TrainingJobType
+from app.models.enums import ModelKind, ModelStage, TrainingJobStatus, TrainingJobType
 from app.models.model_registry import ModelVersion
 from app.models.training_job import TrainingJob
 from app.repositories.audit_logs import AuditLogRepository
@@ -145,9 +145,12 @@ def list_training_jobs(
 
 
 def list_models(
-    model_repo: ModelVersionRepository, *, stage: ModelStage | None = None
+    model_repo: ModelVersionRepository,
+    *,
+    stage: ModelStage | None = None,
+    model_kind: ModelKind | None = None,
 ) -> list[ModelVersion]:
-    return model_repo.list(stage=stage)
+    return model_repo.list(stage=stage, model_kind=model_kind)
 
 
 def get_model(model_repo: ModelVersionRepository, version: str) -> ModelVersion:
@@ -168,14 +171,31 @@ def promote_model(
 ) -> ModelVersion:
     """FR-TRN-05: promote `version` from CANDIDATE to PRODUCTION.
 
+    EC-BE-06 (TSD-EC B-3): gates 3 and 5 below only apply to `model_kind ==
+    EMBEDDER` candidates — gate 3 compares `recall`, and gate 5 reads a
+    per-identification-slice Recall regression report, neither of which
+    means anything for a LIVENESS (PAD) candidate. A LIVENESS candidate's
+    real gate is BPCER@APCER per mode against the frozen PAD benchmark
+    (TSD-EC D-7.4) — that lands with EC-TR-07/EC-IN-05/EC-QA-03; until then
+    a LIVENESS promotion only goes through gates 1/2/4 (confirmation,
+    CANDIDATE-only, latency budget), which is deliberately narrower than
+    "no gate at all" while never blocking on a metric that does not apply.
+    `current_production`/the no-regression baseline are also always looked
+    up SCOPED TO THE CANDIDATE'S OWN KIND (`model_repo.get_current_
+    production(model_kind=candidate.model_kind)`) — an embedder and a
+    liveness model each have their own independent PRODUCTION slot, so
+    promoting one must never read, compare against, or retire the other.
+
     Gates (checked together, all reasons reported at once):
       1. `confirm` must be explicitly `true`.
       2. The model must exist and be in stage CANDIDATE.
-      3. `recall >= current_production.recall` — skipped if there is no
-         current PRODUCTION model at all (this is the first-ever
-         promotion; there is no baseline to regress against).
+      3. EMBEDDER only: `recall >= current_production.recall` — skipped if
+         there is no current PRODUCTION model of this kind at all (this is
+         the first-ever promotion of this kind; there is no baseline to
+         regress against).
       4. `latency_ms_p95 <= settings.promotion_latency_budget_ms` (NFR-PRF-01).
-      5. EC-QA-01: `slice_gate_report["passes"]` must not be `False` — the
+      5. EMBEDDER only, EC-QA-01: `slice_gate_report["passes"]` must not be
+         `False` — the
          per-slice no-regression-bertoleransi-CI gate
          (`ai_training.evaluation.regression_gate.evaluate_slice_regression_gate`)
          computed and persisted by the ai-training worker
@@ -199,17 +219,19 @@ def promote_model(
          rather than adding a new HTTP round-trip between the two services.
 
     On success: sets `stage=PRODUCTION`, `promoted_by`, `promoted_at`; if a
-    different model was PRODUCTION, it is demoted to RETIRED (invariant: at
-    most one PRODUCTION model at a time). Both writes happen before the
-    audit log entry, mirroring app/services/access_policy_service.py's
-    write-then-audit ordering.
+    different model OF THE SAME KIND was PRODUCTION, it is demoted to
+    RETIRED (invariant: at most one PRODUCTION model per kind at a time —
+    EC-BE-06). Both writes happen before the audit log entry, mirroring
+    app/services/access_policy_service.py's write-then-audit ordering.
 
-    TR-08 (FR-TRN-06): after the promotion itself commits, this dispatches
-    the async gallery re-embedding job (`gallery_queue.enqueue_gallery_reembed`)
-    so the gallery gets embeddings under the new production version without
-    blocking this HTTP response on a full re-embed pass. The dispatch is
-    best-effort (a broker outage never undoes the already-successful
-    promotion) and fires AFTER the audit log write below, not before —
+    TR-08 (FR-TRN-06), EMBEDDER only: after the promotion itself commits,
+    this dispatches the async gallery re-embedding job
+    (`gallery_queue.enqueue_gallery_reembed`) so the gallery gets embeddings
+    under the new production version without blocking this HTTP response on
+    a full re-embed pass — skipped entirely for a LIVENESS promotion (no
+    embedding space involved). The dispatch is best-effort (a broker outage
+    never undoes the already-successful promotion) and fires AFTER the
+    audit log write below, not before —
     the promotion itself is the fact that must be durable first.
     """
     if not confirm:
@@ -221,10 +243,12 @@ def promote_model(
     if candidate is None:
         raise ModelVersionNotFoundError(version)
 
-    current_production = model_repo.get_current_production()
-    # A CANDIDATE can never already be the current PRODUCTION model (gate
-    # below rejects non-CANDIDATE stages), so `current_production is None`
-    # is the only way this is genuinely the first-ever promotion.
+    is_embedder = candidate.model_kind == ModelKind.EMBEDDER
+    current_production = model_repo.get_current_production(model_kind=candidate.model_kind)
+    # A CANDIDATE can never already be the current PRODUCTION model of its
+    # OWN kind (gate below rejects non-CANDIDATE stages), so
+    # `current_production is None` is the only way this is genuinely the
+    # first-ever promotion of this kind.
     is_first_promotion = current_production is None
 
     reasons: list[str] = []
@@ -235,7 +259,7 @@ def promote_model(
             "CANDIDATE model can be promoted."
         )
 
-    if not is_first_promotion:
+    if is_embedder and not is_first_promotion:
         candidate_recall = candidate.recall if candidate.recall is not None else -1.0
         production_recall = (
             current_production.recall if current_production.recall is not None else 0.0
@@ -255,7 +279,7 @@ def promote_model(
             f"the {budget}ms budget (NFR-PRF-01)."
         )
 
-    slice_gate_report = candidate.slice_gate_report
+    slice_gate_report = candidate.slice_gate_report if is_embedder else None
     if slice_gate_report is not None and slice_gate_report.get("passes") is False:
         failed_slices = slice_gate_report.get("failed_slices") or []
         per_slice = slice_gate_report.get("per_slice") or {}
@@ -310,6 +334,11 @@ def promote_model(
     # FR-TRN-06 (TR-08): dispatch gallery re-embedding for the newly
     # PRODUCTION version. Fires after the promotion + audit write above are
     # already durable — best-effort, never undoes the promotion itself.
-    gallery_queue.enqueue_gallery_reembed(candidate.version)
+    # EMBEDDER only (EC-BE-06): re-embedding the gallery makes no sense for
+    # a promoted LIVENESS (PAD) model — there is no embedding space for it
+    # to produce, and doing this would needlessly re-run TR-08 against a
+    # model version that was never meant to touch `face_embeddings`.
+    if is_embedder:
+        gallery_queue.enqueue_gallery_reembed(candidate.version)
 
     return candidate

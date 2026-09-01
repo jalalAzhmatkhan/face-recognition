@@ -70,6 +70,26 @@ class ModelStage(enum.StrEnum):
     RETIRED = "RETIRED"
 
 
+class ModelKind(enum.StrEnum):
+    """What a `models` row actually is (EC-BE-06, TSD-edge-cases.md B-3).
+
+    Every row before this column existed is an `EMBEDDER` (the only kind
+    that ever existed — `models` backfills to it, see migration
+    `c8f3a2e6d9b1`). `LIVENESS` is EC-TR-07's `FINETUNE_LIVENESS`
+    output: a MiniFASNet-family PAD model, evaluated on a completely
+    different metric (BPCER@APCER per mode, not Recall/F1/precision) and
+    promoted independently — each kind has its OWN PRODUCTION slot, so an
+    embedder and a liveness model can both be `stage=PRODUCTION`
+    simultaneously without either affecting the other's promotion gate
+    (`app/services/training_service.py::promote_model` scopes its
+    current-production lookup and its retire-on-promote step by the
+    candidate's own kind, never globally across kinds).
+    """
+
+    EMBEDDER = "embedder"
+    LIVENESS = "liveness"
+
+
 class TrainingJobStatus(enum.StrEnum):
     """Lifecycle of a `training_jobs` row (BE-13, FR-TRN-02).
 

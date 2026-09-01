@@ -79,6 +79,16 @@ def test_get_current_production_model_version_query_has_no_other_table() -> None
     assert "face_embeddings" not in query
 
 
+def test_get_current_production_model_version_filters_to_embedder_kind() -> None:
+    """EC-BE-06 regression: a liveness model can ALSO be PRODUCTION at the
+    same time as an embedder now -- this query must never return a
+    liveness model's version as if it were the embedder's."""
+    cursor = FakeCursor(production_version="v1", rows=[])
+    gallery.get_current_production_model_version(cursor)
+    query, _params = cursor.executed[0]
+    assert "model_kind = 'embedder'" in query
+
+
 def test_search_top_k_returns_rows_in_query_order() -> None:
     cursor = FakeCursor(
         production_version=None,

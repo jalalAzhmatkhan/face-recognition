@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.enums import ModelStage, TrainingJobStatus, TrainingJobType
+from app.models.enums import ModelKind, ModelStage, TrainingJobStatus, TrainingJobType
 
 
 class TrainingJobCreateRequest(BaseModel):
@@ -117,6 +117,7 @@ class ModelVersionResponse(BaseModel):
     version: str
     mlflow_run_id: str
     stage: ModelStage
+    model_kind: ModelKind
     recall: float | None
     f1: float | None
     precision: float | None

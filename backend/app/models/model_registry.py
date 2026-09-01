@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import ModelStage
+from app.models.enums import ModelKind, ModelStage
 
 
 class ModelVersion(Base):
@@ -25,6 +25,22 @@ class ModelVersion(Base):
         nullable=False,
         default=ModelStage.CANDIDATE,
         server_default=ModelStage.CANDIDATE.value,
+    )
+    # EC-BE-06 (TSD-EC B-3 registry split): what this row actually is.
+    # Backfilled to EMBEDDER for every pre-existing row (the only kind that
+    # ever existed) - see migration c8f3a2e6d9b1. `promote_model` scopes its
+    # "current PRODUCTION" lookup and gates by this column so an embedder
+    # and a liveness model each have their own independent PRODUCTION slot.
+    model_kind: Mapped[ModelKind] = mapped_column(
+        Enum(
+            ModelKind,
+            name="model_kind",
+            native_enum=True,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        nullable=False,
+        default=ModelKind.EMBEDDER,
+        server_default=ModelKind.EMBEDDER.value,
     )
     # Priority order per CLAUDE.md/TSD §5: Recall (primary) -> F1 -> Precision.
     recall: Mapped[float | None] = mapped_column(Float)
