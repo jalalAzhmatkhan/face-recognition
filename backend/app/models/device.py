@@ -52,7 +52,12 @@ class Device(UUIDPKMixin, Base):
     # device registered before this column existed gets a safe, non-error
     # classification rather than NULL.
     device_class: Mapped[DeviceClass] = mapped_column(
-        Enum(DeviceClass, name="device_class", native_enum=True),
+        Enum(
+            DeviceClass,
+            name="device_class",
+            native_enum=True,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
         nullable=False,
         default=DeviceClass.UNKNOWN,
         server_default=DeviceClass.UNKNOWN.value,
