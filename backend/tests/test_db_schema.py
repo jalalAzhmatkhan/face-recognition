@@ -117,6 +117,34 @@ def test_devices_has_ec_be_01_device_class_and_checklist_columns() -> None:
     assert columns["commissioning_checklist"].nullable is True
 
 
+def test_media_objects_has_ec_be_02_variant_column() -> None:
+    """EC-BE-02 (TSD-edge-cases.md D-4.1/D-10): media_objects.variant is a
+    nullable enum column (NULL = legacy/pre-migration row; new rows always
+    get an explicit value from app/services/media_service.py)."""
+    from app.models import Base
+
+    columns = Base.metadata.tables["media_objects"].columns
+    assert "variant" in columns
+    assert columns["variant"].nullable is True
+
+
+def test_face_embeddings_has_ec_be_02_masked_and_template_kind_columns() -> None:
+    """EC-BE-02 (TSD-edge-cases.md D-4.1/D-10): face_embeddings.masked
+    (NOT NULL DEFAULT false) and face_embeddings.template_kind (NOT NULL,
+    backfilled to 'enrolled' for pre-existing rows)."""
+    from app.models import Base
+    from app.models.enums import TemplateKind
+
+    columns = Base.metadata.tables["face_embeddings"].columns
+    assert "masked" in columns
+    assert columns["masked"].nullable is False
+    assert columns["masked"].default.arg is False
+
+    assert "template_kind" in columns
+    assert columns["template_kind"].nullable is False
+    assert columns["template_kind"].default.arg == TemplateKind.ENROLLED
+
+
 def test_audit_logs_repository_layer_exposes_no_update_delete() -> None:
     """No repository module may expose UPDATE/DELETE for audit_logs (NFR-SEC-05).
 
@@ -166,6 +194,13 @@ def test_alembic_upgrade_head_sql_dry_run_renders_full_chain() -> None:
     assert "ALTER TABLE access_events ADD COLUMN condition_flags" in sql
     assert "ALTER TABLE access_events ADD COLUMN reject_stage" in sql
     assert "ALTER TABLE access_events ADD COLUMN device_class" in sql
+
+    # EC-BE-02 (TSD-edge-cases.md D-4.1/D-10): variant + masked/template_kind.
+    assert "CREATE TYPE media_variant AS ENUM" in sql
+    assert "CREATE TYPE template_kind AS ENUM" in sql
+    assert "ALTER TABLE media_objects ADD COLUMN variant" in sql
+    assert "ALTER TABLE face_embeddings ADD COLUMN masked" in sql
+    assert "ALTER TABLE face_embeddings ADD COLUMN template_kind" in sql
 
 
 def test_alembic_downgrade_full_sql_dry_run_renders_cleanly() -> None:

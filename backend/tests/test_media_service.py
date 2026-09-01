@@ -228,6 +228,53 @@ def test_presign_video_key_is_fixed_and_replaces_pending_row(mock_s3: MagicMock)
     assert media_repo.items[0].size == 6_000_000
 
 
+# --- EC-BE-02: variant defaulting ------------------------------------------
+
+
+def test_presign_without_variant_defaults_to_default(mock_s3: MagicMock) -> None:
+    """`PresignRequest.variant` is optional (EC-BE-02) — a caller that omits
+    it entirely (every pre-EC-BE-02 caller) still succeeds, and the stored
+    `MediaObject.variant` becomes `MediaVariant.DEFAULT`, not NULL/None."""
+    from app.models.enums import MediaVariant
+
+    session = _session()
+    result = media_service.request_presign(
+        FakeEnrollmentRepo(session),
+        FakeMediaRepo(),
+        FakeAuditRepo(),
+        mock_s3,
+        FakeSettings(),
+        session_id=session.id,
+        kind="photo",
+        content_type="image/jpeg",
+        size=1_000_000,
+        sha256=_sha256_hex(b"a"),
+        actor="staff-1",
+    )
+    assert result.media.variant == MediaVariant.DEFAULT
+
+
+def test_presign_with_explicit_variant_is_stored(mock_s3: MagicMock) -> None:
+    from app.models.enums import MediaVariant
+
+    session = _session()
+    result = media_service.request_presign(
+        FakeEnrollmentRepo(session),
+        FakeMediaRepo(),
+        FakeAuditRepo(),
+        mock_s3,
+        FakeSettings(),
+        session_id=session.id,
+        kind="photo",
+        content_type="image/jpeg",
+        size=1_000_000,
+        sha256=_sha256_hex(b"a"),
+        actor="staff-1",
+        variant="no_glasses",
+    )
+    assert result.media.variant == MediaVariant.NO_GLASSES
+
+
 @pytest.mark.parametrize(
     "state",
     [
