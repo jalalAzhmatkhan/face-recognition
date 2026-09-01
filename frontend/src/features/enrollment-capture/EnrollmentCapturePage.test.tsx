@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import EnrollmentCapturePage from './EnrollmentCapturePage'
+import * as apiClient from './apiClient'
 
 afterEach(() => cleanup())
 
@@ -93,5 +94,65 @@ describe('EnrollmentCapturePage — EC-FE-02 matched-condition + preflight', () 
 
     expect(screen.getByRole('alert')).toHaveTextContent(/perlu login/i)
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+  })
+})
+
+describe('EnrollmentCapturePage — EC-FE-05 consent text + consent_version submission', () => {
+  beforeEach(() => {
+    window.localStorage.setItem(ACCESS_TOKEN_KEY, 'test-token')
+    Object.defineProperty(window.navigator, 'mediaDevices', {
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [] }),
+      },
+      configurable: true,
+    })
+  })
+
+  afterEach(() => {
+    window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+    vi.restoreAllMocks()
+  })
+
+  function agreeAndStart() {
+    const checkbox = screen.getByRole('checkbox', {
+      name: /saya sudah melepas masker dan kacamata hitam/i,
+    })
+    fireEvent.click(checkbox)
+    fireEvent.click(screen.getByRole('button', { name: /Saya Setuju & Mulai/ }))
+  }
+
+  it('shows the three new ASM-EC-05 consent clauses on the consent step', () => {
+    renderPage()
+
+    expect(screen.getByText(/template wajah sintetis/i)).toBeInTheDocument()
+    expect(screen.getByText(/kamera pintu\/absensi/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/memperbarui\/menyegarkan profil wajah Anda secara/i),
+    ).toBeInTheDocument()
+  })
+
+  it('sends consent_version="v1.1" (CURRENT_CONSENT_VERSION) when agreeing and starting', async () => {
+    const grantConsentSpy = vi.spyOn(apiClient, 'grantConsent').mockResolvedValue({
+      id: 'session-123',
+      state: 'CONSENTED',
+    })
+
+    renderPage('session-123')
+    agreeAndStart()
+
+    await waitFor(() => expect(grantConsentSpy).toHaveBeenCalledWith('session-123', 'v1.1'))
+  })
+
+  it('still starts the camera even if the best-effort consent grant fails (e.g. already consented)', async () => {
+    const grantConsentSpy = vi
+      .spyOn(apiClient, 'grantConsent')
+      .mockRejectedValue(new apiClient.ApiError('conflict', 409, null))
+    const getUserMedia = window.navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>
+
+    renderPage('session-123')
+    agreeAndStart()
+
+    await waitFor(() => expect(grantConsentSpy).toHaveBeenCalled())
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalled())
   })
 })
