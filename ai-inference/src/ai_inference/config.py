@@ -194,6 +194,42 @@ class Settings(BaseSettings):
     mask_sunglasses_masked_threshold: float = 0.5
     mask_sunglasses_sunglasses_threshold: float = 0.5
 
+    # --- EC-IN-04: dual-mode (normal/masked) decision threshold + 3-layer
+    # resolution (TSD-edge-cases.md D-4.1/D-4.2, OQ-3/OQ-6) -----------------
+    # Master feature flag: default False means `run_recognition`'s decision
+    # path is BYTE-FOR-BYTE identical to pre-EC-IN-04 behavior -- a single
+    # `similarity_threshold`/`margin_threshold`/`min_frames_for_grant` from
+    # this Settings object (env), no masked-template gallery filter, no
+    # `recognition_configs` DB read. Flip to True only once the masked/
+    # normal FNIR@FPIR curves below have been validated against EC-TR-01's
+    # benchmark harness (task acceptance criteria) -- same "ship OFF, prove
+    # it, then enable" convention as `quality_gate_enforcing` above.
+    dual_mode_threshold_enabled: bool = False
+    # --- "masked" mode's per-field defaults (OQ-6 layer 1, ARTEFACT
+    # DEFAULT). GAP, documented here rather than silently faked: there is no
+    # MLflow-model-artefact-metadata reading mechanism anywhere in this
+    # codebase yet (`ai_inference.model_switch.ProductionVersionCache` only
+    # caches a `models.version` STRING, never artefact metadata/tags) -- the
+    # TSD's OQ-6 decision ("default per-mode = metadata artefak model")
+    # therefore cannot be implemented for real in this task without building
+    # a whole new MLflow-client-reading subsystem, out of scope per the task
+    # brief ("JANGAN bikin sistem baru besar2an di luar scope"). These env
+    # vars stand in for that missing layer 1 for now -- same "tune later
+    # against real data, not yet calibrated" status as every other threshold
+    # in this file -- and are consumed as `artefact_defaults` by
+    # `ai_inference.pipeline.recognize`'s 3-layer resolution, which still
+    # applies `recognition_configs` (layer 2, DB override) and falls back to
+    # `similarity_threshold` (layer 3, env) as documented at each field
+    # below. A looser threshold than `similarity_threshold` is the expected
+    # DIRECTION for masked mode (D-4/OQ-3: masked-vs-masked template
+    # matching or the interim masked-vs-normal fallback both cope with
+    # reduced usable facial area) -- 0.30 vs the normal-mode 0.35 default is
+    # a placeholder gap of the same rough magnitude REC/NIST IR 8311
+    # discussions use, NOT a calibrated value.
+    similarity_threshold_masked: float = 0.30
+    margin_threshold_masked: float = 0.0
+    min_frames_for_grant_masked: int = 2
+
 
 @lru_cache
 def get_settings() -> Settings:

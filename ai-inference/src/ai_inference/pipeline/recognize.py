@@ -67,6 +67,23 @@ tracking tickets):
    `RecognizeResponse.guidance_message` (additive, optional) is populated
    with a "mendekatlah" hint for the door UI whenever
    `condition_flags["low_res"]` is `True`.
+8. ~~EC-IN-04 (dual-mode normal/masked decision threshold)~~ **CLOSED
+   (EC-IN-04, TSD-edge-cases.md D-4.1/D-4.2/D-10, OQ-3/OQ-6), SHIP OFF BY
+   DEFAULT**: `Settings.dual_mode_threshold_enabled` (default `False`) gates
+   everything below -- off, this module's decision path is byte-identical
+   to pre-EC-IN-04 behavior. On: each frame's own `masked` condition flag
+   decides whether `gallery.search_top_k` is called with `masked=True`
+   first (falling back to `masked=False` + `condition_flags
+   ["low_confidence_masked"]=True` per OQ-3 when the masked-filtered
+   gallery is entirely empty for this model_version -- NOT a third
+   threshold), and the OR-merged request-level `masked` flag picks ONE mode
+   ("normal" | "masked") whose `similarity_threshold`/`margin`/
+   `min_frames` are resolved by `ai_inference.pipeline.threshold_
+   resolution.resolve_mode_params` (artefact-default env ->
+   `recognition_configs` DEVICE_CLASS/GLOBAL override -> same env as the
+   last-resort fallback -- see that module's docstring for why layers 1 and
+   3 collapse into the same `Settings` fields, a documented gap pending a
+   real MLflow-artefact-metadata mechanism).
 
 `decide_from_scores` (and its `FrameCandidate`/`RecognitionResult` types) is
 pure Python -- no cv2/torch/DB -- and is fully unit tested
@@ -343,6 +360,7 @@ def run_recognition(
     cursor: Any,
     liveness_detector: Any = None,
     production_version_cache: Any = None,
+    device_id: str | None = None,
 ) -> tuple[RecognitionResult, str, list[float]]:
     """Full orchestration for `POST /recognize` (task brief steps 1-8, plus
     IN-04's liveness gate between detect and embed).
@@ -365,6 +383,15 @@ def run_recognition(
     call -- `None` (the default) preserves the pre-IN-07 always-fresh-read
     behavior, which every unit test still relies on via a plain
     `FakeCursor`.
+    `device_id` (EC-IN-04): the authenticated device's id (from
+    `ai_inference.auth_dependency.get_current_device_id`), used ONLY when
+    `settings.dual_mode_threshold_enabled` is `True`, to resolve that
+    device's `device_class` for the `recognition_configs` DEVICE_CLASS-scope
+    lookup (`ai_inference.pipeline.threshold_resolution.resolve_mode_params`)
+    -- see that module and `Settings.dual_mode_threshold_enabled` for the
+    full 3-layer contract. `None` (the default, and every pre-EC-IN-04 call
+    site) is safe even with the flag on: threshold resolution simply has no
+    DEVICE_CLASS candidate and falls through to GLOBAL/artefact-default.
 
     Returns `(RecognitionResult, model_version, liveness_scores)` --
     `model_version` is `""` when there is no PRODUCTION model (fail-secure:
@@ -427,6 +454,18 @@ def run_recognition(
     # i.e. condition_flags.compute_condition_flags's fixed 5-key shape --
     # it would silently DROP this 6th key on the very next frame).
     any_frame_skipped_quality_gate = False
+    # EC-IN-04 (TSD-edge-cases.md D-4.1, OQ-3): True if ANY submitted frame
+    # was flagged `masked` (dual_mode_threshold_enabled) and the masked-
+    # filtered gallery search for it came back completely empty (this
+    # model_version's gallery has no `masked=true` templates at all -- e.g.
+    # pre-EC-TR-02 enrollments not yet covered by the D-4.5 backfill job),
+    # so that frame fell back to searching `masked=false` templates using
+    # `similarity_threshold_masked` instead. Same "always tracked separately
+    # from condition_flags's fixed 5-key merge, folded in after the loop"
+    # pattern as `any_frame_skipped_quality_gate` above -- see that
+    # variable's own comment for why `merge_condition_flags` can't carry an
+    # extra key across iterations.
+    any_frame_low_confidence_masked = False
     for frame_b64 in frames_base64:
         stage_start = time.perf_counter()
         frame_bgr = _decode_frame_bgr(frame_b64)
@@ -558,13 +597,50 @@ def run_recognition(
             if settings.quality_gate_enforcing:
                 continue  # SKIPPED pre-vote (C-3 FIQA), not a candidate, not a reject
 
+        # EC-IN-04 (TSD-edge-cases.md D-4.1, OQ-3): this frame's OWN
+        # `masked` condition flag (computed above, same frame_flags used
+        # for aggregated_condition_flags) decides whether to search the
+        # masked-template gallery first. `dual_mode_threshold_enabled`
+        # False (default) takes the exact pre-EC-IN-04 `search_top_k(...)`
+        # call below (no `masked=` kwarg at all) -- zero-regression by
+        # construction, not just by value.
         stage_start = time.perf_counter()
-        rows = gallery.search_top_k(
-            cursor,
-            embedding=vector,
-            model_version=production_version,
-            k=settings.ann_top_k,
+        frame_masked = settings.dual_mode_threshold_enabled and bool(
+            frame_flags.get("masked", False)
         )
+        if frame_masked:
+            rows = gallery.search_top_k(
+                cursor,
+                embedding=vector,
+                model_version=production_version,
+                k=settings.ann_top_k,
+                masked=True,
+            )
+            if not rows:
+                # OQ-3 fallback: no masked=true templates at all for this
+                # model_version's gallery (not "this particular candidate
+                # has none" -- see gallery.search_top_k's docstring and the
+                # EC-IN-04 task's documented scope limit: the fallback is
+                # decided at gallery-wide granularity, not per candidate
+                # user, since the target user isn't known until AFTER this
+                # search runs). Fall back to unmasked templates, still
+                # under tau_masked (resolved after the loop, below) -- NOT
+                # a third threshold (OQ-3: "tidak ada tau ketiga").
+                rows = gallery.search_top_k(
+                    cursor,
+                    embedding=vector,
+                    model_version=production_version,
+                    k=settings.ann_top_k,
+                    masked=False,
+                )
+                any_frame_low_confidence_masked = True
+        else:
+            rows = gallery.search_top_k(
+                cursor,
+                embedding=vector,
+                model_version=production_version,
+                k=settings.ann_top_k,
+            )
         stage_latency_seconds.labels(stage="search").observe(time.perf_counter() - stage_start)
         candidate = _collapse_to_top_candidates(rows)
         candidates.append(candidate)
@@ -578,13 +654,57 @@ def run_recognition(
     # above for why -- `merge_condition_flags` can't carry it across
     # iterations). Log-only: set regardless of `quality_gate_enforcing`.
     aggregated_condition_flags["skipped_quality_gate"] = any_frame_skipped_quality_gate
+    # EC-IN-04: always present (additive key, default False) -- mirrors
+    # `skipped_quality_gate`'s "always tracked, not just when the flag is
+    # on" convention. Stays False for every request when
+    # `dual_mode_threshold_enabled` is off, since `any_frame_low_confidence_
+    # masked` can only be set to True inside the `frame_masked` branch above,
+    # which is itself gated on the same setting.
+    aggregated_condition_flags["low_confidence_masked"] = any_frame_low_confidence_masked
+
+    # EC-IN-04 (TSD-edge-cases.md D-4.2, OQ-6): resolve which decision
+    # parameters to hand to `decide_from_scores` below. `dual_mode_
+    # threshold_enabled=False` (default) takes the exact pre-EC-IN-04 path
+    # -- `settings.similarity_threshold`/`margin_threshold`/
+    # `min_frames_for_grant` unconditionally, no DB read, no mode decision
+    # -- so this task changes ZERO behavior out of the box, same convention
+    # as EC-IN-02's `quality_gate_enforcing`.
+    if settings.dual_mode_threshold_enabled:
+        # "Probe ber-flag masked" (task brief) is a per-REQUEST decision,
+        # not per-frame: the OR-merged aggregate (same aggregation already
+        # used for every other condition flag) decides ONE mode for the
+        # whole decide_from_scores call below, applied uniformly across all
+        # frames' candidates -- simpler and more faithful to "one probe, one
+        # mode" than threading a per-frame threshold through voting (which
+        # `decide_from_scores` does not otherwise support). The GALLERY
+        # SEARCH filter above is still decided per-frame (it has to be --
+        # embedding/search happens inside the loop, before this aggregate
+        # exists), so a request with a flickering masked flag can mix
+        # masked-filtered and unfiltered searches across frames while still
+        # applying one resolved threshold/margin/min_frames at decision
+        # time.
+        request_mode = "masked" if aggregated_condition_flags.get("masked") else "normal"
+        device_class = gallery.get_device_class(cursor, device_id) if device_id else None
+
+        from ai_inference.pipeline.threshold_resolution import resolve_mode_params
+
+        resolved = resolve_mode_params(
+            cursor, settings, mode=request_mode, device_class=device_class
+        )
+        decision_threshold = resolved.similarity_threshold
+        decision_margin = resolved.margin
+        decision_min_frames = resolved.min_frames
+    else:
+        decision_threshold = settings.similarity_threshold
+        decision_margin = settings.margin_threshold
+        decision_min_frames = settings.min_frames_for_grant
 
     stage_start = time.perf_counter()
     result = decide_from_scores(
         candidates,
-        threshold=settings.similarity_threshold,
-        margin=settings.margin_threshold,
-        min_frames_for_grant=settings.min_frames_for_grant,
+        threshold=decision_threshold,
+        margin=decision_margin,
+        min_frames_for_grant=decision_min_frames,
     )
     stage_latency_seconds.labels(stage="overhead").observe(time.perf_counter() - stage_start)
     # EC-IN-01: attach condition_flags/reject_stage AFTER voting -- both
@@ -621,6 +741,7 @@ def run_recognition_timed(
     cursor: Any,
     liveness_detector: Any = None,
     production_version_cache: Any = None,
+    device_id: str | None = None,
 ) -> dict[str, Any]:
     """`run_recognition` wrapped with the FR-INF-02 `latency_ms` measurement
     and assembled into the exact `/recognize` response dict (task brief step
@@ -644,6 +765,7 @@ def run_recognition_timed(
         frames_base64, settings, embedder=embedder, cursor=cursor,
         liveness_detector=liveness_detector,
         production_version_cache=production_version_cache,
+        device_id=device_id,
     )
     elapsed_seconds = time.perf_counter() - start
     decision_latency_seconds.observe(elapsed_seconds)
