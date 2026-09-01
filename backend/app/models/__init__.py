@@ -13,9 +13,11 @@ from app.models.consent import Consent
 from app.models.device import Device
 from app.models.enrollment_session import EnrollmentSession
 from app.models.face_embedding import EMBEDDING_DIM, FaceEmbedding
+from app.models.identity_similarity_flag import IdentitySimilarityFlag
 from app.models.media_object import MediaObject
 from app.models.model_registry import ModelVersion
 from app.models.password_reset_token import PasswordResetToken
+from app.models.recognition_config import RecognitionConfig
 from app.models.staff_account import StaffAccount
 from app.models.training_job import TrainingJob
 from app.models.user import User
@@ -30,9 +32,11 @@ __all__ = [
     "EnrollmentSession",
     "EMBEDDING_DIM",
     "FaceEmbedding",
+    "IdentitySimilarityFlag",
     "MediaObject",
     "ModelVersion",
     "PasswordResetToken",
+    "RecognitionConfig",
     "StaffAccount",
     "TrainingJob",
     "User",

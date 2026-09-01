@@ -205,3 +205,22 @@ class AccessDecision(enum.StrEnum):
     # migrations/versions/ for the BE-10 enum migration) rather than the
     # baseline schema migration, since this value didn't exist until BE-10.
     UNKNOWN = "UNKNOWN"
+
+
+class RecognitionConfigScope(enum.StrEnum):
+    """Scope a `recognition_configs` override row applies to (EC-BE-04,
+    TSD-edge-cases.md D-4.2/D-10, OQ-6).
+
+    Resolution priority when several scopes could apply to the same
+    `(mode)` lookup is `USER` (most specific) > `DEVICE_CLASS` >
+    `GLOBAL` (least specific) — see
+    `app/services/recognition_config_service.py::resolve_recognition_config`,
+    the contract later consumed by EC-IN-04 (ai-inference)/EC-TR-08
+    (ai-training). `scope_ref` on the row holds the value this scope keys
+    on: NULL for `GLOBAL`, a `devices.device_class` value (e.g. `door_entry`)
+    for `DEVICE_CLASS`, a `users.id` (stringified UUID) for `USER`.
+    """
+
+    GLOBAL = "global"
+    DEVICE_CLASS = "device_class"
+    USER = "user"
