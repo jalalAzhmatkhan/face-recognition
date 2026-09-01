@@ -102,6 +102,11 @@ export default function EnrollmentCapturePage() {
     video: 'idle' | 'uploading' | 'done' | 'error'
   }>({ photo: 'idle', video: 'idle' })
   const [uploadError, setUploadError] = useState<string | null>(null)
+  // Set when MAX_DURATION_S is reached with fewer than 12/12 clock
+  // positions confirmed (see the elapsed-timer effect below) -- the
+  // recording is stopped WITHOUT advancing to 'review', since a partial
+  // 360° sweep must never be silently accepted as a finished capture.
+  const [recordingTimedOut, setRecordingTimedOut] = useState(false)
   // System Parameter menu override (pages/SystemParametersPage.tsx) --
   // starts at the built-in defaults and is replaced once (if) the fetch
   // below succeeds, so this wizard is fully usable even before the first
@@ -117,6 +122,15 @@ export default function EnrollmentCapturePage() {
   const elapsedTimerRef = useRef<number | null>(null)
   const sectorsDone = countDone(tracker.status)
   const canFinishVideo = isCaptureComplete(tracker.status)
+  // `startVideoCapture`'s MAX_DURATION_S timer is a stable useCallback ([]
+  // deps) whose closure can't see live `canFinishVideo` updates -- mirrors
+  // `finishVideoCaptureRef` below, keeping a ref in sync via effect so the
+  // interval callback always reads the CURRENT coverage, not the value at
+  // the moment recording started.
+  const canFinishVideoRef = useRef(canFinishVideo)
+  useEffect(() => {
+    canFinishVideoRef.current = canFinishVideo
+  }, [canFinishVideo])
 
   // Load face-detection models once, up front.
   useEffect(() => {
@@ -280,12 +294,36 @@ export default function EnrollmentCapturePage() {
     finishVideoCaptureRef.current = finishVideoCapture
   }, [finishVideoCapture])
 
+  // MAX_DURATION_S reached with fewer than 12/12 positions confirmed: stop
+  // recording (release the camera-side recorder resource) but do NOT
+  // transition to 'review' -- unlike finishVideoCapture, `recorder.onstop`
+  // is cleared instead of building a videoBlob, so an incomplete take can
+  // never be silently treated as finished. The operator must retry.
+  const abandonIncompleteRecording = useCallback(() => {
+    if (elapsedTimerRef.current !== null) {
+      window.clearInterval(elapsedTimerRef.current)
+      elapsedTimerRef.current = null
+    }
+    const recorder = recorderRef.current
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.onstop = null
+      recorder.stop()
+    }
+    recordedChunksRef.current = []
+    setRecordingTimedOut(true)
+  }, [])
+  const abandonIncompleteRecordingRef = useRef(abandonIncompleteRecording)
+  useEffect(() => {
+    abandonIncompleteRecordingRef.current = abandonIncompleteRecording
+  }, [abandonIncompleteRecording])
+
   const startVideoCapture = useCallback(() => {
     const stream = streamRef.current
     if (!stream) return
     recordedChunksRef.current = []
     setTracker(createInitialTrackerState())
     setElapsedS(0)
+    setRecordingTimedOut(false)
 
     const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' })
     recorder.ondataavailable = (event) => {
@@ -297,7 +335,18 @@ export default function EnrollmentCapturePage() {
     elapsedTimerRef.current = window.setInterval(() => {
       setElapsedS((prev) => {
         const next = prev + 1
-        if (next >= MAX_DURATION_S) finishVideoCaptureRef.current()
+        if (next >= MAX_DURATION_S) {
+          // Per FR-ENR-03: "Selesai" (and this timeout) must never accept
+          // fewer than 12/12 confirmed positions -- only auto-finish here
+          // if coverage is ALREADY complete (an operator who simply never
+          // clicked "Selesai" after finishing the sweep); otherwise stop
+          // and require a retry instead of silently completing 3/12.
+          if (canFinishVideoRef.current) {
+            finishVideoCaptureRef.current()
+          } else {
+            abandonIncompleteRecordingRef.current()
+          }
+        }
         return next
       })
     }, 1000)
@@ -500,6 +549,13 @@ export default function EnrollmentCapturePage() {
               </div>
             )}
 
+            {step === 'video' && recordingTimedOut && (
+              <p role="alert" className="capture-error">
+                Waktu rekam ({MAX_DURATION_S} dtk) habis sebelum 12/12 posisi jam tercakup
+                ({sectorsDone}/12). Klik &quot;Ulangi Rekam&quot; dan coba lagi.
+              </p>
+            )}
+
             {step === 'video' && (
               <div className="capture-actions">
                 <button type="button" className="btn" onClick={retryVideoCapture}>
@@ -508,7 +564,7 @@ export default function EnrollmentCapturePage() {
                 <button
                   type="button"
                   className="btn btn--primary"
-                  disabled={!canFinishVideo || elapsedS < MIN_DURATION_S}
+                  disabled={!canFinishVideo || elapsedS < MIN_DURATION_S || recordingTimedOut}
                   onClick={finishVideoCapture}
                 >
                   Selesai
