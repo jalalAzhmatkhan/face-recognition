@@ -72,21 +72,21 @@ afterEach(() => {
 })
 
 describe('EnrollmentsPage — user name column', () => {
-  it('shows the resolved user name (with external_ref) instead of the raw user ID, linked to the user detail page', async () => {
+  it('shows the resolved user name (with external_ref) instead of the raw user ID, linked to that enrollment session\'s detail page', async () => {
     getCurrentRoleMock.mockReturnValue('VIEWER')
     listEnrollmentsMock.mockResolvedValue({ items: [session()], total: 1, limit: 20, offset: 0 })
     listUsersMock.mockResolvedValue({ items: [user()], total: 1, limit: 200, offset: 0 })
     renderPage()
 
     const link = await screen.findByRole('link', { name: 'Budi Santoso (EMP-001)' })
-    expect(link).toHaveAttribute('href', '/users/user-1')
+    expect(link).toHaveAttribute('href', '/enrollments/session-1')
     expect(screen.queryByText('user-1')).not.toBeInTheDocument()
   })
 
-  it('falls back to the raw user ID when the user is not found in the lookup', async () => {
+  it('falls back to the raw user ID (still linked to the enrollment detail page) when the user is not found in the lookup', async () => {
     getCurrentRoleMock.mockReturnValue('VIEWER')
     listEnrollmentsMock.mockResolvedValue({
-      items: [session({ user_id: 'ghost-user' })],
+      items: [session({ id: 'session-9', user_id: 'ghost-user' })],
       total: 1,
       limit: 20,
       offset: 0,
@@ -94,7 +94,7 @@ describe('EnrollmentsPage — user name column', () => {
     listUsersMock.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 })
     renderPage()
 
-    expect(await screen.findByText('ghost-user')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /ghost-user/ })).not.toBeInTheDocument()
+    const link = await screen.findByRole('link', { name: 'ghost-user' })
+    expect(link).toHaveAttribute('href', '/enrollments/session-9')
   })
 })

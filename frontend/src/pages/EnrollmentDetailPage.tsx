@@ -18,6 +18,7 @@ import {
   canCancel,
   canGrantConsent,
   canRecapture,
+  canResumeCapture,
   canRevoke,
 } from '../features/enrollment-management/roleGating'
 import StateBadge from '../features/enrollment-management/StateBadge'
@@ -184,6 +185,7 @@ export default function EnrollmentDetailPage() {
 
   const showConsent = canGrantConsent(session.state, role)
   const showRecapture = canRecapture(session.state, role)
+  const showResumeCapture = canResumeCapture(session.state, role)
   const showCancel = canCancel(session.state, role)
   const showRevoke = canRevoke(session.state, role)
   const anyMutationPending =
@@ -283,7 +285,7 @@ export default function EnrollmentDetailPage() {
           </>,
         )}
 
-      {(showConsent || showRecapture || showCancel || showRevoke) &&
+      {(showConsent || showRecapture || showResumeCapture || showCancel || showRevoke) &&
         surfaceCard(
           <>
             <h2 style={{ margin: 0, font: 'var(--text-h3)' }}>Aksi</h2>
@@ -363,6 +365,32 @@ export default function EnrollmentDetailPage() {
               >
                 {recaptureMutation.isPending ? 'Memulai...' : 'Mulai / Ulangi Capture'}
               </button>
+            )}
+
+            {showResumeCapture && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', alignItems: 'flex-start' }}>
+                <button
+                  type="button"
+                  disabled={anyMutationPending}
+                  onClick={() => navigate(`/enrollments/${id}/capture`)}
+                  style={{
+                    alignSelf: 'flex-start',
+                    minHeight: 'var(--touch-target)',
+                    padding: '0 var(--space-5)',
+                    borderRadius: 'var(--radius-md)',
+                    border: 'var(--border-w) solid var(--accent)',
+                    background: 'var(--accent)',
+                    color: 'var(--text-inverse)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Lanjutkan / Coba Lagi Capture
+                </button>
+                <p style={{ margin: 0, font: 'var(--text-caption)', color: 'var(--text-muted)' }}>
+                  Sesi ini sedang dalam status "Sedang Capture" (mungkin sempat terputus). Klik
+                  untuk membuka kembali halaman capture dan mencoba lagi.
+                </p>
+              </div>
             )}
 
             {showCancel && (
