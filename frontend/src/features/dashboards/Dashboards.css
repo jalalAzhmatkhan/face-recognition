@@ -250,3 +250,18 @@
   text-align: right;
   color: var(--text-primary);
 }
+
+/* EC-FE-01 reject/condition-flag/device-class breakdown panel — reuses
+ * `.dashboard-funnel` bar rows above, just grouped into labeled sections. */
+.dashboard-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dashboard-panel__subtitle {
+  margin: 0;
+  font: var(--text-small);
+  font-weight: 600;
+  color: var(--text-secondary);
+}

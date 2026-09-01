@@ -4,12 +4,14 @@ import {
   fetchDailyDecisionCounts,
   fetchEnrollmentFunnel,
   fetchProductionModel,
+  fetchRecentAccessEventSample,
   fetchTodayCounts,
 } from '../features/dashboards/api'
 import StatCard from '../features/dashboards/StatCard'
 import GrantsDeniesChart from '../features/dashboards/GrantsDeniesChart'
 import ProductionModelPanel from '../features/dashboards/ProductionModelPanel'
 import EnrollmentFunnelPanel from '../features/dashboards/EnrollmentFunnelPanel'
+import EdgeCaseFunnelPanel from '../features/dashboards/EdgeCaseFunnelPanel'
 import '../features/dashboards/Dashboards.css'
 
 const TREND_DAYS = 14
@@ -62,6 +64,12 @@ export default function DashboardPage() {
     queryFn: () => fetchEnrollmentFunnel(),
   })
 
+  const edgeCaseSampleQuery = useQuery({
+    queryKey: ['dashboards', 'edge-case-sample'],
+    queryFn: () => fetchRecentAccessEventSample(),
+    refetchInterval: 60_000,
+  })
+
   const today = todayQuery.data
   const todayTotal = today
     ? today.GRANTED + today.DENIED + today.UNKNOWN + today.SPOOF_SUSPECTED
@@ -73,9 +81,17 @@ export default function DashboardPage() {
   const latencyTone = latencyP95 === null ? 'default' : latencyP95 > LATENCY_BUDGET_MS ? 'danger' : 'success'
 
   const hasLoadError =
-    todayQuery.isError || trendQuery.isError || modelQuery.isError || funnelQuery.isError
+    todayQuery.isError ||
+    trendQuery.isError ||
+    modelQuery.isError ||
+    funnelQuery.isError ||
+    edgeCaseSampleQuery.isError
   const firstError =
-    todayQuery.error ?? trendQuery.error ?? modelQuery.error ?? funnelQuery.error
+    todayQuery.error ??
+    trendQuery.error ??
+    modelQuery.error ??
+    funnelQuery.error ??
+    edgeCaseSampleQuery.error
 
   return (
     <div className="dashboard-page">
@@ -127,6 +143,13 @@ export default function DashboardPage() {
         <EnrollmentFunnelPanel
           stages={funnelQuery.data ?? []}
           isLoading={funnelQuery.isLoading}
+        />
+      </div>
+
+      <div className="dashboard-row dashboard-row--funnel">
+        <EdgeCaseFunnelPanel
+          events={edgeCaseSampleQuery.data ?? []}
+          isLoading={edgeCaseSampleQuery.isLoading}
         />
       </div>
     </div>

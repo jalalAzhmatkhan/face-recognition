@@ -8,6 +8,10 @@ interface DeviceActionsMenuProps {
   canRotate: boolean
   canDisable: boolean
   canActivate: boolean
+  /** EC-FE-01: gated the same as `canEdit` (ADMIN-only, see roleGating.ts)
+   * — commissioning changes the device's operational config, same
+   * sensitivity level as editing name/door_group. */
+  canEditChecklist: boolean
   anyMutationPending: boolean
   isRotateTarget: boolean
   isRotatePending: boolean
@@ -21,6 +25,7 @@ interface DeviceActionsMenuProps {
   onCancelDisable: () => void
   onConfirmDisable: () => void
   onActivate: () => void
+  onEditChecklist: () => void
 }
 
 /**
@@ -38,6 +43,7 @@ export default function DeviceActionsMenu({
   canRotate,
   canDisable,
   canActivate,
+  canEditChecklist,
   anyMutationPending,
   isRotateTarget,
   isRotatePending,
@@ -51,6 +57,7 @@ export default function DeviceActionsMenu({
   onCancelDisable,
   onConfirmDisable,
   onActivate,
+  onEditChecklist,
 }: DeviceActionsMenuProps) {
   const canDisableThisDevice = canDisable && device.status !== 'DISABLED'
   // "Aktifkan" only makes sense for a device that isn't disabled.
@@ -63,6 +70,7 @@ export default function DeviceActionsMenu({
     !canRotate &&
     !canDisableThisDevice &&
     !canActivateThisDevice &&
+    !canEditChecklist &&
     !isRotateTarget &&
     !isDisableTarget
   ) {
@@ -123,6 +131,18 @@ export default function DeviceActionsMenu({
               }}
             >
               Edit
+            </ActionsMenuItem>
+          )}
+
+          {canEditChecklist && (
+            <ActionsMenuItem
+              disabled={anyMutationPending}
+              onClick={() => {
+                closeMenu()
+                onEditChecklist()
+              }}
+            >
+              Checklist Komisioning
             </ActionsMenuItem>
           )}
 

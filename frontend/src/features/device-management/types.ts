@@ -16,6 +16,19 @@ export type DeviceStatus = 'ONLINE' | 'OFFLINE' | 'DISABLED'
 
 export const DEVICE_STATUSES: DeviceStatus[] = ['ONLINE', 'OFFLINE', 'DISABLED']
 
+/** Device category (EC-BE-01, TSD-edge-cases.md D-5/D-10). NOTE the enum
+ * VALUES are `door_entry` / `attendance` / `unknown` (see
+ * `backend/app/models/enums.py::DeviceClass` and the `device_class` native
+ * Postgres enum) — this is a naming mismatch with
+ * `documentation/operations/camera-placement-guide.md` §5, which calls the
+ * non-attendance class `access_control`. This feature follows the real
+ * backend enum everywhere; the commissioning-checklist catalog
+ * (`commissioningChecklist.ts`) treats `door_entry` as that doc's
+ * `access_control`. */
+export type DeviceClass = 'door_entry' | 'attendance' | 'unknown'
+
+export const DEVICE_CLASSES: DeviceClass[] = ['door_entry', 'attendance', 'unknown']
+
 export interface DeviceResponse {
   id: string
   name: string
@@ -24,6 +37,13 @@ export interface DeviceResponse {
   last_heartbeat_at: string | null
   credential_rotated_at: string | null
   is_stale: boolean
+  /** EC-BE-01 additions. Optional here (rather than required with a
+   * default) so existing test fixtures/mocks built before this task keep
+   * compiling unchanged — a real `DeviceResponse` from the backend always
+   * includes `device_class` (defaults to `unknown`), only
+   * `commissioning_checklist` can be genuinely absent (`null`). */
+  device_class?: DeviceClass
+  commissioning_checklist?: CommissioningChecklist | null
 }
 
 /** Returned ONLY by `POST /devices` and `POST /devices/{id}/rotate-credential`
@@ -53,4 +73,74 @@ export interface UpdateDeviceBody {
   name?: string
   door_group?: string
   status?: DeviceStatus
+  device_class?: DeviceClass
+  commissioning_checklist?: CommissioningChecklist
+}
+
+/**
+ * `devices.commissioning_checklist jsonb` contract (EC-FE-01), FINALIZED by
+ * `documentation/operations/camera-placement-guide.md` §5 (EC-OPS-01, not
+ * committed). Backend (`backend/app/schemas/devices.py`) stores this as a
+ * loose `dict[str, Any]` on purpose (no DB/Pydantic structural validation
+ * yet) — these types are this frontend's own enforcement of that contract,
+ * per that schema file's own "tracked as follow-up" comment.
+ */
+export type ChecklistCategory =
+  | 'mounting'
+  | 'lighting'
+  | 'camera_settings'
+  | 'occlusion_policy'
+  | 'queue_zone'
+
+export type ChecklistValueType = 'number' | 'boolean' | 'enum' | 'text' | 'photo_ref'
+
+export type ChecklistItemStatus = 'pass' | 'fail' | 'na' | null
+
+export interface ChecklistExpectedRange {
+  min: number
+  max: number
+}
+
+export interface ChecklistItem {
+  id: string
+  category: ChecklistCategory
+  label: string
+  applicable_device_classes: DeviceClass[]
+  required: boolean
+  value_type: ChecklistValueType
+  unit?: string | null
+  expected_range?: ChecklistExpectedRange | null
+  expected_value?: boolean | string | null
+  enum_options?: string[] | null
+  measured_value: number | boolean | string | null
+  status: ChecklistItemStatus
+  notes: string | null
+  checked_at: string | null
+  checked_by_staff_id: string | null
+}
+
+export type ZoneShape = 'box' | 'circle' | 'polygon' | null
+
+export interface QueueZone {
+  stop_point_marked: boolean
+  stop_point_distance_m: number | null
+  single_face_zone_defined: boolean
+  zone_shape: ZoneShape
+  zone_reference_photo_s3_key: string | null
+  notes: string | null
+}
+
+export type ChecklistOverallStatus = 'pending' | 'passed' | 'failed'
+
+export interface CommissioningChecklist {
+  schema_version: '1.0'
+  device_class: DeviceClass
+  overall_status: ChecklistOverallStatus
+  commissioned_at: string | null
+  commissioned_by_staff_id: string | null
+  commissioned_by_name: string | null
+  site_notes: string | null
+  checks: ChecklistItem[]
+  queue_zone: QueueZone | null
+  reverify_due_at: string | null
 }

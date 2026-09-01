@@ -21,6 +21,7 @@ import DeviceStatusBadge from '../features/device-management/DeviceStatusBadge'
 import DeviceActionsMenu from '../features/device-management/DeviceActionsMenu'
 import CredentialBootstrapDialog from '../features/device-management/CredentialBootstrapDialog'
 import ActivateDeviceDialog from '../features/device-management/ActivateDeviceDialog'
+import CommissioningChecklistDialog from '../features/device-management/CommissioningChecklistDialog'
 import { DEVICE_STATUSES } from '../features/device-management/types'
 import type { DeviceResponse, DeviceStatus, DeviceWithCredential } from '../features/device-management/types'
 import { getCurrentRole } from '../lib/authToken'
@@ -66,6 +67,7 @@ export default function DevicesPage() {
   const [rotateTargetId, setRotateTargetId] = useState<string | null>(null)
   const [disableTargetId, setDisableTargetId] = useState<string | null>(null)
   const [activateTarget, setActivateTarget] = useState<{ id: string; name: string } | null>(null)
+  const [checklistTarget, setChecklistTarget] = useState<DeviceResponse | null>(null)
 
   /** Set right after a successful create/rotate, and cleared ONLY by the
    * dialog's explicit acknowledge button (never by any other state change)
@@ -499,6 +501,7 @@ export default function DevicesPage() {
                               canRotate={canRotate}
                               canDisable={canDisable}
                               canActivate={canActivate}
+                              canEditChecklist={canEdit}
                               anyMutationPending={anyMutationPending}
                               isRotateTarget={rotateTargetId === device.id}
                               isRotatePending={rotateMutation.isPending}
@@ -514,6 +517,7 @@ export default function DevicesPage() {
                               onActivate={() =>
                                 setActivateTarget({ id: device.id, name: device.name })
                               }
+                              onEditChecklist={() => setChecklistTarget(device)}
                             />
                           )}
                         </div>
@@ -582,6 +586,17 @@ export default function DevicesPage() {
           deviceId={activateTarget.id}
           deviceName={activateTarget.name}
           onClose={() => setActivateTarget(null)}
+        />
+      )}
+
+      {checklistTarget && (
+        <CommissioningChecklistDialog
+          device={checklistTarget}
+          onClose={() => setChecklistTarget(null)}
+          onSaved={() => {
+            setChecklistTarget(null)
+            invalidate()
+          }}
         />
       )}
     </div>
