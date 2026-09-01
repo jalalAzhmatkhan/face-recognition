@@ -607,6 +607,225 @@ def test_quality_gate_passing_frames_never_flag_skipped_quality_gate(monkeypatch
         assert result.condition_flags["skipped_quality_gate"] is False
 
 
+# --- EC-IN-04: dual-mode (normal/masked) threshold + masked-template
+# gallery filter (TSD-edge-cases.md D-4.1/D-4.2, OQ-3/OQ-6) --------------
+
+
+def _patch_condition_flags_masked(monkeypatch, masked: bool) -> None:
+    """Forces every frame's `masked` condition flag to a known value,
+    decoupled from `compute_condition_flags`'s real heuristic (which -- as
+    it happens -- always flags the all-zero `fake_frame` used by
+    `_patch_common_seams` as masked/dark/blurry/sunglasses; patching this
+    explicitly keeps these EC-IN-04 tests' intent legible/robust instead of
+    relying on that heuristic accident)."""
+    from ai_inference.pipeline import condition_flags as condition_flags_module
+
+    monkeypatch.setattr(
+        condition_flags_module,
+        "compute_condition_flags",
+        lambda frame_bgr, **kwargs: {
+            "dark": False,
+            "blurry": False,
+            "low_res": False,
+            "masked": masked,
+            "sunglasses": False,
+        },
+    )
+
+
+def _patch_gallery_config_lookups(monkeypatch, *, device_class=None, override=None) -> None:
+    """Stubs the two EC-IN-04 DB reads `run_recognition` performs ONLY when
+    `dual_mode_threshold_enabled` (device_class lookup + recognition_configs
+    override) -- isolates these gate-WIRING tests from needing a real
+    `recognition_configs`-serving fake cursor (already covered directly by
+    `tests/test_threshold_resolution.py` and `tests/test_gallery.py`)."""
+    from ai_inference import gallery as gallery_module
+
+    monkeypatch.setattr(gallery_module, "get_device_class", lambda cursor, device_id: device_class)
+    monkeypatch.setattr(
+        gallery_module,
+        "get_recognition_config_override",
+        lambda cursor, *, mode, device_class: override,
+    )
+
+
+def test_dual_mode_disabled_search_top_k_called_without_masked_kwarg(monkeypatch) -> None:
+    """Regression: flag OFF (default) -- even a `masked`-flagged frame must
+    take the exact pre-EC-IN-04 `search_top_k` call shape (no `masked`
+    kwarg at all) and the exact pre-EC-IN-04 threshold."""
+    from ai_inference.config import Settings
+
+    settings = Settings(min_frames_for_grant=1, dual_mode_threshold_enabled=False)
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=True)
+
+    from ai_inference import gallery as gallery_module
+
+    calls: list[dict] = []
+
+    def fake_search(cursor, **kwargs):
+        calls.append(kwargs)
+        return [("u1", 0.9)]
+
+    monkeypatch.setattr(gallery_module, "search_top_k", fake_search)
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = _run_two_frame_recognition(
+        monkeypatch, settings, embedder=embedder, liveness_detector=_AlwaysLiveLivenessDetector()
+    )
+    assert result.decision == "GRANTED"
+    assert all("masked" not in c for c in calls)
+    assert result.condition_flags["low_confidence_masked"] is False
+
+
+def test_dual_mode_enabled_masked_probe_uses_masked_filtered_gallery_first(monkeypatch) -> None:
+    from ai_inference.config import Settings
+
+    settings = Settings(
+        min_frames_for_grant=1,
+        dual_mode_threshold_enabled=True,
+        similarity_threshold_masked=0.3,
+        similarity_threshold=0.9,  # deliberately too strict to matter here
+    )
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=True)
+    _patch_gallery_config_lookups(monkeypatch)
+
+    from ai_inference import gallery as gallery_module
+
+    calls: list[bool | None] = []
+
+    def fake_search(cursor, **kwargs):
+        calls.append(kwargs.get("masked"))
+        return [("u1", 0.5)]  # clears tau_masked (0.3), would fail tau_normal (0.9)
+
+    monkeypatch.setattr(gallery_module, "search_top_k", fake_search)
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = _run_two_frame_recognition(
+        monkeypatch, settings, embedder=embedder, liveness_detector=_AlwaysLiveLivenessDetector()
+    )
+    assert calls == [True, True]  # both frames hit the masked-filtered gallery, no fallback needed
+    assert result.decision == "GRANTED"
+    assert result.user_id == "u1"
+    assert result.condition_flags["low_confidence_masked"] is False
+
+
+def test_dual_mode_enabled_masked_probe_falls_back_when_gallery_has_no_masked_templates(
+    monkeypatch,
+) -> None:
+    """OQ-3: the masked-filtered gallery is entirely empty for this
+    model_version (no synthetic_masked templates backfilled yet) -- falls
+    back to the unmasked-template gallery, STILL under tau_masked (not
+    tau_normal, not a third threshold), and flags `low_confidence_masked`."""
+    from ai_inference.config import Settings
+
+    settings = Settings(
+        min_frames_for_grant=1,
+        dual_mode_threshold_enabled=True,
+        similarity_threshold_masked=0.3,
+        similarity_threshold=0.9,  # if tau_normal were used instead, this would DENY
+    )
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=True)
+    _patch_gallery_config_lookups(monkeypatch)
+
+    from ai_inference import gallery as gallery_module
+
+    calls: list[bool | None] = []
+
+    def fake_search(cursor, **kwargs):
+        calls.append(kwargs.get("masked"))
+        if kwargs.get("masked") is True:
+            return []  # no masked=true templates at all
+        return [("u1", 0.5)]  # unmasked template, clears tau_masked (0.3)
+
+    monkeypatch.setattr(gallery_module, "search_top_k", fake_search)
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = _run_two_frame_recognition(
+        monkeypatch, settings, embedder=embedder, liveness_detector=_AlwaysLiveLivenessDetector()
+    )
+    assert calls == [True, False, True, False]  # each of the 2 frames: masked miss, then fallback
+    assert result.decision == "GRANTED"
+    assert result.user_id == "u1"
+    assert result.condition_flags["low_confidence_masked"] is True
+
+
+def test_dual_mode_enabled_normal_probe_takes_unfiltered_gallery_call(monkeypatch) -> None:
+    """A probe never flagged `masked`, flag ON: gallery call shape stays
+    exactly the pre-EC-IN-04 unfiltered query -- only which Settings fields
+    feed the threshold changes (still `similarity_threshold`/
+    `margin_threshold`/`min_frames_for_grant`, resolved as the "normal"
+    mode's artefact default, no override configured here)."""
+    from ai_inference.config import Settings
+
+    settings = Settings(min_frames_for_grant=1, dual_mode_threshold_enabled=True)
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=False)
+    _patch_gallery_config_lookups(monkeypatch)
+
+    from ai_inference import gallery as gallery_module
+
+    calls: list[dict] = []
+
+    def fake_search(cursor, **kwargs):
+        calls.append(kwargs)
+        return [("u1", 0.9)]
+
+    monkeypatch.setattr(gallery_module, "search_top_k", fake_search)
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = _run_two_frame_recognition(
+        monkeypatch, settings, embedder=embedder, liveness_detector=_AlwaysLiveLivenessDetector()
+    )
+    assert all("masked" not in c for c in calls)
+    assert result.decision == "GRANTED"
+    assert result.condition_flags["low_confidence_masked"] is False
+
+
+def test_dual_mode_enabled_device_class_override_used_for_threshold(monkeypatch) -> None:
+    """`recognition_configs` DEVICE_CLASS override on `similarity_threshold`
+    is applied for a normal-mode probe when the flag is on (layer 2 of the
+    OQ-6 resolution) -- overriding it to something so strict the otherwise-
+    GRANTED similarity now fails."""
+    from ai_inference.config import Settings
+
+    settings = Settings(
+        min_frames_for_grant=1, dual_mode_threshold_enabled=True, similarity_threshold=0.35
+    )
+    _patch_common_seams(monkeypatch, bbox_wh=(120.0, 120.0))
+    _patch_condition_flags_masked(monkeypatch, masked=False)
+    _patch_gallery_config_lookups(
+        monkeypatch,
+        device_class="door_entry",
+        override={
+            "similarity_threshold": 0.99,
+            "margin": None,
+            "liveness_threshold": None,
+            "min_frames": None,
+        },
+    )
+
+    from ai_inference import gallery as gallery_module
+
+    monkeypatch.setattr(
+        gallery_module, "search_top_k", lambda cursor, **kwargs: [("u1", 0.5)]
+    )
+
+    embedder = _FiqaFakeEmbedder("adaface-ir101-webface12m", feature_norm=50.0)
+    result, _model_version, _liveness_scores = run_recognition(
+        ["frame_a", "frame_b"],
+        settings,
+        embedder=embedder,
+        cursor=_FiqaFakeCursor(embedder.model_version),
+        liveness_detector=_AlwaysLiveLivenessDetector(),
+        device_id="device-1",
+    )
+    # 0.5 clears the DEFAULT 0.35 but not the DEVICE_CLASS override's 0.99.
+    assert result.decision == "UNKNOWN"
+
+
 def test_decide_no_spoof_frames_behaves_exactly_as_before() -> None:
     # Regression: identical to test_decide_grants_when_same_user_wins_min_frames
     # above but with spoof_suspect explicitly False everywhere -- confirms

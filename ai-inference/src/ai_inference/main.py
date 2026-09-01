@@ -89,8 +89,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         `ai_inference.auth_dependency.get_current_device_id`. Missing/
         malformed/unknown/wrong-secret credentials -> 401; a credential
         belonging to an administratively DISABLED device -> 403
-        (NFR-SEC-04). `device_id` is resolved but not yet used to scope the
-        gallery search.
+        (NFR-SEC-04). `device_id` is NOT used to scope the gallery search
+        itself (still one shared gallery for every device), but IS passed
+        to `run_recognition_timed` (EC-IN-04) to resolve that device's
+        `device_class` for the DEVICE_CLASS-scoped `recognition_configs`
+        threshold override, when `settings.dual_mode_threshold_enabled`.
 
         **IN-06 (access-event emission)**: after computing the decision, the
         SAME device bearer token is forwarded to backend's own
@@ -166,6 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     cursor=cursor,
                     liveness_detector=liveness_detector,
                     production_version_cache=production_version_cache,
+                    device_id=device_id,
                 )
         finally:
             conn.close()

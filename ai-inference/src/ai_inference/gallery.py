@@ -79,6 +79,7 @@ def search_top_k(
     embedding: list[float],
     model_version: str,
     k: int,
+    masked: bool | None = None,
 ) -> list[tuple[str, float]]:
     """Top-`k` `(user_id, similarity)` pairs for `model_version`'s gallery
     templates, ordered by similarity DESCENDING (best match first).
@@ -101,11 +102,125 @@ def search_top_k(
     pgvector defines an explicit `double precision[] -> vector` CAST, so
     casting the parameter (`%s::vector`) resolves it; relying on adapter
     registration alone did not.
+
+    `masked` (EC-IN-04, TSD-edge-cases.md D-4.1): `None` (the default)
+    preserves the EXACT pre-EC-IN-04 query byte-for-byte -- no `masked`
+    column reference at all -- so every caller that doesn't pass this
+    parameter (every call site before this task, and every call site when
+    `Settings.dual_mode_threshold_enabled` is `False`) is a zero-regression,
+    identical query. `True`/`False` add an `AND masked = %s` filter, used by
+    `ai_inference.pipeline.recognize`'s masked-probe decision path to search
+    ONLY `face_embeddings.masked=true` templates (synthetic_masked/backfill)
+    first, falling back to `masked=False` (or unfiltered) per OQ-3 when that
+    filtered search finds nothing. See the migration that adds a partial
+    HNSW index on `masked=true`
+    (`ix_face_embeddings_vector_hnsw_cosine_masked`) for why this filter
+    stays within the <2ms overhead budget: the filtered query lands on its
+    OWN small, dedicated ANN index (a fraction of the full gallery's size,
+    since masked templates are 2-3/user vs ~13/user total) rather than a
+    full-index scan + post-filter.
     """
-    cursor.execute(
-        "SELECT user_id, 1 - (vector <=> %s::vector) AS similarity FROM face_embeddings "
-        "WHERE model_version = %s ORDER BY vector <=> %s::vector ASC LIMIT %s",
-        (embedding, model_version, embedding, k),
-    )
+    if masked is None:
+        cursor.execute(
+            "SELECT user_id, 1 - (vector <=> %s::vector) AS similarity FROM face_embeddings "
+            "WHERE model_version = %s ORDER BY vector <=> %s::vector ASC LIMIT %s",
+            (embedding, model_version, embedding, k),
+        )
+    else:
+        cursor.execute(
+            "SELECT user_id, 1 - (vector <=> %s::vector) AS similarity FROM face_embeddings "
+            "WHERE model_version = %s AND masked = %s "
+            "ORDER BY vector <=> %s::vector ASC LIMIT %s",
+            (embedding, model_version, masked, embedding, k),
+        )
     rows = cursor.fetchall()
     return [(str(user_id), float(similarity)) for user_id, similarity in rows]
+
+
+def get_device_class(cursor: Cursor, device_id: str) -> str | None:
+    """`devices.device_class` for `device_id`, or `None` if the device row
+    doesn't exist or its `device_class` is NULL (pre-D-5 legacy row).
+
+    Used by `ai_inference.pipeline.recognize`'s EC-IN-04 threshold
+    resolution to build the `DEVICE_CLASS` scope candidate for
+    `get_recognition_config_override` below -- `ai_inference_ro` already has
+    SELECT on `devices` (migration `d4e8a2f6c1b9`, granted for IN-02 device
+    auth), so no new grant is needed for this read.
+    """
+    cursor.execute("SELECT device_class FROM devices WHERE id = %s", (device_id,))
+    row = cursor.fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
+
+
+def get_recognition_config_override(
+    cursor: Cursor,
+    *,
+    mode: str,
+    device_class: str | None,
+) -> dict[str, float | int | None] | None:
+    """The single most-specific `recognition_configs` override row for
+    `mode`, checked in `DEVICE_CLASS > GLOBAL` priority (EC-BE-04,
+    TSD-edge-cases.md D-4.2/OQ-6) -- mirrors
+    `backend/app/services/recognition_config_service.py::
+    resolve_recognition_config`'s `_SCOPE_PRIORITY` ordering, minus the
+    `USER` scope.
+
+    **`USER` scope is intentionally NOT queried here** (a deliberate,
+    documented gap, not an oversight): the per-request similarity_threshold/
+    margin/min_frames resolved by this function are needed BEFORE a
+    candidate `user_id` is even known (that's the whole point of a
+    threshold -- deciding whether a computed similarity is high enough to
+    NAME a user), so a `(USER, user_id)` scope candidate cannot be built at
+    this call site. `USER`-scoped overrides (D-4.4's high-similarity-pair
+    `threshold_override`) remain a later consumer's concern (the
+    adaptive-template/high-similarity job, D-4.4/D-6, applied AFTER a match
+    is tentatively made) -- not resolved by `/recognize`'s pre-match
+    threshold lookup.
+
+    Returns a plain dict (not `ResolvedRecognitionConfig` -- that dataclass
+    lives in `backend/`, a separate deployable ai-inference does not import,
+    same "no cross-service import" convention as `ai_inference.device_auth`
+    re-implementing backend's device-auth logic) with keys
+    `similarity_threshold`/`margin`/`liveness_threshold`/`min_frames`, or
+    `None` if no DEVICE_CLASS or GLOBAL row exists for `mode` at all.
+    Fields present but `NULL` on the matched row are returned as `None` in
+    the dict (means "not overridden here" -- same OQ-6 contract as backend's
+    version), NOT backfilled from the other scope.
+    """
+    if device_class is not None:
+        cursor.execute(
+            "SELECT similarity_threshold, margin, liveness_threshold, min_frames "
+            "FROM recognition_configs WHERE mode = %s AND scope = 'device_class' "
+            "AND scope_ref = %s",
+            (mode, device_class),
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            return _override_row_to_dict(row)
+
+    cursor.execute(
+        "SELECT similarity_threshold, margin, liveness_threshold, min_frames "
+        "FROM recognition_configs WHERE mode = %s AND scope = 'global' "
+        "AND scope_ref IS NULL",
+        (mode,),
+    )
+    row = cursor.fetchone()
+    if row is not None:
+        return _override_row_to_dict(row)
+    return None
+
+
+def _override_row_to_dict(row: tuple[Any, ...]) -> dict[str, float | int | None]:
+    similarity_threshold, margin, liveness_threshold, min_frames = row
+    return {
+        "similarity_threshold": (
+            float(similarity_threshold) if similarity_threshold is not None else None
+        ),
+        "margin": float(margin) if margin is not None else None,
+        "liveness_threshold": (
+            float(liveness_threshold) if liveness_threshold is not None else None
+        ),
+        "min_frames": int(min_frames) if min_frames is not None else None,
+    }
