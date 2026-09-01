@@ -51,3 +51,12 @@ class RecognizeResponse(BaseModel):
     liveness_score: float
     model_version: str
     latency_ms: int
+    # EC-IN-02 (TSD-edge-cases.md D-3): additive, optional, backward
+    # compatible -- unlike `condition_flags`/`reject_stage` (EC-IN-01,
+    # deliberately kept OUT of this client-facing response, see
+    # `ai_inference.main`'s `/recognize` handler), this ONE field is meant
+    # for the door UI itself: a short operator-facing hint ("mendekatlah")
+    # populated whenever the aggregated `condition_flags["low_res"]` was
+    # `True` for this decision. `None` (the default) whenever no such
+    # guidance applies, which is every response from before this task.
+    guidance_message: str | None = None

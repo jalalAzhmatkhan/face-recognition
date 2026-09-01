@@ -86,6 +86,20 @@ access_events_total = Counter(
     registry=registry,
 )
 
+quality_gate_frames_total = Counter(
+    "inference_quality_gate_frames_total",
+    "EC-IN-02 (TSD-edge-cases.md D-3): per-frame quality-gate outcomes, by "
+    "outcome (ok | skip_detection [C-1, bbox <64px] | skip_matching [C-1, "
+    "64-80px] | ok_fiqa | skip_fiqa [C-3, AdaFace feature-norm too low]). "
+    "Always incremented regardless of Settings.quality_gate_enforcing -- "
+    "this is the measurement surface for C-1's documented enforce "
+    "criterion (legitimate-frame skip rate < 1-2% over 1-2 weeks); "
+    "skip rate = sum(skip_*) / sum(all). No device_class label yet "
+    "(D-5 dependency not implemented) -- read this un-scoped until then.",
+    labelnames=("outcome",),
+    registry=registry,
+)
+
 model_version_mismatches_total = Counter(
     "inference_model_version_mismatches_total",
     "IN-07 (FR-TRN-06): count of /recognize calls that detected this "

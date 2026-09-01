@@ -43,6 +43,18 @@ def test_stub_embedder_is_l2_normalized_and_right_shape() -> None:
     assert abs(norm - 1.0) < 1e-6
 
 
+def test_stub_embedder_with_quality_reports_no_feature_norm() -> None:
+    # EC-IN-02 (TSD-edge-cases.md D-3 C-3): StubEmbedder has no real quality
+    # signal -- `embed_with_quality` must report `feature_norm=None` (never
+    # a fabricated number), and the embedding itself must be identical to
+    # plain `embed()`.
+    embedder = StubEmbedder()
+    crop = np.arange(112 * 112 * 3, dtype=np.uint8).reshape(112, 112, 3)
+    vector, feature_norm = embedder.embed_with_quality(crop)
+    assert vector == embedder.embed(crop)
+    assert feature_norm is None
+
+
 def test_build_embedder_defaults_to_stub() -> None:
     settings = Settings(_env_file=None)
     embedder = build_embedder(settings)
@@ -132,3 +144,22 @@ def test_adaface_embedder_raises_actionable_error_when_ml_extra_missing() -> Non
     crop = np.zeros((112, 112, 3), dtype=np.uint8)
     with pytest.raises(RuntimeError, match="ml.*extra"):
         embedder.embed(crop)
+
+
+def test_adaface_embedder_embed_delegates_to_embed_with_quality_error_path() -> None:
+    """EC-IN-02: `embed()` was refactored to call `embed_with_quality()[0]`
+    -- confirm the SAME actionable error still surfaces through `embed()`
+    on base CI (no torch), i.e. the refactor didn't change error-path
+    behavior at all."""
+    try:
+        import torch  # noqa: F401
+
+        pytest.skip("torch is installed in this environment")
+    except ImportError:
+        pass
+
+    settings = Settings(_env_file=None, embedder=EmbedderSettings(backend="adaface"))
+    embedder = AdaFaceEmbedder(settings)
+    crop = np.zeros((112, 112, 3), dtype=np.uint8)
+    with pytest.raises(RuntimeError, match="ml.*extra"):
+        embedder.embed_with_quality(crop)

@@ -44,6 +44,22 @@ class EmbedderInterface(ABC):
         """Embed one aligned 112x112 face crop into an L2-normalized
         `EMBEDDING_DIM`-d vector."""
 
+    def embed_with_quality(self, aligned_crop: Any) -> tuple[list[float], float | None]:
+        """`(embedding, feature_norm)` -- EC-IN-02 (TSD-edge-cases.md D-3
+        C-3 "FIQA ringan"): `feature_norm` is the embedding's norm BEFORE
+        the L2-normalization `embed()` already applies, a free byproduct of
+        the same forward pass (AdaFace's own premise -- Kim et al. 2022 --
+        is that this pre-normalization norm correlates with input image
+        quality, no second model/forward pass needed).
+
+        Default implementation (inherited by any backend that doesn't
+        override it, e.g. `StubEmbedder`): calls `embed()` and reports
+        `feature_norm=None` -- "no quality signal available" is NEVER
+        conflated with "quality is bad" by `ai_inference.pipeline.
+        quality_gates.evaluate_fiqa_gate` (`None` always passes the gate).
+        Only `AdaFaceEmbedder` overrides this with a real norm."""
+        return self.embed(aligned_crop), None
+
 
 class StubEmbedder(EmbedderInterface):
     """Deterministic placeholder — see module docstring. Produces an
@@ -198,6 +214,9 @@ class AdaFaceEmbedder(EmbedderInterface):
         return model
 
     def embed(self, aligned_crop: Any) -> list[float]:
+        return self.embed_with_quality(aligned_crop)[0]
+
+    def embed_with_quality(self, aligned_crop: Any) -> tuple[list[float], float | None]:
         # `_get_model()` is what raises the actionable RuntimeError (missing
         # 'ml' extra, or missing weights file) -- it must run BEFORE any
         # unguarded `import torch` here, otherwise a bare environment
@@ -209,11 +228,15 @@ class AdaFaceEmbedder(EmbedderInterface):
         input_array = preprocess_bgr_crop(aligned_crop)
         input_tensor = torch.from_numpy(input_array)
         with torch.no_grad():
-            output, _norm = model(input_tensor)
+            output, norm = model(input_tensor)
         # `output` is ALREADY L2-normalized by the backbone (see
         # `adaface_net.Backbone.forward`: `output = x / norm`) — no
-        # re-normalization needed or wanted here.
-        return [float(v) for v in output[0].tolist()]
+        # re-normalization needed or wanted here. `norm` (pre-normalization
+        # magnitude) is EC-IN-02's C-3 FIQA signal -- a free byproduct of
+        # this same forward pass, see `EmbedderInterface.embed_with_quality`'s
+        # docstring.
+        feature_norm = float(norm[0].item())
+        return [float(v) for v in output[0].tolist()], feature_norm
 
 
 def build_embedder(settings: Settings) -> EmbedderInterface:
