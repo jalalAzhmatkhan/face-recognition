@@ -140,6 +140,34 @@ class Settings(BaseSettings):
     # flagged -- matches NFR-PRF-01's 300ms budget (IN-05).
     latency_slo_p95_ms: int = 300
 
+    # --- EC-IN-02: quality gates (C-1 size, C-3 FIQA) + explicit voting
+    # window (C-4) -- TSD-edge-cases.md D-3. ------------------------------
+    # SHIP LOG-ONLY (task brief): every gate threshold below is ALWAYS
+    # computed and logged (`ai_inference.pipeline.quality_gates`,
+    # `condition_flags["skipped_quality_gate"]`, the
+    # `inference_quality_gate_frames_total` metric) regardless of this
+    # flag. Only reading `quality_gate_enforcing == True` lets a gate's
+    # outcome actually change `run_recognition`'s candidates/decision --
+    # default False means this task changes ZERO pipeline behavior out of
+    # the box. TSD D-3 C-1's documented enforce criterion: flip this to
+    # True only once the logged legitimate-frame skip rate has been under
+    # 1-2% for 1-2 weeks per device_class (device_class-scoped aggregation
+    # is a D-5 dependency not yet implemented -- until then, judge this
+    # from the un-scoped `inference_quality_gate_frames_total` counter).
+    quality_gate_enforcing: bool = False
+    # C-1: shortest bbox side (px) below which a frame is unusable for
+    # ANYTHING past detection (TSD D-3/REC 10.1's literal "deteksi >=64px").
+    # Distinct from (stricter than) `condition_flags.LOW_RES_MIN_PX`
+    # (80px), which stays the MATCHING-stage floor
+    # (`ai_inference.pipeline.quality_gates.MIN_FACE_PX_MATCHING`).
+    quality_gate_min_face_px_detection: float = 64.0
+    # C-3: AdaFace feature-norm floor below which a frame is FIQA-gated out
+    # of voting (skip, never a hard reject) -- see
+    # `ai_inference.pipeline.quality_gates` module docstring: NOT YET
+    # calibrated against real logged data, a placeholder like every other
+    # threshold in this file.
+    quality_gate_fiqa_min_feature_norm: float = 15.0
+
 
 @lru_cache
 def get_settings() -> Settings:

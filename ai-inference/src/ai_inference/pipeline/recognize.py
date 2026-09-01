@@ -48,9 +48,25 @@ tracking tickets):
    (the client-facing HTTP response is deliberately unchanged, per the
    EC-IN-01 task brief). `masked`/`sunglasses` in `condition_flags` are a
    placeholder heuristic pending EC-IN-03's real classifier -- see that
-   module's docstring. `quality_gate` is never produced as a
-   `reject_stage` value yet -- EC-IN-02's quality gates (C-1..C-3, TSD
-   D-3) haven't landed, so that stage cannot fail anything here.
+   module's docstring.
+7. ~~EC-IN-02 (quality gates C-1/C-3 + explicit voting window C-4)~~
+   **CLOSED (EC-IN-02, TSD-edge-cases.md D-3), SHIP LOG-ONLY**: every frame
+   is now additionally evaluated by
+   `ai_inference.pipeline.quality_gates.evaluate_size_gate` (C-1, right
+   after detection) and `evaluate_fiqa_gate` (C-3, right after embedding,
+   using the AdaFace embedding's own free-byproduct feature-norm --
+   `EmbedderInterface.embed_with_quality`). Both outcomes are ALWAYS
+   folded into `condition_flags["skipped_quality_gate"]` and the
+   `inference_quality_gate_frames_total` metric, but only actually SKIP a
+   frame (excluding it from `candidates`/voting) when
+   `Settings.quality_gate_enforcing` is `True` (default `False` -- ship
+   log-only). A skipped frame is NEVER a reject: `"quality_gate"` is
+   deliberately still not a `_determine_reject_stage` return value (a
+   skipped frame simply contributes no candidate, same as "no face
+   detected" from that function's point of view -- see its docstring).
+   `RecognizeResponse.guidance_message` (additive, optional) is populated
+   with a "mendekatlah" hint for the door UI whenever
+   `condition_flags["low_res"]` is `True`.
 
 `decide_from_scores` (and its `FrameCandidate`/`RecognitionResult` types) is
 pure Python -- no cv2/torch/DB -- and is fully unit tested
@@ -72,6 +88,7 @@ from ai_inference.metrics import (
     decision_latency_seconds,
     decisions_total,
     model_version_mismatches_total,
+    quality_gate_frames_total,
     stage_latency_seconds,
 )
 
@@ -242,12 +259,21 @@ def _determine_reject_stage(
       just never matched anyone above `threshold`+`margin`+
       `min_frames_for_grant`) -> `"threshold"`.
 
-    `"quality_gate"` is never returned -- EC-IN-02's quality gates (TSD
-    D-3 C-1..C-3) don't exist yet in this pipeline, so nothing here can
-    fail at that stage (see EC-IN-01 task brief: "skip this value for now
-    if the gate doesn't exist yet"). `"policy"` is likewise never returned
-    -- that is a backend-only concept (door/access-control policy denial
-    AFTER a successful match), never produced by ai-inference (see
+    `"quality_gate"` is STILL never returned, even after EC-IN-02's C-1/C-3
+    gates landed (`ai_inference.pipeline.quality_gates`) -- a deliberate
+    decision (EC-IN-02 task brief), NOT a gap: a frame that a quality gate
+    skips is dropped BEFORE it ever becomes (or fails to become) a
+    `FrameCandidate`, indistinguishable here from "no face detected" in
+    that candidate's absence -- exactly like the `not candidates` case
+    above already handles. Quality-gate skips get their OWN, separate,
+    non-`reject_stage` signal instead: `condition_flags
+    ["skipped_quality_gate"]` (set by `run_recognition`) plus the
+    `inference_quality_gate_frames_total` metric -- "skipped" is
+    semantically NOT a rejection (TSD D-3 C-1), so it must never be
+    reported through the field whose whole purpose is to explain a
+    rejection. `"policy"` is likewise never returned -- that is a
+    backend-only concept (door/access-control policy denial AFTER a
+    successful match), never produced by ai-inference (see
     `ai_inference.metrics.decisions_total`'s docstring: "DENIED is never
     produced by ai-inference").
     """
@@ -393,6 +419,14 @@ def run_recognition(
     aggregated_condition_flags: dict[str, bool] = {
         "dark": False, "blurry": False, "low_res": False, "masked": False, "sunglasses": False,
     }
+    # EC-IN-02 (TSD-edge-cases.md D-3): True if ANY submitted frame was
+    # flagged by the C-1 size gate or the C-3 FIQA gate -- ALWAYS tracked
+    # (log-only), regardless of `settings.quality_gate_enforcing`. Kept as
+    # a plain local rather than folded through `merge_condition_flags`
+    # (that helper only carries forward keys present in `frame_flags`,
+    # i.e. condition_flags.compute_condition_flags's fixed 5-key shape --
+    # it would silently DROP this 6th key on the very next frame).
+    any_frame_skipped_quality_gate = False
     for frame_b64 in frames_base64:
         stage_start = time.perf_counter()
         frame_bgr = _decode_frame_bgr(frame_b64)
@@ -401,6 +435,7 @@ def run_recognition(
             continue  # malformed frame: skip, not a hard failure (step 1)
 
         detection = detect_face_and_landmarks(frame_bgr)
+        size_gate = None
         if detection is not None:
             # EC-IN-01: cheap (<1ms) condition-flag heuristics, folded into
             # the SAME "detect" stage timing budget as the detection call
@@ -425,9 +460,36 @@ def run_recognition(
             aggregated_condition_flags = merge_condition_flags(
                 aggregated_condition_flags, frame_flags
             )
+
+            # EC-IN-02 C-1: cheap (<1us) min-face-size gate, evaluated in
+            # the SAME "detect" stage timing budget -- ALWAYS computed and
+            # counted (log-only), see module docstring.
+            from ai_inference.pipeline.quality_gates import evaluate_size_gate
+
+            size_gate = evaluate_size_gate(
+                detection.bbox_wh,
+                min_face_px_detection=settings.quality_gate_min_face_px_detection,
+            )
+            if not size_gate.usable_for_detection:
+                quality_gate_frames_total.labels(outcome="skip_detection").inc()
+            elif not size_gate.usable_for_matching:
+                quality_gate_frames_total.labels(outcome="skip_matching").inc()
+            else:
+                quality_gate_frames_total.labels(outcome="ok").inc()
+            if size_gate.skipped:
+                any_frame_skipped_quality_gate = True
         stage_latency_seconds.labels(stage="detect").observe(time.perf_counter() - stage_start)
         if detection is None:
             continue  # no face in this frame: skip, not a hard failure (step 2)
+
+        # EC-IN-02 C-1 (log-only unless settings.quality_gate_enforcing):
+        # a frame whose face is too small even for detection use (<64px)
+        # is SKIPPED -- not a reject -- from all further per-frame
+        # processing (liveness/embed/search) for THIS request. Enforcing
+        # OFF (default): falls through unconditionally, exactly like
+        # before this task ever landed.
+        if settings.quality_gate_enforcing and not size_gate.usable_for_detection:
+            continue  # SKIPPED (C-1 detection floor), not a candidate, not a reject
 
         # IN-04 liveness gate: score BEFORE embedding/gallery search. A
         # spoof-suspect frame contributes a spoof vote but is NEVER passed
@@ -452,10 +514,37 @@ def run_recognition(
             )
             continue  # do NOT reach gallery search for this frame
 
+        # EC-IN-02 C-1 matching floor (log-only unless enforcing): usable
+        # for liveness/spoof voting above, but too small (64-80px) to
+        # trust for identity MATCHING -- skip embed+search for this
+        # frame's IDENTITY vote only (it still contributed its spoof vote,
+        # if any, just above).
+        if settings.quality_gate_enforcing and not size_gate.usable_for_matching:
+            continue  # SKIPPED (C-1 matching floor), not a candidate, not a reject
+
         stage_start = time.perf_counter()
         aligned = align_face(frame_bgr, detection.alignment_landmarks_5pt())
-        vector = embedder.embed(aligned)
+        if hasattr(embedder, "embed_with_quality"):
+            vector, feature_norm = embedder.embed_with_quality(aligned)
+        else:  # pragma: no cover - defensive only, real/stub embedders both expose it
+            vector, feature_norm = embedder.embed(aligned), None
         stage_latency_seconds.labels(stage="embed").observe(time.perf_counter() - stage_start)
+
+        # EC-IN-02 C-3 FIQA gate: `feature_norm` is a FREE byproduct of the
+        # embed() call just above (no second forward pass) -- evaluated
+        # AFTER embedding, right before this frame would otherwise enter
+        # the vote (TSD D-3 C-3: "gate terakhir sebelum vote"). ALWAYS
+        # computed/logged; only actually skips the frame when enforcing.
+        from ai_inference.pipeline.quality_gates import evaluate_fiqa_gate
+
+        fiqa_passed = evaluate_fiqa_gate(
+            feature_norm, min_feature_norm=settings.quality_gate_fiqa_min_feature_norm
+        )
+        quality_gate_frames_total.labels(outcome="ok_fiqa" if fiqa_passed else "skip_fiqa").inc()
+        if not fiqa_passed:
+            any_frame_skipped_quality_gate = True
+            if settings.quality_gate_enforcing:
+                continue  # SKIPPED pre-vote (C-3 FIQA), not a candidate, not a reject
 
         stage_start = time.perf_counter()
         rows = gallery.search_top_k(
@@ -471,6 +560,12 @@ def run_recognition(
             best_similarity_seen is None or candidate.top1_similarity > best_similarity_seen
         ):
             best_similarity_seen = candidate.top1_similarity
+
+    # EC-IN-02 (TSD-edge-cases.md D-3): fold the request-level quality-gate
+    # skip signal in AFTER the loop (see the local variable's own comment
+    # above for why -- `merge_condition_flags` can't carry it across
+    # iterations). Log-only: set regardless of `quality_gate_enforcing`.
+    aggregated_condition_flags["skipped_quality_gate"] = any_frame_skipped_quality_gate
 
     stage_start = time.perf_counter()
     result = decide_from_scores(
@@ -553,6 +648,14 @@ def run_recognition_timed(
     monitoring.record_decision(result.decision)
     monitoring.record_latency(latency_ms)
 
+    # EC-IN-02 (TSD-edge-cases.md D-3): UNLIKE `condition_flags`/
+    # `reject_stage` below, this key IS meant for `RecognizeResponse`
+    # itself (`ai_inference.main`'s handler does NOT pop it) -- a short
+    # door-UI hint, populated only when this decision's aggregated
+    # `condition_flags["low_res"]` was `True`. `None` otherwise, which is
+    # every response from before this task (additive/backward compatible).
+    guidance_message = "mendekatlah" if result.condition_flags.get("low_res") else None
+
     return {
         "decision": result.decision,
         "user_id": result.user_id,
@@ -560,6 +663,7 @@ def run_recognition_timed(
         "liveness_score": reported_liveness_score,
         "model_version": model_version,
         "latency_ms": latency_ms,
+        "guidance_message": guidance_message,
         # EC-IN-01 (TSD-edge-cases.md D-1): additive keys, NOT part of
         # `RecognizeResponse` (the client-facing `/recognize` HTTP response
         # schema is deliberately unchanged) -- `ai_inference.main`'s
