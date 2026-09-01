@@ -384,6 +384,47 @@ fake repos/S3 client, no live Postgres/S3) and the retention section of
 `tests/test_worker_tasks.py` (beat schedule registration, task wiring,
 one end-to-end eager-mode run).
 
+## Re-enrollment-due policy (EC-BE-05, TSD-edge-cases.md A-5)
+
+`app/services/reenroll_due_service.py::evaluate_reenroll_due` is a second
+Celery Beat job (`reenroll_due_task` in `app/worker/tasks.py`, daily by
+default — `REENROLL_DUE_CHECK_INTERVAL_SECONDS`) that flags
+`users.reenroll_due=true` for any `ACTIVE` user matching EITHER of two
+criteria:
+
+- **Age**: the user's most recent `ENROLLED` enrollment session is older
+  than `REENROLL_DUE_MAX_AGE_MONTHS` (default 24).
+- **Score drift**: the moving average of GENUINE-accept
+  `access_events.similarity` (decision=GRANTED) over the trailing
+  `REENROLL_DUE_SCORE_WINDOW_DAYS` (default 90) is below `τ + margin`
+  (`REENROLL_DUE_SCORE_MARGIN`, default 0.05), computed from at least
+  `REENROLL_DUE_MIN_EVENTS_FOR_SCORE` (default 5) events — too few events is
+  treated as "not enough signal", not "criterion met". τ is resolved from
+  the `recognition_configs` GLOBAL/`normal`-mode override if one exists,
+  else `REENROLL_DUE_SIMILARITY_THRESHOLD_FALLBACK` (default 0.35, a
+  same-ballpark placeholder mirroring ai-inference's own default — backend
+  has no MLflow client and does not share ai-inference's env, so it cannot
+  read the "real" per-mode artefact default described in the TSD's OQ-6).
+
+Flagging is **audited** (`audit_logs`, `action="user.reenroll_due_marked"`,
+actor `system:reenroll-due-job`) and **idempotent**: a user already
+`reenroll_due=true` (whether flagged by this job or by another producer —
+e.g. a future ai-training backfill job flagging
+`reenroll_due_reason="video_retention_expired"` when a legacy user's
+enrollment video has left the 90-day retention window) is skipped entirely,
+with no re-check and no duplicate audit entry. This job touches only
+`users.reenroll_due*` + `audit_logs` — it never touches `media_objects`,
+`face_embeddings`, or dispatches any capture/QC/training job.
+
+Uses the SAME beat process as the retention jobs above (no separate `celery
+beat` invocation needed) — see that section for how to actually run beat.
+
+Tests: `tests/test_reenroll_due_service.py` (pure service-logic unit tests
+covering both criteria independently/combined, the min-event-count guard,
+τ resolution from `recognition_configs` vs the env fallback, and
+idempotency across two runs) and the reenroll-due section of
+`tests/test_worker_tasks.py` (beat schedule registration, task wiring).
+
 ## Konfigurasi
 
 Semua config via environment variables (lihat `.env.example`; salin ke `.env` untuk dev lokal). Tidak ada secret di repo (NFR-OPS-03).

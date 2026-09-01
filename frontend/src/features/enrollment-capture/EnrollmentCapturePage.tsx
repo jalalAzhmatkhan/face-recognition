@@ -46,12 +46,29 @@ const SAMPLE_INTERVAL_MS = 150
  * Media never touches local storage: the photo and the recorded webm live
  * only as in-memory Blobs in React state until they are uploaded straight
  * to S3 via BE-06's presigned URLs, after which they are dropped.
+ *
+ * EC-FE-02 (TSD-edge-cases.md A-2) matched-condition + preflight reject:
+ * the consent step shows the matched-condition instruction text and gates
+ * "Saya Setuju & Mulai" behind an explicit confirmation checkbox ("saya
+ * sudah melepas masker/sunglasses"). This is a deliberately minimal
+ * client-side gate, NOT a real-time ML detector — EC-IN-03's
+ * masked/sunglasses classifier is a server-side PyTorch/ONNX model
+ * (`ai_inference.pipeline.mask_sunglasses`) with no synchronous HTTP
+ * endpoint the browser can call before upload, and loading it client-side
+ * via onnxruntime-web is out of scope for this task. There is also no
+ * server-side signal this page can currently consume after upload: EC-TR-02's
+ * `qc_report` (`ai_training/src/ai_training/quality/report.py`) has no
+ * masked/sunglasses field — that classifier's only wired integration point
+ * is the `/recognize` (EC-IN-03) path, not the enrollment QC pipeline. If a
+ * masked/sunglasses signal is later added to `qc_report`, this page can
+ * surface it the same way it already surfaces `REJECTED_QUALITY`.
  */
 export default function EnrollmentCapturePage() {
   const { id: enrollmentId } = useParams<{ id: string }>()
   const isAuthenticated = Boolean(getAccessToken())
 
   const [step, setStep] = useState<WizardStep>('consent')
+  const [matchedConditionConfirmed, setMatchedConditionConfirmed] = useState(false)
   const [modelsReady, setModelsReady] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [faceInFrame, setFaceInFrame] = useState(false)
@@ -336,8 +353,30 @@ export default function EnrollmentCapturePage() {
             biometrik. Media akan diunggah langsung ke penyimpanan aman dan
             tidak disimpan pada perangkat ini.
           </p>
+          <p
+            className="capture-matched-condition"
+            style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}
+          >
+            Tampil seperti Anda datang bekerja sehari-hari (hijab, kacamata,
+            jenggot seperti biasa boleh dipakai). <strong>Lepaskan masker dan
+            kacamata hitam (sunglasses)</strong> selama perekaman — wajah
+            harus terlihat jelas dari dagu sampai dahi.
+          </p>
+          <label className="capture-checkbox">
+            <input
+              type="checkbox"
+              checked={matchedConditionConfirmed}
+              onChange={(event) => setMatchedConditionConfirmed(event.target.checked)}
+            />
+            Saya sudah melepas masker dan kacamata hitam (sunglasses)
+          </label>
           <div className="capture-actions">
-            <button type="button" className="btn btn--primary" onClick={startCamera}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={!matchedConditionConfirmed}
+              onClick={startCamera}
+            >
               Saya Setuju &amp; Mulai
             </button>
           </div>

@@ -119,6 +119,46 @@ class Settings(BaseSettings):
     frontend_base_url: str = "http://localhost:5173"
     password_reset_token_expire_minutes: int = 30
 
+    # Re-enrollment-due policy (EC-BE-05, TSD-edge-cases.md A-5). Two
+    # independent criteria (either sets the flag) evaluated by a Celery Beat
+    # job (see app/worker/celery_app.py / app/services/reenroll_due_service.py):
+    #  - `reenroll_due_max_age_months`: enrollment age criterion — TSD A-5
+    #    says "> 24 bulan" verbatim, kept configurable per-deployment.
+    #  - `reenroll_due_score_window_days`: window over which the moving
+    #    average of GENUINE `access_events.similarity` scores is computed.
+    #    TSD A-5 says "dari log funnel D-1" without pinning an exact window;
+    #    90 days is chosen (not 30) so the average isn't dominated by a
+    #    short unlucky streak (e.g. a week of bad lighting) while still
+    #    reacting within one quarter — same order of magnitude as
+    #    `retention_event_frame_days` above.
+    #  - `reenroll_due_score_margin`: the "+margin" in TSD A-5's "moving-
+    #    average skor genuine < τ+margin" — how far ABOVE the matching
+    #    threshold τ a user's average score must stay before they're
+    #    considered drifting toward the threshold. 0.05 mirrors the
+    #    `margin_threshold`-scale values already used for high-similarity
+    #    gating (D-4.4) in this codebase's design docs.
+    #  - `reenroll_due_min_events_for_score`: minimum GENUINE accept events
+    #    in the window before the score criterion is evaluated at all — a
+    #    single unlucky low-score accept must not flag a user; not specified
+    #    by the TSD, chosen conservatively.
+    #  - `reenroll_due_similarity_threshold_fallback`: last-resort τ when no
+    #    `recognition_configs` GLOBAL/`normal`-mode override AND no caller-
+    #    supplied artefact default exists (backend has no MLflow client and
+    #    does not share ai-inference's env — see
+    #    app/services/reenroll_due_service.py). Mirrors ai-inference's own
+    #    `similarity_threshold` default (`ai-inference/src/ai_inference/
+    #    config.py`, 0.35) purely as a same-ballpark placeholder, not a
+    #    shared source of truth.
+    #  - `reenroll_due_check_interval_seconds`: Celery Beat cadence. Daily by
+    #    default — this is a slow-moving policy signal (age/rolling-average),
+    #    not a hot path, so sub-daily scheduling would just waste DB cycles.
+    reenroll_due_max_age_months: int = 24
+    reenroll_due_score_window_days: int = 90
+    reenroll_due_score_margin: float = 0.05
+    reenroll_due_min_events_for_score: int = 5
+    reenroll_due_similarity_threshold_fallback: float = 0.35
+    reenroll_due_check_interval_seconds: int = 24 * 60 * 60  # daily
+
     @property
     def cors_allow_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]

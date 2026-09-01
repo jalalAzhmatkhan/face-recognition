@@ -75,4 +75,11 @@ celery_app.conf.beat_schedule = {
         "task": "app.worker.tasks.purge_expired_media_task",
         "schedule": _settings.retention_purge_interval_seconds,
     },
+    # EC-BE-05 (TSD-edge-cases.md A-5): re-enrollment-due policy. Daily by
+    # default (see Settings.reenroll_due_check_interval_seconds) — a
+    # slow-moving policy signal, not a hot path.
+    "reenroll-due-check": {
+        "task": "app.worker.tasks.reenroll_due_task",
+        "schedule": _settings.reenroll_due_check_interval_seconds,
+    },
 }

@@ -2,7 +2,15 @@
 
 Full CRUD (BE-04): `get`/`list` from BE-02 plus `create`/`update`/`count`/
 `get_by_external_ref` needed by the users router + service layer.
+
+`from __future__ import annotations` (PEP 563) is used here for the same
+reason as `app/repositories/access_policies.py`/`recognition_configs.py`:
+this class defines a method literally named `list`, which would otherwise
+shadow the `list[...]` builtin in later return-type annotations at
+class-body-exec time (EC-BE-05's `list_all_active_ids`).
 """
+
+from __future__ import annotations
 
 import uuid
 
@@ -46,6 +54,20 @@ class UserRepository:
         if status is not None:
             stmt = stmt.where(User.status == status)
         return self._session.scalar(stmt) or 0
+
+    def list_all_active_ids(self) -> list[uuid.UUID]:
+        """Every `ACTIVE` user's id, unpaginated (EC-BE-05 beat job).
+
+        Deliberately excludes `SUSPENDED`/`OFFBOARDED`: an offboarded user
+        will never re-enroll, and a suspended one is already blocked from
+        recognition, so surfacing "re-enroll due" for either in the
+        enrollment-management UI would be noise, not signal. Returns ids
+        only (not full `User` rows) since `reenroll_due_service` only needs
+        the id to join against the age/score maps and then re-`get`s the
+        row it actually intends to mutate.
+        """
+        stmt = select(User.id).where(User.status == UserStatus.ACTIVE)
+        return list(self._session.scalars(stmt))
 
     def create(self, user: User) -> User:
         self._session.add(user)

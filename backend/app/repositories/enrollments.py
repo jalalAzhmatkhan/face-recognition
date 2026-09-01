@@ -6,6 +6,7 @@ consent gating) here, just data access.
 """
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -65,3 +66,23 @@ class EnrollmentSessionRepository:
         self._session.commit()
         self._session.refresh(enrollment)
         return enrollment
+
+    def list_last_enrolled_at(self) -> dict[uuid.UUID, datetime]:
+        """Map of `user_id -> MAX(updated_at)` across that user's `ENROLLED`
+        sessions (EC-BE-05, TSD A-5 age criterion).
+
+        One aggregate query for ALL users at once (not per-user `get`/`list`
+        calls) so the beat job in `app/services/reenroll_due_service.py`
+        stays a fixed, small number of round-trips regardless of user count.
+        A user absent from the returned mapping has never reached `ENROLLED`
+        at all and is therefore not evaluated by the age criterion (nothing
+        to anchor "how long ago" on) — same "no anchor, skip" stance as
+        `retention_service.backfill_retention_expiry`'s `skipped_not_enrolled`
+        case.
+        """
+        stmt = (
+            select(EnrollmentSession.user_id, func.max(EnrollmentSession.updated_at))
+            .where(EnrollmentSession.state == EnrollmentState.ENROLLED)
+            .group_by(EnrollmentSession.user_id)
+        )
+        return dict(self._session.execute(stmt).all())
