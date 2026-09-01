@@ -175,3 +175,40 @@ describe('EnrollmentCapturePage — EC-FE-05 consent text + consent_version subm
     await waitFor(() => expect(getUserMedia).toHaveBeenCalled())
   })
 })
+
+describe('EnrollmentCapturePage — System Parameter quality threshold override', () => {
+  beforeEach(() => {
+    window.localStorage.setItem(ACCESS_TOKEN_KEY, 'test-token')
+  })
+
+  afterEach(() => {
+    window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+    vi.restoreAllMocks()
+  })
+
+  it('fetches the current enrollment-quality System Parameter on mount', async () => {
+    const spy = vi.spyOn(apiClient, 'getEnrollmentQualityParams').mockResolvedValue({
+      min_blur_variance: 30,
+      min_brightness: 35,
+      max_brightness: 225,
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
+    // Flush the mocked promise's own resolution + the resulting state
+    // update before this test ends and unmounts -- otherwise that update
+    // can land mid-flight into the NEXT test's freshly-rendered tree.
+    await waitFor(() => expect(spy).toHaveResolved())
+  })
+
+  it('never blocks the wizard when the System Parameter fetch fails (falls back to built-in defaults)', async () => {
+    vi.spyOn(apiClient, 'getEnrollmentQualityParams').mockRejectedValue(new Error('network'))
+
+    renderPage()
+
+    expect(
+      await screen.findByRole('button', { name: /Saya Setuju & Mulai/ }),
+    ).toBeInTheDocument()
+  })
+})

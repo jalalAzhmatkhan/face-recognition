@@ -97,6 +97,40 @@ def extract_frames(video_bytes: bytes, *, fps_sample: float = 6.0) -> list[Any]:
             os.remove(path)
 
 
+def resolve_qc_settings(cursor: Any, settings: QCSettings) -> QCSettings:
+    """Merge the ADMIN-configurable "System Parameter" enrollment-capture-
+    quality override (`system_parameters` key `enrollment_capture_quality`,
+    `backend/app/services/system_parameter_service.py`) on top of the
+    env-driven `QCSettings` defaults, for the fields the admin menu exposes
+    (`min_blur_variance`/`min_brightness`/`max_brightness` -> this class's
+    `blur_variance_min`/`brightness_min`/`brightness_max`).
+
+    No row saved yet (ADMIN has never touched the menu) -> `settings`
+    returned completely unchanged, byte-identical to before this function
+    existed. This is the SAME "override on top of an env/artefact default,
+    never the source of truth" shape `ai_inference.pipeline.threshold_
+    resolution.resolve_mode_params` already uses for `recognition_configs`
+    (EC-IN-04/06) — kept as a plain function taking a cursor (not a class)
+    for the same reason: this package has no ORM, only raw-SQL repos.
+    """
+    from ai_training.db.system_parameters_repo import get_enrollment_quality_override
+
+    override = get_enrollment_quality_override(cursor)
+    if not override:
+        return settings
+
+    updates: dict[str, float] = {}
+    if "min_blur_variance" in override:
+        updates["blur_variance_min"] = float(override["min_blur_variance"])
+    if "min_brightness" in override:
+        updates["brightness_min"] = float(override["min_brightness"])
+    if "max_brightness" in override:
+        updates["brightness_max"] = float(override["max_brightness"])
+    if not updates:
+        return settings
+    return settings.model_copy(update=updates)
+
+
 def _evaluate_frame(frame: Any, settings: QCSettings) -> FrameQuality | None:
     detection = detect_face_and_landmarks(
         frame, model_path=settings.face_landmarker_model_path or None
