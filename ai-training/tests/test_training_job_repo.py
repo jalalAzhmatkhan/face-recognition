@@ -1,6 +1,7 @@
 """Raw-SQL `training_jobs`/`models` write-back helpers (BE-13) against a
 mocked DB-API cursor — same convention as test_db_repo.py: no real Postgres."""
 
+import json
 from unittest.mock import MagicMock
 
 from ai_training.db.training_job_repo import (
@@ -9,6 +10,7 @@ from ai_training.db.training_job_repo import (
     mark_job_running,
     mark_job_succeeded,
     upsert_model_metrics,
+    upsert_model_slice_gate_report,
 )
 
 
@@ -87,3 +89,15 @@ def test_upsert_model_metrics_updates_without_touching_stage_when_row_exists() -
     update_call = cursor.execute.call_args_list[1]
     assert "UPDATE models SET" in update_call[0][0]
     assert "stage" not in update_call[0][0].lower()
+
+
+def test_upsert_model_slice_gate_report_writes_json_blob() -> None:
+    cursor = MagicMock()
+    report = {"passes": False, "failed_slices": ["dark"], "per_slice": {}}
+    upsert_model_slice_gate_report(cursor, version="v1", slice_gate_report=report)
+
+    cursor.execute.assert_called_once()
+    args, _ = cursor.execute.call_args
+    assert "UPDATE models SET slice_gate_report" in args[0]
+    assert args[1][0] == json.dumps(report)
+    assert args[1][1] == "v1"

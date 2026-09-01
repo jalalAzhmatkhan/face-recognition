@@ -111,6 +111,7 @@ def _make_model(
     stage: ModelStage = ModelStage.CANDIDATE,
     recall: float | None = 0.99,
     latency_ms_p95: int | None = 120,
+    slice_gate_report: dict | None = None,
 ) -> ModelVersion:
     return ModelVersion(
         version=version,
@@ -120,6 +121,7 @@ def _make_model(
         f1=0.9,
         precision=0.9,
         latency_ms_p95=latency_ms_p95,
+        slice_gate_report=slice_gate_report,
         promoted_by=None,
         promoted_at=None,
     )
@@ -517,6 +519,66 @@ def test_promote_rejects_recall_regression(
     response = admin_client.post("/api/v1/models/v2/promote", json={"confirm": True})
     assert response.status_code == 409
     assert "recall" in response.json()["detail"].lower()
+
+
+# --- EC-QA-01: per-slice no-regression-bertoleransi-CI gate -----------------
+
+
+def test_promote_rejects_candidate_with_failing_slice_gate_report(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    """A candidate can pass the overall-Recall gate (3) while still
+    regressing badly on one critical slice — EC-QA-01 gate 5 must catch
+    that independently."""
+    failing_report = {
+        "passes": False,
+        "failed_slices": ["dark"],
+        "skipped_slices": [],
+        "per_slice": {
+            "dark": {
+                "status": "fail",
+                "reason": "Recall regressed 0.1000 on critical slice 'dark', "
+                "exceeding tolerance 0.0200.",
+            }
+        },
+    }
+    model_repo._by_version["v1"] = _make_model(
+        "v1", recall=0.99, latency_ms_p95=100, slice_gate_report=failing_report
+    )
+    response = admin_client.post("/api/v1/models/v1/promote", json={"confirm": True})
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "EC-QA-01" in detail
+    assert "dark" in detail
+
+
+def test_promote_succeeds_when_slice_gate_report_within_tolerance(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    passing_report = {
+        "passes": True,
+        "failed_slices": [],
+        "skipped_slices": ["masked-riil", "hijab", "low-res", "per-demografi-utama"],
+        "per_slice": {"dark": {"status": "pass"}},
+    }
+    model_repo._by_version["v1"] = _make_model(
+        "v1", recall=0.99, latency_ms_p95=100, slice_gate_report=passing_report
+    )
+    response = admin_client.post("/api/v1/models/v1/promote", json={"confirm": True})
+    assert response.status_code == 200
+    assert model_repo._by_version["v1"].stage == ModelStage.PRODUCTION
+
+
+def test_promote_not_blocked_when_slice_gate_report_absent(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    """`slice_gate_report is None` (harness has not produced one for this
+    candidate yet) must never implicitly fail promotion."""
+    model_repo._by_version["v1"] = _make_model(
+        "v1", recall=0.99, latency_ms_p95=100, slice_gate_report=None
+    )
+    response = admin_client.post("/api/v1/models/v1/promote", json={"confirm": True})
+    assert response.status_code == 200
 
 
 def test_promote_succeeds_and_retires_previous_production(

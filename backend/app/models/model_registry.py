@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -31,6 +31,13 @@ class ModelVersion(Base):
     f1: Mapped[float | None] = mapped_column(Float)
     precision: Mapped[float | None] = mapped_column(Float)
     latency_ms_p95: Mapped[int | None] = mapped_column(Integer)
+    # EC-QA-01: per-slice no-regression-bertoleransi-CI gate result
+    # (`ai_training.evaluation.regression_gate.SliceRegressionGateReport`,
+    # dumped to plain JSON), written by the ai-training worker
+    # (`ai_training.db.training_job_repo.upsert_model_slice_gate_report`).
+    # `None` means "no slice gate report yet" — never treated as pass or
+    # fail, see migration e5a9f2c1b3d6.
+    slice_gate_report: Mapped[dict | None] = mapped_column(JSONB)
     promoted_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("staff_accounts.id", ondelete="SET NULL")
     )
