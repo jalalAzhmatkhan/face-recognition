@@ -187,6 +187,76 @@ def test_masked_flag_false_for_textured_mouth_region() -> None:
     assert flags["masked"] is False
 
 
+# --- EC-IN-03: classifier override + fallback -------------------------------
+#
+# `classifier` is injected as a plain callable here -- these tests never
+# import `ai_inference.pipeline.mask_sunglasses` or touch onnxruntime, so
+# they run on base CI (no `ml` extra) exactly like the rest of this file,
+# per this module's own "zero ml-extra dependency" docstring guarantee.
+
+
+def test_classifier_result_overrides_heuristic_when_it_succeeds() -> None:
+    # Heuristic alone would say both False (bright, textured frame) --
+    # classifier's (True, True) must win.
+    frame = _textured_frame(base_value=180)
+    flags = compute_condition_flags(
+        **_base_kwargs(frame), classifier=lambda crop: (True, True)
+    )
+    assert flags["masked"] is True
+    assert flags["sunglasses"] is True
+
+
+def test_classifier_returning_none_falls_back_to_heuristic() -> None:
+    # Same "dark uniform eye patch" setup as the pure-heuristic sunglasses
+    # test above; classifier abstaining (`None`) must not suppress it.
+    frame = _textured_frame(base_value=180)
+    for ex, ey in (_LEFT_EYE, _RIGHT_EYE):
+        x0, y0 = int(ex) - 6, int(ey) - 6
+        frame[y0 : y0 + 12, x0 : x0 + 12] = 5
+    flags = compute_condition_flags(**_base_kwargs(frame), classifier=lambda crop: None)
+    assert flags["sunglasses"] is True
+
+
+def test_classifier_raising_falls_back_to_heuristic_without_crashing() -> None:
+    def _broken_classifier(crop: np.ndarray) -> tuple[bool, bool]:
+        raise RuntimeError("simulated inference failure")
+
+    frame = _textured_frame(base_value=150)
+    mouth_cx = int((_LEFT_MOUTH[0] + _RIGHT_MOUTH[0]) / 2)
+    mouth_cy = int((_LEFT_MOUTH[1] + _RIGHT_MOUTH[1]) / 2)
+    frame[mouth_cy - 4 : mouth_cy + 18, mouth_cx - 14 : mouth_cx + 14] = 150
+
+    flags = compute_condition_flags(**_base_kwargs(frame), classifier=_broken_classifier)
+
+    assert flags["masked"] is True  # heuristic result, not a crash
+
+
+def test_classifier_none_uses_heuristic_unchanged() -> None:
+    # Default (no classifier passed at all) must be byte-for-byte the same
+    # as passing `classifier=None` explicitly -- EC-IN-01 behavior when no
+    # EC-IN-03 model is configured.
+    frame = _textured_frame(base_value=180)
+    without = compute_condition_flags(**_base_kwargs(frame))
+    with_none = compute_condition_flags(**_base_kwargs(frame), classifier=None)
+    assert without == with_none
+
+
+def test_classifier_receives_the_face_crop_not_the_whole_frame() -> None:
+    frame = _textured_frame(base_value=180)
+    seen_shapes: list[tuple[int, ...]] = []
+
+    def _recording_classifier(crop: np.ndarray) -> tuple[bool, bool]:
+        seen_shapes.append(crop.shape)
+        return False, False
+
+    compute_condition_flags(**_base_kwargs(frame), classifier=_recording_classifier)
+
+    assert len(seen_shapes) == 1
+    expected_h = int(_BBOX_WH[1])
+    expected_w = int(_BBOX_WH[0])
+    assert seen_shapes[0] == (expected_h, expected_w, 3)
+
+
 # --- degenerate inputs ------------------------------------------------------
 
 
