@@ -18,6 +18,7 @@ import DevicesPage from '../pages/DevicesPage'
 import ModelsPage from '../pages/ModelsPage'
 import TrainingJobDetailPage from '../pages/TrainingJobDetailPage'
 import ModelPromotionPage from '../pages/ModelPromotionPage'
+import SystemParametersPage from '../pages/SystemParametersPage'
 import NotFoundPage from '../pages/NotFoundPage'
 
 /**
@@ -59,6 +60,7 @@ export const routes: RouteObject[] = [
           { path: 'models', element: <ModelsPage /> },
           { path: 'models/jobs/:id', element: <TrainingJobDetailPage /> },
           { path: 'models/:version/promote', element: <ModelPromotionPage /> },
+          { path: 'system-parameters', element: <SystemParametersPage /> },
           { path: '*', element: <NotFoundPage /> },
         ],
       },

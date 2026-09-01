@@ -55,7 +55,7 @@ from ai_training.embedding.embedder import build_embedder
 from ai_training.embedding.extractor import extract_gallery_embeddings
 from ai_training.embedding.synthetic_masked import generate_synthetic_masked_templates
 from ai_training.quality.mask_overlay import MaskOverlayProvider, build_mask_overlay_provider
-from ai_training.quality.pipeline import run_quality_check
+from ai_training.quality.pipeline import resolve_qc_settings, run_quality_check
 from ai_training.similarity.high_similarity_check import run_high_similarity_check_core
 from ai_training.worker.celery_app import celery_app
 
@@ -232,9 +232,15 @@ def run_enrollment_qc_core(
 
     bucket, key = media
     video_bytes = downloader(bucket, key, settings)
+    # System Parameter admin menu: an ADMIN-configured sharpness/brightness
+    # override (e.g. loosened for laptop-webcam enrollment) takes effect
+    # here, on the SAME cursor already open for this task -- see
+    # `resolve_qc_settings`'s docstring. No row saved yet -> `settings.qc`
+    # unchanged, byte-identical to before this existed.
+    effective_qc_settings = resolve_qc_settings(cursor, settings.qc)
     try:
         report, frames_by_position = run_quality_check(
-            video_bytes, session_id=session_id, settings=settings.qc
+            video_bytes, session_id=session_id, settings=effective_qc_settings
         )
     except RuntimeError:
         # A corrupt/undecodable video is a CONTENT quality problem, not a

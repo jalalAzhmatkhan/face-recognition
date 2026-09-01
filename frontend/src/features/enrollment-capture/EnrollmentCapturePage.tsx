@@ -6,6 +6,7 @@ import {
   completeEnrollment,
   buildPresignRequestBody,
   getAccessToken,
+  getEnrollmentQualityParams,
   grantConsent,
   presignMedia,
   uploadToS3,
@@ -21,7 +22,7 @@ import {
 import type { SectorTrackerState } from './clockSectors'
 import { detectFace, loadFaceDetectionModels } from './faceDetector'
 import { estimateHeadPose } from './headPose'
-import { assessQuality } from './imageQuality'
+import { assessQuality, QUALITY_THRESHOLDS } from './imageQuality'
 import { CURRENT_CONSENT_VERSION } from './types'
 import type { QualityStatus } from './types'
 import './EnrollmentCapturePage.css'
@@ -101,6 +102,11 @@ export default function EnrollmentCapturePage() {
     video: 'idle' | 'uploading' | 'done' | 'error'
   }>({ photo: 'idle', video: 'idle' })
   const [uploadError, setUploadError] = useState<string | null>(null)
+  // System Parameter menu override (pages/SystemParametersPage.tsx) --
+  // starts at the built-in defaults and is replaced once (if) the fetch
+  // below succeeds, so this wizard is fully usable even before the first
+  // frame samples if the settings service is briefly unavailable.
+  const [qualityThresholds, setQualityThresholds] = useState(QUALITY_THRESHOLDS)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -117,6 +123,24 @@ export default function EnrollmentCapturePage() {
     loadFaceDetectionModels()
       .then(() => setModelsReady(true))
       .catch(() => setCameraError('Gagal memuat model deteksi wajah.'))
+  }, [])
+
+  // System Parameter menu override for the live sharpness/brightness gate
+  // (see `qualityThresholds` state above). Best-effort: a failed fetch
+  // silently keeps `QUALITY_THRESHOLDS`, never blocks/errors the wizard --
+  // this is a quality-gate tuning knob, not a security control.
+  useEffect(() => {
+    getEnrollmentQualityParams()
+      .then((params) =>
+        setQualityThresholds({
+          minBlurVariance: params.min_blur_variance,
+          minBrightness: params.min_brightness,
+          maxBrightness: params.max_brightness,
+        }),
+      )
+      .catch(() => {
+        // Keep QUALITY_THRESHOLDS -- see effect docstring above.
+      })
   }, [])
 
   const stopCamera = useCallback(() => {
@@ -188,7 +212,7 @@ export default function EnrollmentCapturePage() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    const qualityAssessment = assessQuality(imageData)
+    const qualityAssessment = assessQuality(imageData, qualityThresholds)
     setQuality(qualityAssessment.status)
 
     const detection = await detectFace(canvas)
@@ -208,7 +232,7 @@ export default function EnrollmentCapturePage() {
         quality: qualityAssessment.status,
       }),
     )
-  }, [step])
+  }, [step, qualityThresholds])
 
   useEffect(() => {
     if (step !== 'preflight' && step !== 'video') return

@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { to: '/enrollments', label: 'Enrollment' },
   { to: '/models', label: 'Models & Training' },
   { to: '/devices', label: 'Devices' },
+  { to: '/system-parameters', label: 'System Parameter' },
 ]
 
 /** Sun icon — shown while the light theme is active (click to switch to dark). */

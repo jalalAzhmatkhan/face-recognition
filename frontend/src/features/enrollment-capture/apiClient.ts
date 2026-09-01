@@ -163,3 +163,25 @@ export async function completeEnrollment(
   )
   return (await response.json()) as CompleteResponse
 }
+
+/**
+ * `GET /system-parameters/enrollment-quality` — the ADMIN-configurable
+ * sharpness/brightness gate (System Parameter menu,
+ * `pages/SystemParametersPage.tsx`), open to every authenticated staff
+ * role including whoever is running this capture wizard. Callers MUST
+ * treat any failure here as non-fatal and fall back to
+ * `imageQuality.QUALITY_THRESHOLDS` (see `EnrollmentCapturePage.tsx`) — a
+ * settings-service hiccup must never block enrollment capture.
+ */
+export async function getEnrollmentQualityParams(): Promise<{
+  min_blur_variance: number
+  min_brightness: number
+  max_brightness: number
+}> {
+  const response = await authFetch('/api/v1/system-parameters/enrollment-quality')
+  return (await response.json()) as {
+    min_blur_variance: number
+    min_brightness: number
+    max_brightness: number
+  }
+}
