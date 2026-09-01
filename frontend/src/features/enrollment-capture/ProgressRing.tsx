@@ -1,9 +1,15 @@
 import { CLOCK_POSITIONS } from './types'
-import type { SectorState } from './types'
+import type { ClockPosition, SectorState } from './types'
 
 interface ProgressRingProps {
   status: SectorState
   size?: number
+  /** Directional guidance animation ("animasi arahan"): a pulsing chevron
+   * drawn just outside the ring, pointing radially inward at this
+   * position — `clockSectors.ts::nextTargetPosition`'s pick of which
+   * not-yet-done position to move toward next. `null`/omitted draws no
+   * marker (e.g. once every position is done). */
+  targetPosition?: ClockPosition | null
 }
 
 const SECTOR_COLOR: Record<SectorState[keyof SectorState], string> = {
@@ -18,7 +24,7 @@ const SECTOR_COLOR: Record<SectorState[keyof SectorState], string> = {
  * 3b). Every sector must be individually confirmed — there is no
  * "auto-pass" sector, per FSD-AI.md ASM-03 (CORRECTED 2026-08-30).
  */
-export default function ProgressRing({ status, size = 320 }: ProgressRingProps) {
+export default function ProgressRing({ status, size = 320, targetPosition = null }: ProgressRingProps) {
   const center = size / 2
   const outerRadius = center - 8
   const innerRadius = outerRadius - 22
@@ -90,6 +96,30 @@ export default function ProgressRing({ status, size = 320 }: ProgressRingProps) 
           </path>
         )
       })}
+      {targetPosition !== null &&
+        (() => {
+          // Same angle convention as each sector above (position*30-90 deg,
+          // SVG y-down): 12 -> straight up, clockwise from there.
+          const angleDeg = targetPosition * 30 - 90
+          const angleRad = (angleDeg * Math.PI) / 180
+          const markerRadius = outerRadius + 16
+          const mx = center + markerRadius * Math.cos(angleRad)
+          const my = center + markerRadius * Math.sin(angleRad)
+          // Chevron drawn pointing "up" by default; rotate it to point
+          // radially inward, back at the ring, from wherever it sits.
+          const rotation = angleDeg + 90
+          return (
+            <g
+              key="target-marker"
+              transform={`translate(${mx} ${my}) rotate(${rotation})`}
+              className="capture-ring-target-marker"
+              data-testid="ring-target-marker"
+            >
+              <title>Selanjutnya: arahkan wajah ke jam {targetPosition}</title>
+              <polygon points="-9,9 9,9 0,-9" fill="var(--accent)" />
+            </g>
+          )
+        })()}
     </svg>
   )
 }

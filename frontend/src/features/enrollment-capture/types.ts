@@ -20,7 +20,9 @@ export type SectorStatus = 'pending' | 'active' | 'done' | 'poor'
 export type SectorState = Record<ClockPosition, SectorStatus>
 
 export interface HeadPose {
-  /** Degrees. Negative = subject's head turned to camera-left. */
+  /** Degrees. Negative = subject's head turned to their own left (the
+   * left side of the MIRRORED on-screen preview the subject actually
+   * watches — see `headPose.ts::estimateHeadPose`'s yaw comment). */
   yaw: number
   /** Degrees. Positive = head tilted up. */
   pitch: number

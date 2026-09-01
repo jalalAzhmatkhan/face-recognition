@@ -16,6 +16,7 @@ import {
   countDone,
   createInitialTrackerState,
   isCaptureComplete,
+  nextTargetPosition,
   resolveClockPosition,
   updateSectorState,
 } from './clockSectors'
@@ -30,6 +31,7 @@ import './EnrollmentCapturePage.css'
 type WizardStep =
   | 'consent'
   | 'preflight'
+  | 'countdown'
   | 'video'
   | 'review'
   | 'uploading'
@@ -38,6 +40,7 @@ type WizardStep =
 const MIN_DURATION_S = 10
 const MAX_DURATION_S = 30
 const SAMPLE_INTERVAL_MS = 150
+const COUNTDOWN_START_S = 3
 
 /**
  * S-30 Enrollment capture wizard (FR-ENR-02/03/04).
@@ -107,6 +110,11 @@ export default function EnrollmentCapturePage() {
   // recording is stopped WITHOUT advancing to 'review', since a partial
   // 360° sweep must never be silently accepted as a finished capture.
   const [recordingTimedOut, setRecordingTimedOut] = useState(false)
+  // 3-2-1 countdown shown right before recording actually starts (initial
+  // start AND every retry) so the subject isn't caught off guard the
+  // instant they land on the 'video' step -- see the 'countdown' step
+  // effect below.
+  const [countdownValue, setCountdownValue] = useState(COUNTDOWN_START_S)
   // System Parameter menu override (pages/SystemParametersPage.tsx) --
   // starts at the built-in defaults and is replaced once (if) the fetch
   // below succeeds, so this wizard is fully usable even before the first
@@ -122,6 +130,9 @@ export default function EnrollmentCapturePage() {
   const elapsedTimerRef = useRef<number | null>(null)
   const sectorsDone = countDone(tracker.status)
   const canFinishVideo = isCaptureComplete(tracker.status)
+  // Directional guidance animation ("animasi arahan") -- which not-yet-done
+  // position ProgressRing's pulsing chevron should point at next.
+  const targetPosition = nextTargetPosition(tracker.status)
   // `startVideoCapture`'s MAX_DURATION_S timer is a stable useCallback ([]
   // deps) whose closure can't see live `canFinishVideo` updates -- mirrors
   // `finishVideoCaptureRef` below, keeping a ref in sync via effect so the
@@ -207,7 +218,12 @@ export default function EnrollmentCapturePage() {
   useEffect(() => {
     const video = videoRef.current
     const stream = streamRef.current
-    if ((step === 'preflight' || step === 'video') && video && stream && video.srcObject !== stream) {
+    if (
+      (step === 'preflight' || step === 'countdown' || step === 'video') &&
+      video &&
+      stream &&
+      video.srcObject !== stream
+    ) {
       video.srcObject = stream
       void video.play()
     }
@@ -249,7 +265,7 @@ export default function EnrollmentCapturePage() {
   }, [step, qualityThresholds])
 
   useEffect(() => {
-    if (step !== 'preflight' && step !== 'video') return
+    if (step !== 'preflight' && step !== 'countdown' && step !== 'video') return
     sampleTimerRef.current = window.setInterval(() => {
       void sampleFrame()
     }, SAMPLE_INTERVAL_MS)
@@ -354,6 +370,37 @@ export default function EnrollmentCapturePage() {
     setStep('video')
   }, [])
 
+  // Reset the countdown to COUNTDOWN_START_S exactly once, on the render
+  // where `step` transitions TO 'countdown' (initial start or a retry) --
+  // a render-time adjustment (React's own idiom for "reset state when a
+  // value changes", see https://react.dev/learn/you-might-not-need-an-effect
+  // #adjusting-some-state-when-a-prop-changes) rather than an effect,
+  // matching this file's own `EnrollmentDetailPage.tsx`-style convention.
+  const [prevStep, setPrevStep] = useState<WizardStep>(step)
+  if (step !== prevStep) {
+    setPrevStep(step)
+    if (step === 'countdown') setCountdownValue(COUNTDOWN_START_S)
+  }
+
+  // Drives the 'countdown' step: ticks COUNTDOWN_START_S down to 0 once per
+  // second, then hands off to `startVideoCapture` -- `startVideoCapture`
+  // itself has no reactive dependencies (stable identity across renders),
+  // so referencing it directly here is safe and doesn't need a ref.
+  useEffect(() => {
+    if (step !== 'countdown') return
+    const id = window.setInterval(() => {
+      setCountdownValue((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(id)
+          startVideoCapture()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [step, startVideoCapture])
+
   const retryVideoCapture = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
       recorderRef.current.onstop = null
@@ -363,8 +410,8 @@ export default function EnrollmentCapturePage() {
     setVideoBlob(null)
     setTracker(createInitialTrackerState())
     setElapsedS(0)
-    startVideoCapture()
-  }, [startVideoCapture])
+    setStep('countdown')
+  }, [])
 
   const retakePhoto = useCallback(() => setPhotoBlob(null), [])
 
@@ -480,13 +527,13 @@ export default function EnrollmentCapturePage() {
         </div>
       )}
 
-      {(step === 'preflight' || step === 'video') && (
+      {(step === 'preflight' || step === 'countdown' || step === 'video') && (
         <div className="capture-stage">
           <div className="capture-viewport">
             <video ref={videoRef} className="capture-viewport__video" muted playsInline />
             {step === 'video' && (
               <div className="capture-ring-overlay">
-                <ProgressRing status={tracker.status} />
+                <ProgressRing status={tracker.status} targetPosition={targetPosition} />
               </div>
             )}
             <div
@@ -506,6 +553,14 @@ export default function EnrollmentCapturePage() {
                 </span>
               </div>
             )}
+            {step === 'countdown' && (
+              <div className="capture-countdown-overlay" role="status">
+                <span key={countdownValue} className="capture-countdown-number mono">
+                  {countdownValue > 0 ? countdownValue : 'Mulai!'}
+                </span>
+                <span className="capture-countdown-text">Bersiap, rekam akan mulai…</span>
+              </div>
+            )}
           </div>
 
           <aside className="capture-checklist">
@@ -521,6 +576,12 @@ export default function EnrollmentCapturePage() {
                 </li>
               )}
             </ul>
+
+            {step === 'video' && targetPosition !== null && (
+              <p className="capture-target-hint">
+                Selanjutnya: arahkan wajah ke jam <strong>{targetPosition}</strong>
+              </p>
+            )}
 
             {step === 'preflight' && !photoBlob && (
               <button
@@ -542,7 +603,11 @@ export default function EnrollmentCapturePage() {
                   <button type="button" className="btn" onClick={retakePhoto}>
                     Ulangi Foto
                   </button>
-                  <button type="button" className="btn btn--primary" onClick={startVideoCapture}>
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    onClick={() => setStep('countdown')}
+                  >
                     Lanjut ke Video 360°
                   </button>
                 </div>

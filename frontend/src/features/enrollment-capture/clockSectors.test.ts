@@ -5,7 +5,9 @@ import {
   FRAMES_TO_CONFIRM,
   isCaptureComplete,
   countDone,
+  nextTargetPosition,
   resolveClockPosition,
+  SWEEP_ORDER,
   targetPoseForClock,
   updateSectorState,
 } from './clockSectors'
@@ -116,5 +118,45 @@ describe('updateSectorState', () => {
     }
     expect(isCaptureComplete(tracker.status)).toBe(true)
     expect(countDone(tracker.status)).toBe(12)
+  })
+})
+
+describe('nextTargetPosition', () => {
+  it('points at 12 first, before anything is confirmed', () => {
+    expect(nextTargetPosition(createInitialSectorState())).toBe(12)
+  })
+
+  it('advances to the next position in sweep order once the current one is done', () => {
+    const status = createInitialSectorState()
+    status[12] = 'done'
+    expect(nextTargetPosition(status)).toBe(1)
+    status[1] = 'done'
+    expect(nextTargetPosition(status)).toBe(2)
+  })
+
+  it('skips over already-done positions even out of sweep order', () => {
+    const status = createInitialSectorState()
+    status[1] = 'done'
+    status[2] = 'done'
+    // 12 (first in sweep order) is still pending, so it's still the target.
+    expect(nextTargetPosition(status)).toBe(12)
+  })
+
+  it('is unaffected by "active"/"poor" — only "done" advances the target', () => {
+    const status = createInitialSectorState()
+    status[12] = 'active'
+    expect(nextTargetPosition(status)).toBe(12)
+    status[12] = 'poor'
+    expect(nextTargetPosition(status)).toBe(12)
+  })
+
+  it('returns null once every position is done', () => {
+    const status = createInitialSectorState()
+    for (const position of CLOCK_POSITIONS) status[position] = 'done'
+    expect(nextTargetPosition(status)).toBeNull()
+  })
+
+  it('sweep order starts at 12 and is otherwise clockwise 1..11', () => {
+    expect(SWEEP_ORDER).toEqual([12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
   })
 })
