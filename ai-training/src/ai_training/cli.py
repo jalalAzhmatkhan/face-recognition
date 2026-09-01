@@ -43,6 +43,27 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--model-version", required=True)
     evaluate.add_argument("--benchmark-id", required=True)
 
+    slice_catalog = sub.add_parser(
+        "slice-catalog",
+        help="List the edge-case benchmark slice catalog (EC-TR-01, TSD-EC D-7.1).",
+    )
+    slice_catalog.add_argument(
+        "--slice", default=None, help="Print detail (spec + skeleton manifest) for one slice."
+    )
+
+    build_synthetic_slice = sub.add_parser(
+        "build-synthetic-slice",
+        help="Build + upload a SMALL synthetic placeholder slice manifest (EC-TR-01). "
+        "Proves the harness plumbing works; NOT a substitute for EC-OPS-02 real data - "
+        "see ai_training.evaluation.synthetic_slices module docstring.",
+    )
+    build_synthetic_slice.add_argument(
+        "--slice", required=True, choices=["dark", "blur", "low-res", "masked-sintetis"]
+    )
+    build_synthetic_slice.add_argument("--version", required=True)
+    build_synthetic_slice.add_argument("--n-identities", type=int, default=8)
+    build_synthetic_slice.add_argument("--probes-per-identity", type=int, default=3)
+
     download_weights = sub.add_parser(
         "download-adaface-weights",
         help="Download + normalize the AdaFace pretrained checkpoint (TR-06). "
@@ -109,6 +130,66 @@ def main(argv: list[str] | None = None) -> int:
         settings = get_settings()
         report = evaluate_candidate(settings, args.model_version, args.benchmark_id)
         print(report.model_dump_json(indent=2))
+        return 0
+
+    if args.command == "slice-catalog":
+        from ai_training.evaluation.slices import SLICE_CATALOG, skeleton_manifest
+
+        if args.slice:
+            if args.slice not in SLICE_CATALOG:
+                print(f"slice-catalog: unknown slice {args.slice!r}", file=sys.stderr)
+                return 2
+            spec = SLICE_CATALOG[args.slice]
+            print(spec.model_dump_json(indent=2))
+            print(skeleton_manifest(args.slice).model_dump_json(indent=2))
+            return 0
+        for name, spec in SLICE_CATALOG.items():
+            tag = "GATE" if spec.is_gate else ("SMOKE" if spec.is_smoke_test else "report-only")
+            data = "synthesizable" if spec.synthesizable else "needs-real-data(EC-OPS-02)"
+            print(f"{name:20s} [{tag:11s}] [{data}] - {spec.description}")
+        return 0
+
+    if args.command == "build-synthetic-slice":
+        from ai_training.evaluation.slices import SLICE_CATALOG, SliceManifest, save_slice_manifest
+        from ai_training.evaluation.synthetic_slices import build_synthetic_slice_crops
+
+        settings = get_settings()
+        spec = SLICE_CATALOG[args.slice]
+        genuine, impostor = build_synthetic_slice_crops(
+            args.slice,
+            n_identities=args.n_identities,
+            probes_per_identity=args.probes_per_identity,
+        )
+        genuine_probe_count = sum(len(crops) for crops in genuine.values())
+        # Every genuine probe compared against every OTHER identity's
+        # gallery template, plus every impostor probe vs every identity -
+        # a crude pairwise comparison count for reporting purposes only
+        # (the real evaluate_slice_e2e run computes actual FPIR directly).
+        impostor_comparisons = len(impostor) * len(genuine)
+        manifest = SliceManifest(
+            slice_name=args.slice,
+            version=args.version,
+            category=args.slice,
+            is_gate=spec.is_gate,
+            is_smoke_test=spec.is_smoke_test,
+            report_only=spec.report_only,
+            data_status="synthetic_placeholder",
+            generation={
+                "method": "ai_training.evaluation.synthetic_slices",
+                "n_identities": args.n_identities,
+                "probes_per_identity": args.probes_per_identity,
+            },
+            genuine_identity_count=len(genuine),
+            genuine_probe_count=genuine_probe_count,
+            impostor_comparison_count=impostor_comparisons,
+            notes="SYNTHETIC PLACEHOLDER - proof-of-concept scale only, not "
+            "rule-of-30 compliant, not a real robustness measurement. See "
+            "ai_training.evaluation.synthetic_slices module docstring.",
+        )
+        save_slice_manifest(settings, manifest)
+        print(manifest.model_dump_json(indent=2))
+        rule = manifest.rule_of_30()
+        print(f"rule_of_30.passes={rule.passes} (expected False at this scale)", file=sys.stderr)
         return 0
 
     if args.command == "download-adaface-weights":
