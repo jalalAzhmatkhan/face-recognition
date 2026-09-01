@@ -39,7 +39,7 @@ from datetime import UTC, datetime
 
 from app.models.access_event import AccessEvent
 from app.models.device import Device
-from app.models.enums import AccessDecision, UserStatus
+from app.models.enums import AccessDecision, RejectStage, UserStatus
 from app.repositories.access_events import AccessEventRepository
 from app.repositories.access_policies import AccessPolicyRepository
 from app.repositories.users import UserRepository
@@ -85,6 +85,9 @@ def _publish_access_event(redis_client: RedisLike, event: AccessEvent) -> None:
         "latency_ms": event.latency_ms,
         "frame_media_id": str(event.frame_media_id) if event.frame_media_id else None,
         "door_command_issued": event.door_command_issued,
+        "condition_flags": event.condition_flags,
+        "reject_stage": event.reject_stage.value if event.reject_stage else None,
+        "device_class": event.device_class.value if event.device_class else None,
     }
     try:
         redis_client.publish(ACCESS_EVENTS_CHANNEL, json.dumps(payload))
@@ -138,6 +141,8 @@ def ingest_access_event(
     model_version: str | None,
     latency_ms: int | None,
     frame_media_id: uuid.UUID | None,
+    condition_flags: dict[str, bool] | None = None,
+    reject_stage: RejectStage | None = None,
 ) -> AccessEvent:
     door_command_issued = False
 
@@ -170,6 +175,13 @@ def ingest_access_event(
         latency_ms=latency_ms,
         frame_media_id=frame_media_id,
         door_command_issued=door_command_issued,
+        condition_flags=condition_flags,
+        reject_stage=reject_stage,
+        # EC-BE-01 (TSD-edge-cases.md D-1): denormalized from the
+        # AUTHENTICATED device row, never accepted from the request body —
+        # same anti-spoofing rationale as `device_id` itself (see
+        # app/schemas/access_events.py).
+        device_class=device.device_class,
     )
     event = event_repo.create(event)
 

@@ -396,6 +396,107 @@ def test_ingest_denied_decision_never_issues_door_command(
     assert event_repo.events[0].device_id == device.id
 
 
+# --- EC-BE-01: condition_flags / reject_stage / device_class ---------------
+
+
+def test_ingest_without_new_fields_is_backward_compatible(
+    device_repo, event_repo, user_repo, policy_repo, redis_client, device_credential
+) -> None:
+    """A caller (or ai-inference build) that predates EC-BE-01 sends none of
+    condition_flags/reject_stage and must still succeed, with those columns
+    coming back None."""
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+    )
+    response = client.post(
+        "/api/v1/access-events",
+        json={"decision": "DENIED"},
+        headers=_auth_headers(device_credential),
+    )
+    assert response.status_code == 201
+    assert len(event_repo.events) == 1
+    event = event_repo.events[0]
+    assert event.condition_flags is None
+    assert event.reject_stage is None
+
+
+def test_ingest_persists_condition_flags_and_reject_stage(
+    device_repo, event_repo, user_repo, policy_repo, redis_client, device_credential
+) -> None:
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+    )
+    response = client.post(
+        "/api/v1/access-events",
+        json={
+            "decision": "DENIED",
+            "condition_flags": {"masked": True, "dark": False},
+            "reject_stage": "quality_gate",
+        },
+        headers=_auth_headers(device_credential),
+    )
+    assert response.status_code == 201
+    assert len(event_repo.events) == 1
+    event = event_repo.events[0]
+    assert event.condition_flags == {"masked": True, "dark": False}
+    assert event.reject_stage.value == "quality_gate"
+
+
+def test_ingest_rejects_invalid_reject_stage(
+    device_repo, event_repo, user_repo, policy_repo, redis_client, device_credential
+) -> None:
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+    )
+    response = client.post(
+        "/api/v1/access-events",
+        json={"decision": "DENIED", "reject_stage": "not_a_stage"},
+        headers=_auth_headers(device_credential),
+    )
+    assert response.status_code == 422
+
+
+def test_ingest_denormalizes_device_class_from_authenticated_device(
+    device_repo, event_repo, user_repo, policy_repo, redis_client, device, device_credential
+) -> None:
+    """device_class is copied from the AUTHENTICATED device row, never
+    accepted from the request body (mirrors device_id's anti-spoofing
+    rationale)."""
+    from app.models.enums import DeviceClass
+
+    device.device_class = DeviceClass.DOOR_ENTRY
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+    )
+    response = client.post(
+        "/api/v1/access-events",
+        json={"decision": "DENIED", "device_class": "attendance"},
+        headers=_auth_headers(device_credential),
+    )
+    assert response.status_code == 201
+    event = event_repo.events[0]
+    # The body's "device_class": "attendance" is not even a recognized
+    # field on AccessEventIngestRequest — it's silently ignored by
+    # pydantic, and the persisted value is the device's own class.
+    assert event.device_class == DeviceClass.DOOR_ENTRY
+
+
 def test_ingest_unknown_decision_never_issues_door_command(
     device_repo, event_repo, user_repo, policy_repo, redis_client, device_credential
 ) -> None:
@@ -730,6 +831,48 @@ def test_list_allowed_for_viewer(
     body = response.json()
     assert body["total"] == 1
     assert body["items"][0]["decision"] == "DENIED"
+
+
+def test_list_returns_condition_flags_reject_stage_device_class(
+    device_repo, event_repo, user_repo, policy_repo, redis_client, device
+) -> None:
+    """GET /access-events (EC-BE-01) round-trips the new columns through
+    AccessEventResponse — a pre-EC-BE-01 row (all three None) and a fully
+    populated row must both serialize cleanly."""
+    from app.models.enums import DeviceClass, RejectStage
+
+    event_repo.events.append(
+        AccessEvent(
+            id=uuid.uuid4(),
+            occurred_at=datetime.now(UTC),
+            device_id=device.id,
+            decision=AccessDecision.DENIED,
+            matched_user_id=None,
+            similarity=None,
+            liveness_score=None,
+            model_version=None,
+            latency_ms=None,
+            frame_media_id=None,
+            door_command_issued=False,
+            condition_flags={"masked": True, "sunglasses": False},
+            reject_stage=RejectStage.QUALITY_GATE,
+            device_class=DeviceClass.ATTENDANCE,
+        )
+    )
+    client = _client(
+        device_repo=device_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+        policy_repo=policy_repo,
+        redis_client=redis_client,
+        staff_role=StaffRole.VIEWER,
+    )
+    response = client.get("/api/v1/access-events")
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["condition_flags"] == {"masked": True, "sunglasses": False}
+    assert item["reject_stage"] == "quality_gate"
+    assert item["device_class"] == "attendance"
 
 
 def test_list_filters_by_device_id_and_decision(

@@ -240,6 +240,73 @@ def test_register_device_rejects_blank_name(admin_client: TestClient) -> None:
     assert response.status_code == 422
 
 
+# --- EC-BE-01: device_class / commissioning_checklist ----------------------
+
+
+def test_register_device_without_device_class_defaults_to_unknown(
+    admin_client: TestClient,
+) -> None:
+    """Backward-compatible: a caller that predates EC-BE-01 doesn't send
+    `device_class` at all and still gets a valid, non-error response."""
+    response = admin_client.post(
+        "/api/v1/devices", json={"name": "Legacy Caller Door", "door_group": "legacy"}
+    )
+    assert response.status_code == 201
+    assert response.json()["device_class"] == "unknown"
+    assert response.json()["commissioning_checklist"] is None
+
+
+def test_register_device_with_device_class_and_checklist(admin_client: TestClient) -> None:
+    checklist = {
+        "camera_height_m": 1.55,
+        "fill_light_installed": True,
+        "shutter_speed_ok": True,
+        "attendance_zone_drawn": True,
+        "commissioned_by": "ops-team",
+    }
+    response = admin_client.post(
+        "/api/v1/devices",
+        json={
+            "name": "Absensi Panel A",
+            "door_group": "absensi",
+            "device_class": "attendance",
+            "commissioning_checklist": checklist,
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["device_class"] == "attendance"
+    assert body["commissioning_checklist"] == checklist
+
+
+def test_register_device_rejects_invalid_device_class(admin_client: TestClient) -> None:
+    response = admin_client.post(
+        "/api/v1/devices",
+        json={"name": "Bad Class Door", "door_group": "x", "device_class": "not_a_class"},
+    )
+    assert response.status_code == 422
+
+
+def test_update_device_class_and_checklist_succeeds_for_admin(
+    admin_client: TestClient, device_repo
+) -> None:
+    existing_id = next(iter(device_repo._by_id))
+    response = admin_client.patch(
+        f"/api/v1/devices/{existing_id}",
+        json={
+            "device_class": "door_entry",
+            "commissioning_checklist": {"camera_height_m": 1.6, "backlight_avoided": True},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["device_class"] == "door_entry"
+    assert body["commissioning_checklist"] == {
+        "camera_height_m": 1.6,
+        "backlight_avoided": True,
+    }
+
+
 # --- POST /devices/{id}/heartbeat (device-authenticated) -----------------
 
 

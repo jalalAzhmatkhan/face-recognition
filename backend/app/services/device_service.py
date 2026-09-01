@@ -23,7 +23,7 @@ from app.core.security import (
     verify_secret,
 )
 from app.models.device import Device
-from app.models.enums import DeviceStatus
+from app.models.enums import DeviceClass, DeviceStatus
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.devices import DeviceRepository
 
@@ -82,12 +82,20 @@ def register_device(
     name: str,
     door_group: str,
     actor: str,
+    device_class: DeviceClass | None = None,
+    commissioning_checklist: dict | None = None,
 ) -> IssuedCredential:
     """Create a new device row with a freshly issued credential.
 
     The plaintext token is returned to the caller (only) as part of
     `IssuedCredential` — it is never written anywhere, including the audit
     log payload (which records only non-secret metadata).
+
+    `device_class`/`commissioning_checklist` are EC-BE-01 additions
+    (TSD-edge-cases.md D-5/D-8) — both optional, defaulting to `unknown`/
+    `None` (the column's own DB default), so pre-existing callers (older
+    frontend build, QA fixtures) that don't send them keep working
+    unchanged.
     """
     credential_id, plaintext_secret, plaintext_token = generate_device_credential()
     now = datetime.now(UTC)
@@ -99,6 +107,8 @@ def register_device(
         credential_hash=hash_secret(plaintext_secret),
         credential_rotated_at=now,
         status=DeviceStatus.OFFLINE,
+        device_class=device_class if device_class is not None else DeviceClass.UNKNOWN,
+        commissioning_checklist=commissioning_checklist,
     )
     device = repo.create(device)
 
@@ -106,7 +116,11 @@ def register_device(
         actor=actor,
         action="device.register",
         entity=f"device:{device.id}",
-        payload={"name": name, "door_group": door_group},
+        payload={
+            "name": name,
+            "door_group": door_group,
+            "device_class": _serialize(device.device_class),
+        },
     )
     return IssuedCredential(device=device, plaintext_token=plaintext_token)
 
@@ -184,7 +198,7 @@ def record_heartbeat(repo: DeviceRepository, *, device: Device) -> Device:
 
 
 def _serialize(value: Any) -> Any:
-    return value.value if isinstance(value, DeviceStatus) else value
+    return value.value if isinstance(value, DeviceStatus | DeviceClass) else value
 
 
 def update_device(
@@ -207,6 +221,10 @@ def update_device(
         device.door_group = updates["door_group"]
     if "status" in updates:
         device.status = updates["status"]
+    if "device_class" in updates:
+        device.device_class = updates["device_class"]
+    if "commissioning_checklist" in updates:
+        device.commissioning_checklist = updates["commissioning_checklist"]
 
     device = repo.update(device)
 

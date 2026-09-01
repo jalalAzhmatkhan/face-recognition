@@ -20,11 +20,11 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import AccessDecision
+from app.models.enums import AccessDecision, DeviceClass, RejectStage
 
 
 class AccessEvent(Base):
@@ -66,4 +66,34 @@ class AccessEvent(Base):
     # valid_from/valid_to window). See app/services/access_event_service.py.
     door_command_issued: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
+    )
+    # EC-BE-01 (TSD-edge-cases.md D-1 — funnel logging, PONDASI for the rest
+    # of the edge-case design). Populated by ai-inference's `/recognize`
+    # decision via `POST /access-events`; all three columns are nullable so
+    # callers that predate this field (or a decision that doesn't apply,
+    # e.g. GRANTED has no reject_stage) stay valid.
+    #
+    # `condition_flags`: per-frame condition signals at decision time — the
+    # canonical keys are `masked`, `dark`, `blurry`, `low_res`,
+    # `sunglasses` (booleans), but this is intentionally NOT a DB-level
+    # shape constraint (see app/schemas/access_events.py) so INF can add a
+    # new flag without a migration.
+    condition_flags: Mapped[dict | None] = mapped_column(JSONB)
+    # Which pipeline stage produced a non-GRANTED decision (see
+    # app/models/enums.py::RejectStage). NULL = GRANTED, or reported by a
+    # pre-EC-BE-01 caller.
+    reject_stage: Mapped[RejectStage | None] = mapped_column(
+        Enum(RejectStage, name="reject_stage", native_enum=True)
+    )
+    # Denormalized copy of `devices.device_class` AT THE TIME OF THE EVENT
+    # (set server-side from the authenticated device row in
+    # app/services/access_event_service.py — never trusted from the
+    # request body), so funnel-logging/monitoring queries can group by
+    # device class without joining `devices` (and so the historical value
+    # survives a later device reclassification). Nullable rather than
+    # defaulting to `unknown` here: unlike `devices.device_class` (always
+    # knowable at write time), a NULL here also legitimately means "this
+    # row predates the column".
+    device_class: Mapped[DeviceClass | None] = mapped_column(
+        Enum(DeviceClass, name="device_class", native_enum=True)
     )

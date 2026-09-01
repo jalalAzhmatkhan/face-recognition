@@ -126,7 +126,13 @@ def register_device(
     plaintext device bearer token — returned exactly once (BE-09 task
     instructions); it is never persisted or logged."""
     issued = device_service.register_device(
-        repo, audit_repo, name=body.name, door_group=body.door_group, actor=str(current.id)
+        repo,
+        audit_repo,
+        name=body.name,
+        door_group=body.door_group,
+        actor=str(current.id),
+        device_class=body.device_class,
+        commissioning_checklist=body.commissioning_checklist,
     )
     return DeviceCredentialIssuedResponse.from_issued(
         issued.device,
