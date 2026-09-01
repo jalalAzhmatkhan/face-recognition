@@ -83,7 +83,12 @@ class AccessEvent(Base):
     # app/models/enums.py::RejectStage). NULL = GRANTED, or reported by a
     # pre-EC-BE-01 caller.
     reject_stage: Mapped[RejectStage | None] = mapped_column(
-        Enum(RejectStage, name="reject_stage", native_enum=True)
+        Enum(
+            RejectStage,
+            name="reject_stage",
+            native_enum=True,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        )
     )
     # Denormalized copy of `devices.device_class` AT THE TIME OF THE EVENT
     # (set server-side from the authenticated device row in
@@ -95,5 +100,10 @@ class AccessEvent(Base):
     # knowable at write time), a NULL here also legitimately means "this
     # row predates the column".
     device_class: Mapped[DeviceClass | None] = mapped_column(
-        Enum(DeviceClass, name="device_class", native_enum=True)
+        Enum(
+            DeviceClass,
+            name="device_class",
+            native_enum=True,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        )
     )

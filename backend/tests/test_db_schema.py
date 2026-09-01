@@ -59,6 +59,53 @@ def test_all_models_import_and_register_metadata() -> None:
     assert not missing, f"tables missing from metadata: {missing}"
 
 
+def test_native_enum_columns_serialize_by_value_not_name() -> None:
+    """Regression guard for the class of bug behind the live 2026-09-01
+    `POST /devices` 500 (`invalid input value for enum device_class:
+    "UNKNOWN"`): SQLAlchemy's `Enum(SomeEnum, ...)` column type defaults to
+    persisting the Python enum member's *name*, not its `.value`, unless
+    `values_callable` is explicitly given. Every native Postgres enum type
+    in this schema is created with lowercase/mixed-case VALUES (e.g.
+    `device_class`: `door_entry|attendance|unknown`) while several enum
+    classes use uppercase NAMES that differ from those values (e.g.
+    `DeviceClass.UNKNOWN.name == "UNKNOWN"` vs `.value == "unknown"`) — so a
+    column missing `values_callable` compiles fine, passes every mocked/fake
+    -repository test (which never round-trips through the real DB enum
+    type), and only fails at INSERT time against a real Postgres. This
+    couldn't be caught by `test_alembic_upgrade_head_sql_dry_run_renders_
+    full_chain` either, since that only renders the CREATE TYPE DDL (which
+    correctly declares the lowercase values from the migration source) —
+    the mismatch is purely in how the ORM column serializes a Python value
+    for INSERT/UPDATE, which an offline `--sql` dry run never exercises.
+
+    This test would have caught the bug immediately, without needing a live
+    database: for every native `Enum` column in the metadata whose Python
+    enum class has at least one member where `name != value`, assert
+    `values_callable` was actually set (i.e. the compiled `.enums` list
+    matches the members' `.value`s, not their `.name`s).
+    """
+    import enum as std_enum
+
+    from app.models import Base
+
+    checked = 0
+    for table in Base.metadata.tables.values():
+        for column in table.columns:
+            enum_type = getattr(column.type, "enum_class", None)
+            if enum_type is None or not issubclass(enum_type, std_enum.Enum):
+                continue
+            checked += 1
+            expected_values = [member.value for member in enum_type]
+            assert list(column.type.enums) == expected_values, (
+                f"{table.name}.{column.name} (enum {enum_type.__name__}) serializes "
+                f"{list(column.type.enums)!r} but should serialize {expected_values!r} — "
+                "missing values_callable=lambda enum_cls: [item.value for item in enum_cls] "
+                "on its Enum(...) column definition"
+            )
+    # Sanity check the test itself isn't silently checking zero columns.
+    assert checked >= 5
+
+
 def test_users_table_matches_tsd_columns() -> None:
     from app.models import Base
 
