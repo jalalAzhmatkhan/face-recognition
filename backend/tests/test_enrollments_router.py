@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.dependencies.auth import CurrentStaff, get_current_staff
 from app.main import create_app
-from app.models.consent import Consent
+from app.models.consent import CURRENT_CONSENT_VERSION, Consent
 from app.models.enrollment_session import EnrollmentSession
 from app.models.enums import EnrollmentState, StaffRole, UserStatus
 from app.models.user import User
@@ -336,6 +336,101 @@ def test_grant_consent_returns_404_for_unknown_session(admin_client: TestClient)
         f"/api/v1/enrollments/{uuid.uuid4()}/consent", json={"consent_version": "v1.0"}
     )
     assert response.status_code == 404
+
+
+# --- EC-BE-09: consent_version bump (append-only, not blocking) -----------
+
+
+def test_current_consent_version_was_bumped_from_v1_0() -> None:
+    """Documents the exact old -> new value for EC-FE-05 to reference.
+
+    EC-BE-09 bumps the consent clause version to cover synthetic
+    masked/occlusion templates (EC-TR-02/03/06), event-frame `recent`/probe
+    calibration templates (EC-TR-08), and the `template_candidates` buffer
+    (EC-TR-09/EC-BE-07). The version string itself lives in exactly one
+    place: `app.models.consent.CURRENT_CONSENT_VERSION`.
+    """
+    assert CURRENT_CONSENT_VERSION == "v1.1"
+    assert CURRENT_CONSENT_VERSION != "v1.0"
+
+
+def test_grant_consent_stores_new_current_version(
+    admin_client: TestClient,
+    consent_repo: FakeConsentRepository,
+    enrollment_repo: FakeEnrollmentRepository,
+    active_user: User,
+) -> None:
+    """A consent granted after this release, using the new version string,
+    is accepted and stored as-is (append-only create, BE-05 mechanism)."""
+    session = enrollment_repo.create(_make_session(active_user.id, EnrollmentState.CREATED))
+    response = admin_client.post(
+        f"/api/v1/enrollments/{session.id}/consent",
+        json={"consent_version": CURRENT_CONSENT_VERSION},
+    )
+    assert response.status_code == 200
+    assert response.json()["state"] == "CONSENTED"
+    assert len(consent_repo.consents) == 1
+    assert consent_repo.consents[0].consent_version == CURRENT_CONSENT_VERSION
+
+
+def test_old_consent_version_row_is_not_mutated_by_new_grant(
+    admin_client: TestClient,
+    consent_repo: FakeConsentRepository,
+    enrollment_repo: FakeEnrollmentRepository,
+    active_user: User,
+) -> None:
+    """Append-only versioning: an existing v1.0 consent row for a user is
+    left untouched when a *different* enrollment session for that same user
+    later grants consent under the new version — both rows coexist, and the
+    audit trail can tell old vs new apart purely by `consent_version` per
+    row (AC: "audit trail versi lama vs baru bisa dibedakan by
+    consent_version per row")."""
+    old_consent = Consent(
+        id=uuid.uuid4(),
+        user_id=active_user.id,
+        consent_version="v1.0",
+        granted_at=datetime.now(UTC),
+        revoked_at=None,
+    )
+    consent_repo.consents.append(old_consent)
+
+    new_session = enrollment_repo.create(_make_session(active_user.id, EnrollmentState.CREATED))
+    response = admin_client.post(
+        f"/api/v1/enrollments/{new_session.id}/consent",
+        json={"consent_version": CURRENT_CONSENT_VERSION},
+    )
+    assert response.status_code == 200
+
+    versions_for_user = sorted(
+        c.consent_version for c in consent_repo.list_for_user(active_user.id)
+    )
+    assert versions_for_user == sorted(["v1.0", CURRENT_CONSENT_VERSION])
+    # The pre-existing v1.0 row itself was never rewritten in place.
+    assert old_consent.consent_version == "v1.0"
+    assert old_consent.revoked_at is None
+
+
+def test_old_consent_version_still_unblocks_capture_transition(
+    admin_client: TestClient, enrollment_repo: FakeEnrollmentRepository, active_user: User
+) -> None:
+    """A user whose only consent record predates this version bump (still
+    `v1.0`, no re-consent performed after release) must not be blocked from
+    proceeding: the state-machine gate only cares that a CONSENTED session
+    exists (see `enrollment_service.grant_consent`), never which specific
+    `consent_version` string was recorded (AC: "user existing tanpa
+    re-consent tidak diblokir aksesnya")."""
+    session = enrollment_repo.create(_make_session(active_user.id, EnrollmentState.CREATED))
+    consent_response = admin_client.post(
+        f"/api/v1/enrollments/{session.id}/consent", json={"consent_version": "v1.0"}
+    )
+    assert consent_response.status_code == 200
+    assert consent_response.json()["state"] == "CONSENTED"
+
+    transition_response = admin_client.post(
+        f"/api/v1/enrollments/{session.id}/transition", json={"target_state": "CAPTURING"}
+    )
+    assert transition_response.status_code == 200
+    assert transition_response.json()["state"] == "CAPTURING"
 
 
 # --- POST /enrollments/{id}/transition ------------------------------------
