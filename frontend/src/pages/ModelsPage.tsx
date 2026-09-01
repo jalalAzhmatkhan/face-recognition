@@ -104,7 +104,11 @@ export default function ModelsPage() {
       <section className="training-models-section">
         <div className="training-models-section__header">
           <h2 className="training-models-section__title">Riwayat Training</h2>
-          <button type="button" onClick={() => setShowStartDialog(true)}>
+          <button
+            type="button"
+            className="training-models-btn training-models-btn--primary"
+            onClick={() => setShowStartDialog(true)}
+          >
             Mulai Training
           </button>
         </div>

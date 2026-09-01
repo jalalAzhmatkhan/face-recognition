@@ -220,12 +220,17 @@ export default function ModelPromotionPage() {
             <div className="training-models-dialog__actions">
               <button
                 type="button"
+                className="training-models-btn training-models-btn--primary"
                 disabled={!computePromotionGateChecks(candidate, production).allPassed}
                 onClick={() => setShowConfirm(true)}
               >
                 Promote ke Produksi
               </button>
-              <button type="button" onClick={() => setDismissed(true)}>
+              <button
+                type="button"
+                className="training-models-btn"
+                onClick={() => setDismissed(true)}
+              >
                 Tolak Kandidat
               </button>
             </div>
@@ -237,7 +242,11 @@ export default function ModelPromotionPage() {
         <p className="training-models-section__hint">
           Kandidat {version} disembunyikan untuk sesi ini saja — TIDAK mengubah status apapun di
           server.{' '}
-          <button type="button" onClick={() => setDismissed(false)}>
+          <button
+            type="button"
+            className="training-models-btn--link"
+            onClick={() => setDismissed(false)}
+          >
             Tampilkan lagi
           </button>
         </p>

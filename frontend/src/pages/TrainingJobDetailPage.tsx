@@ -213,6 +213,7 @@ export default function TrainingJobDetailPage() {
               </details>
               <button
                 type="button"
+                className="training-models-btn training-models-btn--primary"
                 disabled={retryMutation.isPending}
                 onClick={() => retryMutation.mutate()}
               >
