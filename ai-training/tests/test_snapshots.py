@@ -166,6 +166,25 @@ class _BytesReader:
         return self._data
 
 
+def test_build_snapshot_propagates_event_frame_source_and_none_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EC-TR-05: an event-frame row with no matched identity keeps
+    `user_id`/`session_id` as `None` (never coerced to a placeholder
+    string), and `source` survives into the manifest's `MediaEntry`."""
+    rows = [(None, None, "event_frame", "frac-media", "frame1.jpg")]
+    fake_conn = _FakeConnection(rows)
+    monkeypatch.setattr(snapshots_module, "get_connection", lambda dsn: fake_conn)
+
+    snapshot = build_snapshot(_settings(), {"source": "event_frame"}, s3_client=MagicMock())
+
+    assert snapshot.user_ids == []
+    assert snapshot.session_ids == []
+    assert snapshot.media[0].source == "event_frame"
+    assert snapshot.media[0].user_id is None
+    assert snapshot.media[0].session_id is None
+
+
 def test_load_snapshot_parses_media_entries() -> None:
     manifest = DatasetSnapshot(
         snapshot_id="snap-abc",

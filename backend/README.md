@@ -373,11 +373,12 @@ rationale):
   SQL, not through `app/services/enrollment_state_machine.py` — so
   `updated_at` may not always reflect exactly when embedding extraction
   finished. Direction of error is safe (retain longer, never delete sooner).
-- `media_objects.session_id` is currently `NOT NULL`, which blocks a real
-  EVENT_FRAME row from ever being created independently of an enrollment
-  session — that schema change belongs to IN-06 (event emission), not BE-14.
-  The purge/backfill logic here is already written generically against
-  `kind == EVENT_FRAME` and needs no changes once that lands.
+- `media_objects.session_id` is nullable since EC-TR-05 (migration
+  `b2e6f9a1c4d7`), which is what actually representing an EVENT_FRAME row
+  requires — but no code path writes one yet; that's the event-ingestion
+  side (IN-06-style), still separate from BE-14. The purge/backfill logic
+  here is already written generically against `kind == EVENT_FRAME` and
+  needs no changes once that ingestion lands.
 
 Tests: `tests/test_retention_service.py` (pure service-logic unit tests,
 fake repos/S3 client, no live Postgres/S3) and the retention section of

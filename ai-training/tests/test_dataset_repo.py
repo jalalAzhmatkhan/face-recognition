@@ -103,3 +103,114 @@ def test_find_enrolled_media_orders_by_created_at_ascending() -> None:
     args, _kwargs = cursor.execute.call_args
     query, _params = args
     assert query.strip().endswith("ORDER BY mo.created_at ASC")
+
+
+def test_find_enrolled_media_defaults_source_to_enrollment() -> None:
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [
+        ("user-1", "session-1", "video", "frac-media", "enrollment/u1/s1/rotation.webm"),
+    ]
+    records = find_enrolled_media(cursor)
+    assert records[0].source == "enrollment"
+
+
+def test_find_enrolled_media_applies_variant_filter_on_enrollment_source() -> None:
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+    find_enrolled_media(cursor, {"variant": "glasses"})
+    args, _kwargs = cursor.execute.call_args
+    query, params = args
+    assert "mo.variant = %s" in query
+    assert "JOIN enrollment_sessions" in query
+    assert params == ("glasses",)
+
+
+def test_find_enrolled_media_rejects_unsupported_source() -> None:
+    cursor = MagicMock()
+    with pytest.raises(ValueError, match="unsupported source"):
+        find_enrolled_media(cursor, {"source": "bogus"})
+    cursor.execute.assert_not_called()
+
+
+class TestEventFrameSource:
+    """EC-TR-05 (TSD-EC B-4): `source=event_frame` selects door-camera
+    frames (no enrollment session) joined to `access_events` for
+    `condition_flags` filtering."""
+
+    def test_queries_media_objects_with_null_session_id_and_event_frame_kind(self) -> None:
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        find_enrolled_media(cursor, {"source": "event_frame"})
+        args, _kwargs = cursor.execute.call_args
+        query, params = args
+        assert "mo.session_id IS NULL" in query
+        assert "mo.kind = 'event_frame'" in query
+        assert "LEFT JOIN access_events" in query
+        assert params == ()
+
+    def test_maps_matched_user_id_to_media_record_user_id(self) -> None:
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            ("user-9", None, "event_frame", "frac-media", "pad-unrelated/frame1.jpg"),
+        ]
+        records = find_enrolled_media(cursor, {"source": "event_frame"})
+        assert records == [
+            MediaRecord(
+                user_id="user-9",
+                session_id=None,
+                kind="event_frame",
+                s3_bucket="frac-media",
+                s3_key="pad-unrelated/frame1.jpg",
+                source="event_frame",
+            )
+        ]
+
+    def test_unmatched_frame_has_none_user_id_not_a_crash_or_placeholder_string(self) -> None:
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            (None, None, "event_frame", "frac-media", "frame2.jpg"),
+        ]
+        records = find_enrolled_media(cursor, {"source": "event_frame"})
+        assert records[0].user_id is None
+        assert records[0].session_id is None
+
+    def test_applies_condition_flag_filter(self) -> None:
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        find_enrolled_media(cursor, {"source": "event_frame", "condition": "dark"})
+        args, _kwargs = cursor.execute.call_args
+        query, params = args
+        assert "condition_flags ->> %s" in query
+        assert params == ("dark",)
+
+    def test_rejects_condition_without_event_frame_source(self) -> None:
+        cursor = MagicMock()
+        with pytest.raises(ValueError, match="requires source=event_frame"):
+            find_enrolled_media(cursor, {"condition": "dark"})
+        cursor.execute.assert_not_called()
+
+    def test_rejects_unsupported_condition_flag(self) -> None:
+        cursor = MagicMock()
+        with pytest.raises(ValueError, match="unsupported condition"):
+            find_enrolled_media(cursor, {"source": "event_frame", "condition": "drak"})
+        cursor.execute.assert_not_called()
+
+    def test_rejects_kind_filter_with_event_frame_source(self) -> None:
+        cursor = MagicMock()
+        with pytest.raises(ValueError, match="not valid with source=event_frame"):
+            find_enrolled_media(cursor, {"source": "event_frame", "kind": "photo"})
+        cursor.execute.assert_not_called()
+
+    def test_rejects_external_ref_filter_with_event_frame_source(self) -> None:
+        cursor = MagicMock()
+        with pytest.raises(ValueError, match="not valid with source=event_frame"):
+            find_enrolled_media(cursor, {"source": "event_frame", "external_ref": "EMP001"})
+        cursor.execute.assert_not_called()
+
+    def test_applies_variant_filter_on_event_frame_source(self) -> None:
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        find_enrolled_media(cursor, {"source": "event_frame", "variant": "default"})
+        args, _kwargs = cursor.execute.call_args
+        _query, params = args
+        assert params == ("default",)

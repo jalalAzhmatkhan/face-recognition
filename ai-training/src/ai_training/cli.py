@@ -30,7 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="key=value filter, repeatable (supported keys: external_ref, "
-        "created_after, created_before, kind)",
+        "created_after, created_before, kind, variant, condition, source "
+        "[EC-TR-05] - see ai_training.db.dataset_repo for source=event_frame "
+        "semantics)",
     )
 
     eda = sub.add_parser("eda", help="Build an EDA report for a dataset snapshot (TR-05).")
@@ -63,6 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
     build_synthetic_slice.add_argument("--version", required=True)
     build_synthetic_slice.add_argument("--n-identities", type=int, default=8)
     build_synthetic_slice.add_argument("--probes-per-identity", type=int, default=3)
+
+    pad_upload = sub.add_parser(
+        "pad-upload",
+        help="Validate + upload a local PAD (liveness) dataset collection to "
+        "s3://<bucket>/pad/{collection_id}/... (EC-TR-05, TSD-EC B-4). See "
+        "ai_training.data.pad_collection module docstring for the required "
+        "local directory layout.",
+    )
+    pad_upload.add_argument("--local-dir", required=True, help="Local PAD collection root.")
+    pad_upload.add_argument(
+        "--collection-id", required=True, help="Identifier for this PAD collection batch."
+    )
 
     download_weights = sub.add_parser(
         "download-adaface-weights",
@@ -190,6 +204,24 @@ def main(argv: list[str] | None = None) -> int:
         print(manifest.model_dump_json(indent=2))
         rule = manifest.rule_of_30()
         print(f"rule_of_30.passes={rule.passes} (expected False at this scale)", file=sys.stderr)
+        return 0
+
+    if args.command == "pad-upload":
+        from ai_training.data.pad_collection import upload_pad_collection
+
+        settings = get_settings()
+        try:
+            manifest = upload_pad_collection(settings, args.local_dir, args.collection_id)
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"pad-upload: {exc}", file=sys.stderr)
+            return 2
+        print(manifest.model_dump_json(indent=2))
+        if not manifest.report.is_ready_for_finetune:
+            print(
+                "pad-upload: collection uploaded but NOT yet ready for FINETUNE_LIVENESS "
+                "(see report.subjects_missing_combos / *_meets_minimum / has_am2_attack above)",
+                file=sys.stderr,
+            )
         return 0
 
     if args.command == "download-adaface-weights":

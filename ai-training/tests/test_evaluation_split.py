@@ -10,8 +10,9 @@ from ai_training.data.snapshots import DatasetSnapshot, MediaEntry
 from ai_training.evaluation.metrics import _split_gallery_and_probes
 
 
-def _entry(key: str, user_id: str) -> MediaEntry:
-    return MediaEntry(s3_key=key, kind="image", user_id=user_id, session_id=f"session-{key}")
+def _entry(key: str, user_id: str | None) -> MediaEntry:
+    session_id = f"session-{key}" if user_id is not None else None
+    return MediaEntry(s3_key=key, kind="image", user_id=user_id, session_id=session_id)
 
 
 def test_split_identity_with_two_media_becomes_one_gallery_one_genuine_probe() -> None:
@@ -72,3 +73,22 @@ def test_split_multiple_identities_are_independent() -> None:
     impostor_probes = [(t, e.s3_key) for t, e in probes if t is None]
     assert genuine_probes == [("alice", "a2"), ("alice", "a3")]
     assert impostor_probes == [(None, "b1")]
+
+
+def test_split_never_groups_two_unmatched_event_frame_entries_together() -> None:
+    """EC-TR-05 regression: two `source=event_frame` probes that were each
+    never matched to an identity both have `user_id=None` - naively keying
+    `by_identity` on that shared `None` would bucket them as if they were
+    one person's two media (and, once >=2, wrongly promote them into a
+    single fabricated gallery identity instead of two separate impostor
+    probes)."""
+    snapshot = DatasetSnapshot(
+        snapshot_id="snap-5",
+        media=[_entry("e1", None), _entry("e2", None)],
+    )
+
+    gallery, probes = _split_gallery_and_probes(snapshot, gallery_media_per_identity=1)
+
+    assert gallery == {}
+    assert sorted(e.s3_key for _, e in probes) == ["e1", "e2"]
+    assert all(true_identity is None for true_identity, _ in probes)

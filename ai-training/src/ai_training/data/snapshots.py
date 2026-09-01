@@ -29,12 +29,18 @@ from ai_training.storage import build_s3_client
 
 class MediaEntry(BaseModel):
     """One media object referenced by a snapshot - S3 reference only, never
-    the bytes themselves (TSD SS4)."""
+    the bytes themselves (TSD SS4).
+
+    `user_id`/`session_id` are optional since EC-TR-05: a `source=
+    "event_frame"` entry (a door-camera frame, see
+    `ai_training.db.dataset_repo` module docstring) has no enrollment
+    session, and no identity at all when it was never matched."""
 
     s3_key: str
     kind: str
-    user_id: str
-    session_id: str
+    user_id: str | None
+    session_id: str | None
+    source: str = "enrollment"
 
 
 class DatasetSnapshot(BaseModel):
@@ -56,11 +62,15 @@ def _manifest_key(snapshot_id: str) -> str:
     return f"datasets/{snapshot_id}/manifest.json"
 
 
-def _dedupe_preserve_order(values: list[str]) -> list[str]:
+def _dedupe_preserve_order(values: list[str | None]) -> list[str]:
+    # `None` (an unmatched EC-TR-05 event-frame probe's user_id/session_id)
+    # is deliberately dropped here, not deduped-and-kept-as-one-entry: it
+    # doesn't refer to one real user/session, so it must never appear in
+    # `user_ids`/`session_ids` at all.
     seen: set[str] = set()
     ordered: list[str] = []
     for value in values:
-        if value not in seen:
+        if value is not None and value not in seen:
             seen.add(value)
             ordered.append(value)
     return ordered
@@ -84,6 +94,7 @@ def _build_manifest(
                 kind=record.kind,
                 user_id=record.user_id,
                 session_id=record.session_id,
+                source=record.source,
             )
             for record in records
         ],

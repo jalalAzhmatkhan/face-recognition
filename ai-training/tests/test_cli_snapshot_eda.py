@@ -37,6 +37,72 @@ def test_snapshot_command_rejects_malformed_filter(capsys: pytest.CaptureFixture
     assert "key=value" in err
 
 
+def test_pad_upload_command_invokes_upload_pad_collection_and_prints_manifest(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from ai_training.data.pad_collection import PadCollectionManifest, PadCollectionReport
+
+    captured: dict[str, object] = {}
+
+    def fake_upload(settings: object, local_dir: str, collection_id: str) -> PadCollectionManifest:
+        captured["local_dir"] = local_dir
+        captured["collection_id"] = collection_id
+        return PadCollectionManifest(
+            collection_id=collection_id,
+            report=PadCollectionReport(is_ready_for_finetune=True),
+        )
+
+    monkeypatch.setattr("ai_training.data.pad_collection.upload_pad_collection", fake_upload)
+
+    exit_code = cli_module.main(
+        ["pad-upload", "--local-dir", "/tmp/pad-raw", "--collection-id", "batch-1"]
+    )
+
+    assert exit_code == 0
+    assert captured == {"local_dir": "/tmp/pad-raw", "collection_id": "batch-1"}
+    out = capsys.readouterr().out
+    assert "batch-1" in out
+
+
+def test_pad_upload_command_warns_when_collection_not_ready_for_finetune(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from ai_training.data.pad_collection import PadCollectionManifest, PadCollectionReport
+
+    def fake_upload(settings: object, local_dir: str, collection_id: str) -> PadCollectionManifest:
+        return PadCollectionManifest(
+            collection_id=collection_id,
+            report=PadCollectionReport(is_ready_for_finetune=False),
+        )
+
+    monkeypatch.setattr("ai_training.data.pad_collection.upload_pad_collection", fake_upload)
+
+    exit_code = cli_module.main(
+        ["pad-upload", "--local-dir", "/tmp/pad-raw", "--collection-id", "batch-1"]
+    )
+
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "NOT yet ready" in err
+
+
+def test_pad_upload_command_rejects_malformed_collection(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_upload(settings: object, local_dir: str, collection_id: str) -> None:
+        raise ValueError("malformed bona_fide PAD path: bogus")
+
+    monkeypatch.setattr("ai_training.data.pad_collection.upload_pad_collection", fake_upload)
+
+    exit_code = cli_module.main(
+        ["pad-upload", "--local-dir", "/tmp/pad-raw", "--collection-id", "batch-1"]
+    )
+
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "malformed bona_fide" in err
+
+
 def test_eda_command_invokes_build_eda_report(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
