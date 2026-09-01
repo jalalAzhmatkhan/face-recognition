@@ -1,6 +1,8 @@
 import type {
   AccessDecision,
   AccessEventListResponse,
+  AccessEventSample,
+  AccessEventSampleResponse,
   DailyDecisionCount,
   EnrollmentFunnelStage,
   EnrollmentListResponse,
@@ -165,6 +167,34 @@ export async function fetchEnrollmentFunnel(): Promise<EnrollmentFunnelStage[]> 
     ENROLLMENT_FUNNEL_STATES.map(async (state) => ({ state, count: await countEnrollments(state) })),
   )
   return counts
+}
+
+/** Largest page `GET /access-events` allows (backend `limit: le=200`). */
+export const RECENT_ACCESS_EVENT_SAMPLE_SIZE = 200
+
+/**
+ * EC-FE-01 (TSD-edge-cases.md D-1) — reject-stage / condition-flag /
+ * device-class distribution panel. **Known gap**: `GET /access-events` has
+ * NO aggregation/group-by query params for `reject_stage`,
+ * `condition_flags`, or `device_class` (confirmed against
+ * `backend/app/routers/access_events.py` — only `device_id`, `decision`,
+ * `from`, `to` exist). Building a real backend aggregation endpoint is out
+ * of scope for this task (frontend-only), so as an interim Gelombang-0
+ * measure this reads the `RECENT_ACCESS_EVENT_SAMPLE_SIZE` most recent
+ * events (one plain list call, no decision filter so GRANTED is included
+ * too) and the breakdown panels aggregate CLIENT-SIDE from that sample.
+ * This is disclosed in the panel's own copy — it is a recent-sample view,
+ * not a full-history aggregate, and will silently miss older events once
+ * event volume exceeds this page size.
+ */
+export async function fetchRecentAccessEventSample(
+  limit: number = RECENT_ACCESS_EVENT_SAMPLE_SIZE,
+): Promise<AccessEventSample[]> {
+  const search = new URLSearchParams()
+  search.set('limit', String(limit))
+  const response = await authFetch(`/api/v1/access-events?${search.toString()}`)
+  const data = (await response.json()) as AccessEventSampleResponse
+  return data.items
 }
 
 interface ProblemBody {

@@ -6,6 +6,7 @@ import {
   fetchDailyDecisionCounts,
   fetchEnrollmentFunnel,
   fetchProductionModel,
+  fetchRecentAccessEventSample,
   fetchTodayCounts,
   startOfDayIso,
 } from './api'
@@ -134,6 +135,26 @@ describe('authenticated dashboard requests', () => {
     expect(stages[stages.length - 1]).toEqual({ state: 'ENROLLED', count: 4 })
     expect(stages.some((s) => s.state === 'CANCELLED')).toBe(false)
     expect(stages.some((s) => s.state === 'REVOKED')).toBe(false)
+  })
+
+  it('fetchRecentAccessEventSample requests a bounded page with no decision filter', async () => {
+    const items = [
+      {
+        id: 'evt-1',
+        decision: 'DENIED',
+        reject_stage: 'liveness',
+        condition_flags: { dark: true },
+        device_class: 'door_entry',
+      },
+    ]
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ items, total: 1, limit: 200, offset: 0 }), { status: 200 }),
+    )
+    const result = await fetchRecentAccessEventSample()
+    expect(result).toEqual(items)
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/api/v1/access-events?limit=200')
+    expect(url).not.toContain('decision=')
   })
 
   it('throws ApiError with status/body on a non-2xx response', async () => {

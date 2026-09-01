@@ -106,3 +106,73 @@ export interface EnrollmentFunnelStage {
   state: EnrollmentState
   count: number
 }
+
+/**
+ * EC-FE-01 (TSD-edge-cases.md D-1) — recognition-pipeline reject funnel,
+ * distinct from the enrollment funnel above. Mirrors backend
+ * `RejectStage`/`condition_flags`/`device_class` (EC-BE-01 migration,
+ * `backend/app/models/enums.py`) filled in by ai-inference (EC-IN-01).
+ */
+export type RejectStage = 'detection' | 'liveness' | 'quality_gate' | 'threshold' | 'policy'
+
+export const REJECT_STAGES: RejectStage[] = [
+  'detection',
+  'liveness',
+  'quality_gate',
+  'threshold',
+  'policy',
+]
+
+/** Canonical condition-flag keys (TSD-edge-cases.md D-1/D-3) — booleans on
+ * `access_events.condition_flags jsonb`. */
+export type ConditionFlagKey = 'masked' | 'dark' | 'blurry' | 'low_res' | 'sunglasses'
+
+export const CONDITION_FLAG_KEYS: ConditionFlagKey[] = [
+  'masked',
+  'dark',
+  'blurry',
+  'low_res',
+  'sunglasses',
+]
+
+/** Device category (EC-BE-01) — note the ENUM VALUES are `door_entry` /
+ * `attendance` / `unknown` (see `backend/app/models/enums.py::DeviceClass`
+ * and the `device_class` native-enum migration), NOT the
+ * `access_control`/`attendance` terms used by
+ * `documentation/operations/camera-placement-guide.md` §5 (a pre-existing
+ * naming mismatch between that ops doc and the actual EC-BE-01
+ * implementation — this FE follows the real backend enum, and the
+ * commissioning-checklist code treats `door_entry` as that doc's
+ * `access_control`). */
+export type DeviceClass = 'door_entry' | 'attendance' | 'unknown'
+
+export const DEVICE_CLASSES: DeviceClass[] = ['door_entry', 'attendance', 'unknown']
+
+/** One row of `GET /access-events` as needed for the client-side funnel
+ * breakdown below — a subset of the backend's full `AccessEventResponse`
+ * (see `backend/app/schemas/access_events.py`). Kept as its own minimal
+ * shape (not the full payload `live-monitoring/types.ts::AccessEventPayload`
+ * has) since this panel only ever reads these four fields. */
+export interface AccessEventSample {
+  id: string
+  decision: AccessDecision
+  reject_stage: RejectStage | null
+  condition_flags: Record<string, boolean> | null
+  device_class: DeviceClass | null
+}
+
+export interface AccessEventSampleResponse {
+  items: AccessEventSample[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/** One bucket in any of the three EC-FE-01 breakdowns — a label (reject
+ * stage / condition flag / device class) plus its count and share of the
+ * sample. */
+export interface FunnelBreakdownRow {
+  key: string
+  count: number
+  pct: number
+}
