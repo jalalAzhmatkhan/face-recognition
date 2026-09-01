@@ -27,10 +27,8 @@ type CatalogEntry = Omit<
 /**
  * The 13 baseline checklist items (camera-placement-guide.md §5.4),
  * rendered in this exact order, grouped by `category` for the form UI.
- * `id`/`category`/`label`/`value_type`/`enum_options` are copied verbatim
- * from §5.4's table; `applicable_device_classes` uses this project's real
- * `DeviceClass` enum values (`door_entry` in place of the doc's
- * `access_control` — see `types.ts`'s docstring on that mismatch).
+ * `id`/`category`/`label`/`value_type`/`enum_options`/`applicable_device_classes`
+ * are copied verbatim from §5.4's table.
  */
 export function buildChecklistCatalog(deviceClass: DeviceClass): CatalogEntry[] {
   return [
@@ -207,7 +205,7 @@ export function buildDefaultChecklist(deviceClass: DeviceClass): CommissioningCh
  * `status` is adjusted: inapplicable → `na`, applicable-but-was-`na` →
  * reset to `null` (not yet checked) so it isn't silently counted as
  * checked. Also toggles `queue_zone` on/off (built fresh, or dropped to
- * `null` for a non-attendance class per §5.1: "null untuk access_control").
+ * `null` for a non-attendance class per §5.1: "null untuk door_entry").
  */
 export function reclassifyChecklist(
   checklist: CommissioningChecklist,

@@ -16,15 +16,10 @@ export type DeviceStatus = 'ONLINE' | 'OFFLINE' | 'DISABLED'
 
 export const DEVICE_STATUSES: DeviceStatus[] = ['ONLINE', 'OFFLINE', 'DISABLED']
 
-/** Device category (EC-BE-01, TSD-edge-cases.md D-5/D-10). NOTE the enum
- * VALUES are `door_entry` / `attendance` / `unknown` (see
+/** Device category (EC-BE-01, TSD-edge-cases.md D-5/D-10). Matches
  * `backend/app/models/enums.py::DeviceClass` and the `device_class` native
- * Postgres enum) — this is a naming mismatch with
- * `documentation/operations/camera-placement-guide.md` §5, which calls the
- * non-attendance class `access_control`. This feature follows the real
- * backend enum everywhere; the commissioning-checklist catalog
- * (`commissioningChecklist.ts`) treats `door_entry` as that doc's
- * `access_control`. */
+ * Postgres enum, and `documentation/operations/camera-placement-guide.md`
+ * §5 (which uses these same `door_entry`/`attendance` values). */
 export type DeviceClass = 'door_entry' | 'attendance' | 'unknown'
 
 export const DEVICE_CLASSES: DeviceClass[] = ['door_entry', 'attendance', 'unknown']
