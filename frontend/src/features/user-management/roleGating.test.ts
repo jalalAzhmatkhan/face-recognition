@@ -6,6 +6,7 @@ import {
   canEditUser,
   canOffboardUser,
   canStartEnrollment,
+  canViewIdentitySimilarityFlags,
 } from './roleGating'
 
 const ROLES: (StaffRole | null)[] = ['ADMIN', 'OPERATOR', 'VIEWER', null]
@@ -35,5 +36,14 @@ describe('write-role gates for user management', () => {
         expect(gate(role)).toBe(false)
       }
     }
+  })
+})
+
+describe('canViewIdentitySimilarityFlags (EC-FE-03, ADMIN-only)', () => {
+  it('allows only ADMIN', () => {
+    expect(canViewIdentitySimilarityFlags('ADMIN')).toBe(true)
+    expect(canViewIdentitySimilarityFlags('OPERATOR')).toBe(false)
+    expect(canViewIdentitySimilarityFlags('VIEWER')).toBe(false)
+    expect(canViewIdentitySimilarityFlags(null)).toBe(false)
   })
 })

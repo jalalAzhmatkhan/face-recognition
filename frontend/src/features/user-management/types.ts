@@ -21,6 +21,48 @@ export interface UserResponse {
   status: UserStatus
   created_at: string
   updated_at: string
+  /**
+   * EC-FE-03 GAP (backend): `users.reenroll_due` / `.reenroll_due_reason` /
+   * `.reenroll_due_marked_at` exist on the `users` table since EC-BE-05
+   * (`backend/app/models/user.py`), but `UserResponse`
+   * (`backend/app/schemas/users.py`) does NOT expose them yet — confirmed by
+   * reading that file directly, not inferred. `GET /users` / `GET /users/{id}`
+   * therefore never return these fields today, so they are typed here as
+   * optional and every read site MUST treat `undefined` the same as
+   * `false`/`null` (see `isReenrollDue` below). Widening the backend
+   * response schema is intentionally NOT done by this task — out of scope
+   * for a frontend-only assignment. Follow-up: once a backend task adds
+   * these three fields to `UserResponse`, this UI starts showing real data
+   * with no FE change needed.
+   */
+  reenroll_due?: boolean
+  reenroll_due_reason?: string | null
+  reenroll_due_marked_at?: string | null
+}
+
+/** Safe accessor for `UserResponse.reenroll_due` — collapses the "backend
+ * doesn't send this field yet" `undefined` case to `false` in one place so
+ * call sites never have to remember the gap noted above. */
+export function isReenrollDue(user: Pick<UserResponse, 'reenroll_due'>): boolean {
+  return user.reenroll_due === true
+}
+
+/**
+ * EC-FE-03 GAP (backend): `identity_similarity_flags` (EC-BE-04) has a model
+ * + repository (`backend/app/models/identity_similarity_flag.py`,
+ * `backend/app/repositories/identity_similarity_flags.py`) but, confirmed by
+ * grepping `backend/app/routers/`, has NO HTTP router — there is no endpoint
+ * to fetch this data from today. This type is defined ahead of time so the
+ * ADMIN UI can be wired up with a single follow-up change (add an `api.ts`
+ * function + swap the placeholder section for a real fetch) once a backend
+ * task adds the endpoint. Nothing in this feature calls a real endpoint for
+ * this today — see `IdentitySimilarityPanel.tsx`.
+ */
+export interface IdentitySimilarityFlag {
+  user_a: string
+  user_b: string
+  score: number
+  flagged_at: string
 }
 
 export interface UserListResponse {

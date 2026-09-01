@@ -5,9 +5,16 @@ import PagePlaceholder from './PagePlaceholder'
 import { describeApiError, getUser, offboardUser, updateUser } from '../features/user-management/api'
 import { createEnrollment } from '../features/enrollment-management/api'
 import { getCurrentRole } from '../lib/authToken'
-import { canEditUser, canOffboardUser, canStartEnrollment } from '../features/user-management/roleGating'
+import {
+  canEditUser,
+  canOffboardUser,
+  canStartEnrollment,
+  canViewIdentitySimilarityFlags,
+} from '../features/user-management/roleGating'
 import UserStatusBadge from '../features/user-management/UserStatusBadge'
-import { USER_STATUSES } from '../features/user-management/types'
+import ReenrollDueBadge from '../features/user-management/ReenrollDueBadge'
+import IdentitySimilarityPanel from '../features/user-management/IdentitySimilarityPanel'
+import { USER_STATUSES, isReenrollDue } from '../features/user-management/types'
 import type { UserStatus } from '../features/user-management/types'
 
 function formatDate(iso: string): string {
@@ -128,6 +135,8 @@ export default function UserDetailPage() {
   const canEdit = canEditUser(role)
   const canOffboard = canOffboardUser(role) && user.status !== 'OFFBOARDED'
   const canEnroll = canStartEnrollment(role)
+  const canViewSimilarity = canViewIdentitySimilarityFlags(role)
+  const reenrollDue = isReenrollDue(user)
   const anyMutationPending = updateMutation.isPending || offboardMutation.isPending || enrollMutation.isPending
   const hasChanges =
     externalRef.trim() !== (user.external_ref ?? '') ||
@@ -150,10 +159,16 @@ export default function UserDetailPage() {
         >
           S-11
         </p>
-        <h1 style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+        <h1 style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
           Detail User
           <UserStatusBadge status={user.status} />
+          <ReenrollDueBadge user={user} />
         </h1>
+        {reenrollDue && user.reenroll_due_reason && (
+          <p style={{ margin: '0 0 0 0', color: 'var(--text-secondary)', font: 'var(--text-small)' }}>
+            Alasan: {user.reenroll_due_reason}
+          </p>
+        )}
         <Link to="/users">Kembali ke daftar user</Link>
       </header>
 
@@ -292,7 +307,11 @@ export default function UserDetailPage() {
                   cursor: 'pointer',
                 }}
               >
-                {enrollMutation.isPending ? 'Membuat...' : 'Mulai Enrollment'}
+                {enrollMutation.isPending
+                  ? 'Membuat...'
+                  : reenrollDue
+                    ? 'Mulai Re-enroll'
+                    : 'Mulai Enrollment'}
               </button>
             )}
 
@@ -373,6 +392,14 @@ export default function UserDetailPage() {
                 {describeApiError(offboardMutation.error ?? enrollMutation.error)}
               </p>
             )}
+          </>,
+        )}
+
+      {canViewSimilarity &&
+        surfaceCard(
+          <>
+            <h2 style={{ margin: 0, font: 'var(--text-h3)' }}>Pasangan High-Similarity</h2>
+            <IdentitySimilarityPanel />
           </>,
         )}
     </>
