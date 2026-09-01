@@ -41,11 +41,19 @@
   opacity: 0.5;
 }
 
-.actions-menu__menu {
-  position: absolute;
-  top: calc(100% + var(--space-1));
-  right: 0;
+/* Positioned via inline `top`/`right` (viewport coordinates from the
+ * trigger's getBoundingClientRect(), see ActionsMenu.tsx) — `position:
+ * fixed` + a body-level portal is what lets this escape a scrollable
+ * ancestor's clipping (an `overflowX: 'auto'` table wrapper, elsewhere in
+ * this app, implicitly makes overflow-y `auto` too per the CSS overflow
+ * spec, which used to clip this popover and add a spurious scrollbar to
+ * the table -- bugfix: actions-menu-table-clip). */
+.actions-menu__portal {
+  position: fixed;
   z-index: 20;
+}
+
+.actions-menu__menu {
   min-width: 200px;
   background: var(--bg-surface);
   border: var(--border-w) solid var(--border-default);
@@ -96,10 +104,6 @@
 }
 
 .actions-menu__confirm {
-  position: absolute;
-  top: calc(100% + var(--space-1));
-  right: 0;
-  z-index: 20;
   width: 260px;
   background: var(--bg-surface);
   border-radius: var(--radius-md);
