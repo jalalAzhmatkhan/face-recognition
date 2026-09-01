@@ -207,6 +207,45 @@ class EvaluationSettings(BaseModel):
     gallery_media_per_identity: int = 1
 
 
+class HighSimilaritySettings(BaseModel):
+    """D-4.4 high-similarity pair check knobs (TSD-edge-cases.md D-4.4,
+    REC 13, EC-TR-04).
+
+    `default_similarity_threshold` is this module's own copy of the
+    tau_normal env-fallback layer 3 (OQ-6's resolution contract) --
+    mirrors `ai-inference/src/ai_inference/config.py::Settings
+    .similarity_threshold` (`INF_SIMILARITY_THRESHOLD`, default 0.35).
+    ai-training has no MLflow-artefact-metadata client here (layer 1 of
+    OQ-6 is out of reach from this module), so the resolution this task
+    implements is a 2-layer version: `recognition_configs` GLOBAL/mode
+    override (layer 2, read from the DB) falling back to this constant
+    (layer 3) -- NOT the full 3-layer contract `resolve_recognition_config`
+    implements backend-side. Keep the two literal `0.35` defaults in sync
+    manually if the calibrated tau_normal default ever changes; there is no
+    shared source of truth between the two separate `uv` projects.
+
+    `margin_hs` is the D-4.4 "how much of tau's margin counts as
+    suspiciously similar" constant: a cross-identity pair scoring above
+    `(tau - margin_hs)` gets flagged. The TSD (D-4.4) deliberately leaves
+    the exact value unspecified ("naikkan tau ... margin_hs" with no
+    number given) -- 0.05 is chosen here to match the ONLY other
+    externally-documented margin constant in this codebase for the same
+    embedding space, `ai-inference`'s `margin_threshold`-style top1/top2
+    gap and D-6's guard-2 "anchor to enrolled" cosine reasoning, which both
+    treat ~0.05 cosine as the smallest gap worth treating as a meaningful
+    separation between two identities' scores in this embedder's operating
+    range (tau_normal=0.35 out of a [-1, 1] cosine range). A tighter margin
+    would flag near-tau near-misses that are not actually confusable
+    look-alikes; a looser one would miss borderline lookalike pairs sitting
+    just outside the window. Documented here, not silently hardcoded in
+    `similarity.high_similarity_check`, precisely so a future recalibration
+    (D-7 benchmark) has one obvious place to change it.
+    """
+
+    default_similarity_threshold: float = 0.35
+    margin_hs: float = 0.05
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TRN_", env_nested_delimiter="__", env_file=".env", extra="ignore"
@@ -220,6 +259,7 @@ class Settings(BaseSettings):
     embedder: EmbedderSettings = EmbedderSettings()
     liveness: LivenessSettings = LivenessSettings()
     evaluation: EvaluationSettings = EvaluationSettings()
+    high_similarity: HighSimilaritySettings = HighSimilaritySettings()
     # Celery broker/result-backend (TR-02/TR-03 worker). Deliberately a
     # plain top-level field (mirrors backend's `Settings.redis_url`, see
     # backend/app/worker/celery_app.py) rather than nested under a `redis`
