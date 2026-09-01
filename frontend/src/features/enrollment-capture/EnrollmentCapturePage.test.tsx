@@ -176,6 +176,97 @@ describe('EnrollmentCapturePage — EC-FE-05 consent text + consent_version subm
   })
 })
 
+describe('EnrollmentCapturePage — "Batal" discards capture and returns to Enrollment list', () => {
+  beforeEach(() => {
+    window.localStorage.setItem(ACCESS_TOKEN_KEY, 'test-token')
+  })
+
+  afterEach(() => {
+    window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+    vi.restoreAllMocks()
+  })
+
+  function renderPageWithEnrollmentsRoute(enrollmentId = 'session-123') {
+    return render(
+      <MemoryRouter initialEntries={[`/enrollments/${enrollmentId}/capture`]}>
+        <Routes>
+          <Route path="/enrollments/:id/capture" element={<EnrollmentCapturePage />} />
+          <Route path="/enrollments" element={<p>ENROLLMENTS_LIST</p>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  function agreeAndStart() {
+    const checkbox = screen.getByRole('checkbox', {
+      name: /saya sudah melepas masker dan kacamata hitam/i,
+    })
+    fireEvent.click(checkbox)
+    fireEvent.click(screen.getByRole('button', { name: /Saya Setuju & Mulai/ }))
+  }
+
+  it('shows a "Batal" button on the frontal-photo (preflight) step that stops the camera and navigates to /enrollments after confirmation', async () => {
+    // Mocked directly (not relying solely on the localStorage token this
+    // describe block's beforeEach sets) -- found this test's multi-step
+    // async chain (consent -> camera -> preflight -> cancel -> navigate) to
+    // be sensitive to cross-test timing noise in a full-suite run in a way
+    // shorter-lived tests elsewhere in this file are not; mocking the
+    // function directly removes any dependency on shared browser storage
+    // state for the duration of this test.
+    vi.spyOn(apiClient, 'getAccessToken').mockReturnValue('test-token')
+    const stopTrack = vi.fn()
+    const fakeStream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream)
+    Object.defineProperty(window.navigator, 'mediaDevices', {
+      value: { getUserMedia },
+      configurable: true,
+    })
+    vi.spyOn(apiClient, 'grantConsent').mockResolvedValue({ id: 'session-123', state: 'CONSENTED' })
+    vi.spyOn(apiClient, 'getEnrollmentQualityParams').mockResolvedValue({
+      min_blur_variance: 30,
+      min_brightness: 35,
+      max_brightness: 225,
+    })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderPageWithEnrollmentsRoute()
+    agreeAndStart()
+
+    const cancelButton = await screen.findByRole('button', { name: 'Batal' })
+    fireEvent.click(cancelButton)
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(stopTrack).toHaveBeenCalled()
+    expect(await screen.findByText('ENROLLMENTS_LIST')).toBeInTheDocument()
+  })
+
+  it('does nothing when the confirmation dialog is dismissed', async () => {
+    vi.spyOn(apiClient, 'getAccessToken').mockReturnValue('test-token')
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [] } as unknown as MediaStream)
+    Object.defineProperty(window.navigator, 'mediaDevices', {
+      value: { getUserMedia },
+      configurable: true,
+    })
+    vi.spyOn(apiClient, 'grantConsent').mockResolvedValue({ id: 'session-123', state: 'CONSENTED' })
+    vi.spyOn(apiClient, 'getEnrollmentQualityParams').mockResolvedValue({
+      min_blur_variance: 30,
+      min_brightness: 35,
+      max_brightness: 225,
+    })
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    renderPageWithEnrollmentsRoute()
+    agreeAndStart()
+
+    const cancelButton = await screen.findByRole('button', { name: 'Batal' })
+    fireEvent.click(cancelButton)
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(screen.queryByText('ENROLLMENTS_LIST')).not.toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Ambil Foto Frontal' })).toBeInTheDocument()
+  })
+})
+
 describe('EnrollmentCapturePage — System Parameter quality threshold override', () => {
   beforeEach(() => {
     window.localStorage.setItem(ACCESS_TOKEN_KEY, 'test-token')

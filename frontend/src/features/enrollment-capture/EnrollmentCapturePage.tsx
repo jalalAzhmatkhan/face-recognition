@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import EnrollmentConsentCopy from '../../components/EnrollmentConsentCopy'
 import ProgressRing from './ProgressRing'
 import {
@@ -85,6 +85,7 @@ const COUNTDOWN_START_S = 3
  */
 export default function EnrollmentCapturePage() {
   const { id: enrollmentId } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const isAuthenticated = Boolean(getAccessToken())
 
   const [step, setStep] = useState<WizardStep>('consent')
@@ -364,6 +365,33 @@ export default function EnrollmentCapturePage() {
 
   const retakePhoto = useCallback(() => setPhotoBlob(null), [])
 
+  // "Batal" on the frontal-photo and video-recording steps: discards
+  // whatever has been captured so far (photo and/or video, neither is ever
+  // uploaded until 'uploading', see startUpload below) and returns to the
+  // Enrollment list -- the session itself is left exactly as-is server-side
+  // (still CAPTURING), resumable later via EnrollmentDetailPage.tsx's
+  // "Lanjutkan / Coba Lagi Capture", same as backing out of the browser
+  // already allowed; this is just a discoverable, in-wizard way to do it
+  // instead of a browser back button.
+  const cancelCapture = useCallback(() => {
+    if (
+      !window.confirm(
+        'Batalkan capture ini? Foto dan video yang sudah direkam akan dihapus.',
+      )
+    ) {
+      return
+    }
+    stopCamera()
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.onstop = null
+      recorderRef.current.stop()
+    }
+    recordedChunksRef.current = []
+    setPhotoBlob(null)
+    setVideoBlob(null)
+    navigate('/enrollments')
+  }, [stopCamera, navigate])
+
   const videoPreviewUrl = useMemo(
     () => (videoBlob ? URL.createObjectURL(videoBlob) : null),
     [videoBlob],
@@ -533,14 +561,19 @@ export default function EnrollmentCapturePage() {
             )}
 
             {step === 'preflight' && !photoBlob && (
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={!faceInFrame || quality !== 'ok' || !modelsReady}
-                onClick={capturePhoto}
-              >
-                Ambil Foto Frontal
-              </button>
+              <div className="capture-actions">
+                <button type="button" className="btn" onClick={cancelCapture}>
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={!faceInFrame || quality !== 'ok' || !modelsReady}
+                  onClick={capturePhoto}
+                >
+                  Ambil Foto Frontal
+                </button>
+              </div>
             )}
 
             {step === 'preflight' && photoBlob && (
@@ -549,6 +582,9 @@ export default function EnrollmentCapturePage() {
                   <img src={photoPreviewUrl} alt="Pratinjau foto frontal" className="capture-thumb" />
                 )}
                 <div className="capture-actions">
+                  <button type="button" className="btn" onClick={cancelCapture}>
+                    Batal
+                  </button>
                   <button type="button" className="btn" onClick={retakePhoto}>
                     Ulangi Foto
                   </button>
@@ -565,6 +601,9 @@ export default function EnrollmentCapturePage() {
 
             {step === 'video' && (
               <div className="capture-actions">
+                <button type="button" className="btn" onClick={cancelCapture}>
+                  Batal
+                </button>
                 <button type="button" className="btn" onClick={retryVideoCapture}>
                   Ulangi Rekam
                 </button>
