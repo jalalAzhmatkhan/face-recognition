@@ -6,6 +6,7 @@ DB/torch/cv2 -- must pass on base CI (no `ml` extra)."""
 from ai_inference.pipeline.recognize import (
     FrameCandidate,
     RecognitionResult,
+    _determine_reject_stage,
     decide_from_scores,
     frame_passes_threshold,
     run_recognition,
@@ -253,6 +254,62 @@ def test_run_recognition_unknown_when_no_production_model_at_all() -> None:
 # `ai_training.quality.pose` (needs the `ml` extra), so that path is left to
 # this project's established live-verification convention instead (see
 # module docstring), same as the rest of `run_recognition`'s orchestration.
+
+
+# --- EC-IN-01: reject_stage determination (TSD-edge-cases.md D-1) -------
+
+
+def test_reject_stage_none_when_granted() -> None:
+    result = RecognitionResult(decision="GRANTED", user_id="u1", similarity=0.9)
+    assert _determine_reject_stage(result, [FrameCandidate("u1", 0.9)]) is None
+
+
+def test_reject_stage_liveness_when_spoof_suspected() -> None:
+    result = RecognitionResult(decision="SPOOF_SUSPECTED", user_id=None, similarity=0.0)
+    candidates = [
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=True),
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=True),
+    ]
+    assert _determine_reject_stage(result, candidates) == "liveness"
+
+
+def test_reject_stage_detection_when_no_candidates_at_all() -> None:
+    # UNKNOWN with an empty candidate list: every submitted frame either
+    # failed to decode or had no detected face -- never reached liveness.
+    result = RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0)
+    assert _determine_reject_stage(result, []) == "detection"
+
+
+def test_reject_stage_liveness_when_unknown_but_some_frames_spoof_suspect() -> None:
+    # Below min_frames_for_grant for an outright SPOOF_SUSPECTED verdict,
+    # but a liveness concern was raised on at least one frame -- prioritized
+    # over "threshold" per _determine_reject_stage's documented rationale.
+    result = RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0)
+    candidates = [
+        FrameCandidate(top1_user_id=None, top1_similarity=None, spoof_suspect=True),
+        FrameCandidate(top1_user_id="u1", top1_similarity=0.9),
+    ]
+    assert _determine_reject_stage(result, candidates) == "liveness"
+
+
+def test_reject_stage_threshold_when_unknown_with_only_non_spoof_candidates() -> None:
+    result = RecognitionResult(decision="UNKNOWN", user_id=None, similarity=0.0)
+    candidates = [
+        FrameCandidate(top1_user_id="u1", top1_similarity=0.2),
+        FrameCandidate(top1_user_id="u2", top1_similarity=0.25),
+    ]
+    assert _determine_reject_stage(result, candidates) == "threshold"
+
+
+def test_recognition_result_defaults_condition_flags_and_reject_stage() -> None:
+    # decide_from_scores itself never sets these (added later by
+    # run_recognition via dataclasses.replace) -- confirm the dataclass
+    # defaults keep every EXISTING equality-based test in this file valid.
+    result = decide_from_scores(
+        [], threshold=THRESHOLD, margin=MARGIN, min_frames_for_grant=MIN_FRAMES
+    )
+    assert result.condition_flags == {}
+    assert result.reject_stage is None
 
 
 def test_decide_no_spoof_frames_behaves_exactly_as_before() -> None:

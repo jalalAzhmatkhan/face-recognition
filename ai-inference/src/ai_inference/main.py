@@ -100,6 +100,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         `ai_inference.events` module docstring for the fallback-buffer
         mechanism.
 
+        **EC-IN-01 (funnel logging, TSD-edge-cases.md D-1)**: that same
+        access-event payload is additionally enriched with `condition_flags`
+        (dark/blurry/low_res/masked/sunglasses -- see
+        `ai_inference.pipeline.condition_flags`) and `reject_stage`
+        (`ai_inference.pipeline.recognize._determine_reject_stage`), both
+        computed inside `run_recognition`/`run_recognition_timed` with
+        negligible (<1ms/frame) overhead and popped out of `response_dict`
+        below so they never leak into the client-facing `RecognizeResponse`.
+
         **IN-07 (atomic model+gallery switch)**: the current PRODUCTION
         `models.version` is read through a short-TTL cache
         (`app.state`-scoped `ai_inference.model_switch.ProductionVersionCache`,
@@ -161,6 +170,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             conn.close()
 
+        # EC-IN-01 (TSD-edge-cases.md D-1): pop the two funnel-logging keys
+        # BEFORE constructing `RecognizeResponse` below -- they are additive
+        # to the `POST /access-events` payload only, never part of the
+        # client-facing `/recognize` response contract (see
+        # `run_recognition_timed`'s docstring for why they're returned in
+        # this same dict in the first place).
+        condition_flags = response_dict.pop("condition_flags")
+        reject_stage = response_dict.pop("reject_stage")
+
         if device_bearer_token is not None:
             background_tasks.add_task(
                 events.emit_access_event_background,
@@ -173,6 +191,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "liveness_score": response_dict["liveness_score"],
                     "model_version": response_dict["model_version"] or None,
                     "latency_ms": response_dict["latency_ms"],
+                    # EC-IN-01 additions (backend/app/schemas/access_events.py
+                    # AccessEventIngestRequest.condition_flags/reject_stage):
+                    # both optional server-side, sent whenever this
+                    # ai-inference build computes them.
+                    "condition_flags": condition_flags,
+                    "reject_stage": reject_stage,
                 },
             )
         return RecognizeResponse(**response_dict)

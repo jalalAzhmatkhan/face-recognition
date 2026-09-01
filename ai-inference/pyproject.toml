@@ -20,6 +20,13 @@ dependencies = [
     # `ml` extra) since it's plain networking, not ML, and event emission
     # must work even in a `stub`-loader dev/CI setup. See ai_inference/events.py.
     "httpx>=0.27",
+    # Per-frame condition-flag heuristics (EC-IN-01, TSD-edge-cases.md D-1:
+    # dark/blurry/low_res/masked/sunglasses) -- plain array math (mean,
+    # variance, a 4-neighbor Laplacian), not a model, so it lives in base
+    # deps (not the `ml` extra) same rationale as httpx/argon2-cffi above:
+    # this must work, and stay unit-testable, without cv2/torch/mediapipe
+    # installed. See ai_inference/pipeline/condition_flags.py.
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
