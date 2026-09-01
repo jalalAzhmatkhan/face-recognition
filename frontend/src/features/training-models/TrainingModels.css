@@ -394,3 +394,49 @@
   border-radius: var(--radius-lg);
   padding: var(--space-4) var(--space-6);
 }
+
+/* Buttons — every <button> in this feature (S-50/51/52) was left with no
+ * className at all (plain browser chrome), unlike every other element
+ * here. Mirrors `enrollment-capture/EnrollmentCapturePage.css`'s `.btn`/
+ * `.btn--primary` visual spec, kept as its own feature-scoped class rather
+ * than sharing that CSS file across features. */
+
+.training-models-btn {
+  min-height: var(--touch-target);
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: var(--text-body);
+  cursor: pointer;
+}
+
+.training-models-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.training-models-btn--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.training-models-btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+/* "Tampilkan lagi" — an inline affordance inside a sentence, not a
+ * standalone CTA, so it reads as a link (no border/fixed height) rather
+ * than a full button. */
+.training-models-btn--link {
+  border: none;
+  background: none;
+  padding: 0;
+  min-height: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}

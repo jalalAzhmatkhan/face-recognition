@@ -66,10 +66,20 @@ export default function PromoteConfirmDialog({
         </label>
 
         <div className="training-models-dialog__actions">
-          <button type="button" disabled={!acknowledged || isSubmitting} onClick={onConfirm}>
+          <button
+            type="button"
+            className="training-models-btn training-models-btn--primary"
+            disabled={!acknowledged || isSubmitting}
+            onClick={onConfirm}
+          >
             {isSubmitting ? 'Memproses...' : 'Promote ke Produksi'}
           </button>
-          <button type="button" onClick={onCancel} disabled={isSubmitting}>
+          <button
+            type="button"
+            className="training-models-btn"
+            onClick={onCancel}
+            disabled={isSubmitting}
+          >
             Batal
           </button>
         </div>

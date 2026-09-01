@@ -97,10 +97,19 @@ export default function StartTrainingDialog({
           )}
 
           <div className="training-models-dialog__actions">
-            <button type="submit" disabled={!canSubmit || isSubmitting}>
+            <button
+              type="submit"
+              className="training-models-btn training-models-btn--primary"
+              disabled={!canSubmit || isSubmitting}
+            >
               {isSubmitting ? 'Memulai...' : 'Mulai Training'}
             </button>
-            <button type="button" onClick={onCancel} disabled={isSubmitting}>
+            <button
+              type="button"
+              className="training-models-btn"
+              onClick={onCancel}
+              disabled={isSubmitting}
+            >
               Batal
             </button>
           </div>
