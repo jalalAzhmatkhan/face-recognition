@@ -22,7 +22,7 @@ from app.core.config import Settings, get_settings
 from app.core.problem import ProblemError
 from app.db.session import get_db
 from app.dependencies.auth import CurrentStaff, require_role
-from app.models.enums import ModelStage, StaffRole, TrainingJobStatus
+from app.models.enums import ModelKind, ModelStage, StaffRole, TrainingJobStatus
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.model_versions import ModelVersionRepository
 from app.repositories.training_jobs import TrainingJobRepository
@@ -130,10 +130,14 @@ def get_training_job(
 @router.get("/models", response_model=ModelVersionListResponse)
 def list_models(
     stage: ModelStage | None = Query(None),
+    model_kind: ModelKind | None = Query(None),
     current: CurrentStaff = Depends(require_role(*MODEL_READ_ROLES)),
     model_repo: ModelVersionRepository = Depends(get_model_version_repository),
 ) -> ModelVersionListResponse:
-    models = training_service.list_models(model_repo, stage=stage)
+    """EC-BE-06: `model_kind` filters the registry to `embedder` or
+    `liveness` — omitted means both kinds, unchanged from before this
+    column existed."""
+    models = training_service.list_models(model_repo, stage=stage, model_kind=model_kind)
     return ModelVersionListResponse(items=[ModelVersionResponse.model_validate(m) for m in models])
 
 

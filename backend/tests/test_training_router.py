@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.dependencies.auth import CurrentStaff, get_current_staff
 from app.main import create_app
-from app.models.enums import ModelStage, StaffRole, TrainingJobStatus, TrainingJobType
+from app.models.enums import ModelKind, ModelStage, StaffRole, TrainingJobStatus, TrainingJobType
 from app.models.model_registry import ModelVersion
 from app.models.training_job import TrainingJob
 from app.routers.training import (
@@ -78,15 +78,19 @@ class FakeModelVersionRepository:
     def get(self, version: str) -> ModelVersion | None:
         return self._by_version.get(version)
 
-    def list(self, *, stage: ModelStage | None = None) -> list[ModelVersion]:
+    def list(
+        self, *, stage: ModelStage | None = None, model_kind: ModelKind | None = None
+    ) -> list[ModelVersion]:
         items = list(self._by_version.values())
         if stage is not None:
             items = [m for m in items if m.stage == stage]
+        if model_kind is not None:
+            items = [m for m in items if m.model_kind == model_kind]
         return sorted(items, key=lambda m: m.version)
 
-    def get_current_production(self) -> ModelVersion | None:
+    def get_current_production(self, *, model_kind: ModelKind) -> ModelVersion | None:
         for m in self._by_version.values():
-            if m.stage == ModelStage.PRODUCTION:
+            if m.stage == ModelStage.PRODUCTION and m.model_kind == model_kind:
                 return m
         return None
 
@@ -109,6 +113,7 @@ def _make_model(
     version: str,
     *,
     stage: ModelStage = ModelStage.CANDIDATE,
+    model_kind: ModelKind = ModelKind.EMBEDDER,
     recall: float | None = 0.99,
     latency_ms_p95: int | None = 120,
     slice_gate_report: dict | None = None,
@@ -117,6 +122,7 @@ def _make_model(
         version=version,
         mlflow_run_id=f"run-{version}",
         stage=stage,
+        model_kind=model_kind,
         recall=recall,
         f1=0.9,
         precision=0.9,
@@ -638,6 +644,133 @@ def test_list_models_filters_by_stage(
 def test_get_model_returns_404_for_unknown_version(admin_client: TestClient) -> None:
     response = admin_client.get("/api/v1/models/does-not-exist")
     assert response.status_code == 404
+
+
+def test_model_response_includes_model_kind(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    model_repo._by_version["v1"] = _make_model("v1")
+    response = admin_client.get("/api/v1/models/v1")
+    assert response.status_code == 200
+    assert response.json()["model_kind"] == "embedder"
+
+
+# --- EC-BE-06: models.model_kind registry split -----------------------------
+
+
+def test_list_models_filters_by_model_kind(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    model_repo._by_version["v1"] = _make_model("v1", model_kind=ModelKind.EMBEDDER)
+    model_repo._by_version["v2"] = _make_model("v2", model_kind=ModelKind.LIVENESS)
+    response = admin_client.get("/api/v1/models", params={"model_kind": "liveness"})
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [i["version"] for i in items] == ["v2"]
+
+
+def test_list_models_returns_both_kinds_when_model_kind_omitted(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    model_repo._by_version["v1"] = _make_model("v1", model_kind=ModelKind.EMBEDDER)
+    model_repo._by_version["v2"] = _make_model("v2", model_kind=ModelKind.LIVENESS)
+    response = admin_client.get("/api/v1/models")
+    assert response.status_code == 200
+    assert {i["version"] for i in response.json()["items"]} == {"v1", "v2"}
+
+
+def test_promote_liveness_candidate_skips_recall_regression_gate(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    """A LIVENESS candidate's Recall is meaningless (its real gate is
+    BPCER@APCER, landing with EC-TR-07/EC-IN-05/EC-QA-03) - a low recall
+    vs. the current LIVENESS production must never block promotion."""
+    model_repo._by_version["v1"] = _make_model(
+        "v1", model_kind=ModelKind.LIVENESS, stage=ModelStage.PRODUCTION, recall=0.99
+    )
+    model_repo._by_version["v2"] = _make_model(
+        "v2", model_kind=ModelKind.LIVENESS, stage=ModelStage.CANDIDATE, recall=0.01
+    )
+    response = admin_client.post("/api/v1/models/v2/promote", json={"confirm": True})
+    assert response.status_code == 200
+    assert model_repo._by_version["v2"].stage == ModelStage.PRODUCTION
+
+
+def test_promote_liveness_candidate_skips_slice_gate_report_check(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    """EC-QA-01's per-slice identification-Recall regression report has no
+    meaning for a LIVENESS candidate; a failing report on one must never
+    block its promotion."""
+    failing_report = {"passes": False, "failed_slices": ["dark"], "per_slice": {}}
+    model_repo._by_version["v1"] = _make_model(
+        "v1",
+        model_kind=ModelKind.LIVENESS,
+        latency_ms_p95=100,
+        slice_gate_report=failing_report,
+    )
+    response = admin_client.post("/api/v1/models/v1/promote", json={"confirm": True})
+    assert response.status_code == 200
+
+
+def test_promote_liveness_candidate_still_enforces_latency_budget(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    model_repo._by_version["v1"] = _make_model(
+        "v1", model_kind=ModelKind.LIVENESS, latency_ms_p95=999999
+    )
+    response = admin_client.post("/api/v1/models/v1/promote", json={"confirm": True})
+    assert response.status_code == 409
+    assert "latency" in response.json()["detail"].lower()
+
+
+def test_promote_liveness_candidate_does_not_dispatch_gallery_reembed(
+    admin_client: TestClient,
+    model_repo: FakeModelVersionRepository,
+    _no_real_gallery_dispatch,
+) -> None:
+    """Gallery re-embedding (TR-08/FR-TRN-06) only makes sense for a
+    promoted EMBEDDER - a LIVENESS promotion has no embedding space to
+    re-embed."""
+    model_repo._by_version["v1"] = _make_model(
+        "v1", model_kind=ModelKind.LIVENESS, latency_ms_p95=100
+    )
+    response = admin_client.post("/api/v1/models/v1/promote", json={"confirm": True})
+    assert response.status_code == 200
+    assert _no_real_gallery_dispatch == []
+
+
+def test_promote_liveness_candidate_does_not_retire_embedder_production(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    """Each kind has its own independent PRODUCTION slot - promoting a
+    LIVENESS candidate must never touch/retire an unrelated EMBEDDER
+    PRODUCTION model, and vice versa."""
+    model_repo._by_version["embedder-v1"] = _make_model(
+        "embedder-v1", model_kind=ModelKind.EMBEDDER, stage=ModelStage.PRODUCTION, recall=0.9
+    )
+    model_repo._by_version["liveness-v1"] = _make_model(
+        "liveness-v1", model_kind=ModelKind.LIVENESS, stage=ModelStage.CANDIDATE
+    )
+    response = admin_client.post("/api/v1/models/liveness-v1/promote", json={"confirm": True})
+    assert response.status_code == 200
+    assert model_repo._by_version["liveness-v1"].stage == ModelStage.PRODUCTION
+    assert model_repo._by_version["embedder-v1"].stage == ModelStage.PRODUCTION
+
+
+def test_promote_embedder_candidate_does_not_retire_liveness_production(
+    admin_client: TestClient, model_repo: FakeModelVersionRepository
+) -> None:
+    model_repo._by_version["liveness-v1"] = _make_model(
+        "liveness-v1", model_kind=ModelKind.LIVENESS, stage=ModelStage.PRODUCTION
+    )
+    model_repo._by_version["embedder-v1"] = _make_model(
+        "embedder-v1", model_kind=ModelKind.EMBEDDER, stage=ModelStage.CANDIDATE, recall=0.9
+    )
+    response = admin_client.post("/api/v1/models/embedder-v1/promote", json={"confirm": True})
+    assert response.status_code == 200
+    assert model_repo._by_version["embedder-v1"].stage == ModelStage.PRODUCTION
+    assert model_repo._by_version["liveness-v1"].stage == ModelStage.PRODUCTION
 
 
 # --- POST /models/{version}/promote ------------------------------------------

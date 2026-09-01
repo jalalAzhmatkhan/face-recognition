@@ -50,23 +50,38 @@ def get_connection(dsn: str) -> Any:
 
 
 def get_current_production_model_version(cursor: Cursor) -> str | None:
-    """The `models.version` currently `stage = 'PRODUCTION'`, or `None` if
-    there isn't one.
+    """The `models.version` currently `stage = 'PRODUCTION'` AND
+    `model_kind = 'embedder'`, or `None` if there isn't one.
 
     Fail-secure contract (IN-03 task brief): callers MUST treat `None` as
     "no gallery search is possible right now" and return `UNKNOWN` for every
     frame, never a 500 -- there being no PRODUCTION model is an expected,
     not exceptional, operational state (e.g. before the first promotion).
 
-    If more than one row is somehow `stage = 'PRODUCTION'` (should not
-    happen -- IN-07's atomic switch is meant to prevent it, but this module
-    does not assume that invariant holds), the most recently promoted one
-    wins (`ORDER BY promoted_at DESC NULLS LAST`), which is the least
-    surprising tie-break and does not require a schema change here to
-    enforce at the DB level.
+    The `model_kind = 'embedder'` filter is EC-BE-06 (TSD-EC B-3's registry
+    split): once a `liveness`-kind model can ALSO be `stage = 'PRODUCTION'`
+    at the same time as an embedder (each kind has its own independent
+    PRODUCTION slot -- `app/services/training_service.py::promote_model`
+    scopes its retire-old-PRODUCTION step by the candidate's own kind), a
+    query with no kind filter would risk this function returning a
+    LIVENESS model's version string as if it were the embedder's -- exactly
+    the "compare a query embedding against a gallery re-embedded under a
+    different model" hazard this module's own docstring warns about, just
+    caused by kind confusion instead of a stale cache. This is no longer
+    the "should not happen" multi-PRODUCTION-row case the tie-break below
+    was written for; it is an expected steady state once liveness models
+    exist at all.
+
+    If more than one row is somehow BOTH `stage = 'PRODUCTION'` AND
+    `model_kind = 'embedder'` (should not happen -- IN-07's atomic switch is
+    meant to prevent it, but this module does not assume that invariant
+    holds), the most recently promoted one wins
+    (`ORDER BY promoted_at DESC NULLS LAST`), which is the least surprising
+    tie-break and does not require a schema change here to enforce at the
+    DB level.
     """
     cursor.execute(
-        "SELECT version FROM models WHERE stage = 'PRODUCTION' "
+        "SELECT version FROM models WHERE stage = 'PRODUCTION' AND model_kind = 'embedder' "
         "ORDER BY promoted_at DESC NULLS LAST LIMIT 1"
     )
     row = cursor.fetchone()
