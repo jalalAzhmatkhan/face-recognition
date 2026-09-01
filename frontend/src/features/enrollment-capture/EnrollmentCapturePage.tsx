@@ -5,6 +5,7 @@ import {
   completeEnrollment,
   buildPresignRequestBody,
   getAccessToken,
+  grantConsent,
   presignMedia,
   uploadToS3,
 } from './apiClient'
@@ -20,6 +21,7 @@ import type { SectorTrackerState } from './clockSectors'
 import { detectFace, loadFaceDetectionModels } from './faceDetector'
 import { estimateHeadPose } from './headPose'
 import { assessQuality } from './imageQuality'
+import { CURRENT_CONSENT_VERSION } from './types'
 import type { QualityStatus } from './types'
 import './EnrollmentCapturePage.css'
 
@@ -62,6 +64,20 @@ const SAMPLE_INTERVAL_MS = 150
  * is the `/recognize` (EC-IN-03) path, not the enrollment QC pipeline. If a
  * masked/sunglasses signal is later added to `qc_report`, this page can
  * surface it the same way it already surfaces `REJECTED_QUALITY`.
+ *
+ * EC-FE-05 (TSD-edge-cases.md ASM-EC-05, backend constant in
+ * `backend/app/models/consent.py`): the consent step also now shows three
+ * additional clauses (synthetic masked template, door-camera event-frame
+ * calibration/probe use, adaptive probe-buffer refresh) and, on clicking
+ * "Saya Setuju & Mulai", sends `CURRENT_CONSENT_VERSION` ("v1.1") to
+ * `POST /enrollments/{id}/consent`. That call is intentionally best-effort:
+ * the backend only accepts a new consent grant while the session is
+ * `CREATED`, but most sessions reach this wizard already past that state
+ * (operator flow: grant consent + recapture on `EnrollmentDetailPage.tsx`
+ * moves the session to CAPTURING *before* navigating here) — ASM-EC-05
+ * states re-consent must never block an existing user's capture, so any
+ * failure here (409 "already consented" included) is swallowed and camera
+ * start proceeds regardless.
  */
 export default function EnrollmentCapturePage() {
   const { id: enrollmentId } = useParams<{ id: string }>()
@@ -118,6 +134,15 @@ export default function EnrollmentCapturePage() {
   useEffect(() => stopCamera, [stopCamera])
 
   const startCamera = useCallback(async () => {
+    if (enrollmentId) {
+      try {
+        await grantConsent(enrollmentId, CURRENT_CONSENT_VERSION)
+      } catch {
+        // Best-effort — see the module docstring: a session that already
+        // has consent on record (the common case) 409s here, and
+        // ASM-EC-05 says that must never block capture from starting.
+      }
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -135,7 +160,7 @@ export default function EnrollmentCapturePage() {
         'Tidak dapat mengakses kamera. Periksa izin kamera pada browser.',
       )
     }
-  }, [])
+  }, [enrollmentId])
 
   // Continuous face/quality sampling while camera is live (preflight + video steps).
   const sampleFrame = useCallback(async () => {
@@ -362,6 +387,26 @@ export default function EnrollmentCapturePage() {
             kacamata hitam (sunglasses)</strong> selama perekaman — wajah
             harus terlihat jelas dari dagu sampai dahi.
           </p>
+          <ul
+            className="capture-consent-clauses"
+            style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}
+          >
+            <li>
+              Sistem akan membuat <strong>template wajah sintetis</strong> (misalnya versi
+              bermasker) secara otomatis dari hasil rekaman ini, khusus untuk keperluan
+              pengenalan wajah saat memakai masker.
+            </li>
+            <li>
+              Frame gambar dari <strong>kamera pintu/absensi</strong> saat Anda berhasil
+              dikenali sistem dapat dipakai sebagai data kalibrasi kualitas pengenalan —
+              bukan disimpan sebagai identitas/enrollment baru tanpa kontrol.
+            </li>
+            <li>
+              Data pengenalan sementara (probe) dari beberapa kali Anda berhasil dikenali
+              sistem dapat dipakai untuk memperbarui/menyegarkan profil wajah Anda secara
+              otomatis, dengan pengaman dan kontrol tertentu.
+            </li>
+          </ul>
           <label className="capture-checkbox">
             <input
               type="checkbox"

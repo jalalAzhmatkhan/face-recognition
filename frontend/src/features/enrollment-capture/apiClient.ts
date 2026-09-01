@@ -1,5 +1,6 @@
 import type {
   CompleteResponse,
+  ConsentResponse,
   MediaKind,
   PresignRequestBody,
   PresignResponse,
@@ -130,6 +131,27 @@ export async function uploadToS3(
       await response.text().catch(() => null),
     )
   }
+}
+
+/**
+ * EC-FE-05: record the subject's consent grant from the wizard's own
+ * consent step, sending `CURRENT_CONSENT_VERSION` (see `./types`). Backend
+ * only accepts this while the session is `CREATED` (BE-05/EC-BE-09) — a
+ * session reached via the operator's manual consent + recapture flow
+ * (`EnrollmentDetailPage.tsx`) will already be past that state by the time
+ * this wizard loads, so callers MUST treat a conflict here as non-fatal
+ * (ASM-EC-05: a failed re-consent must never block capture from starting).
+ */
+export async function grantConsent(
+  enrollmentId: string,
+  consentVersion: string,
+): Promise<ConsentResponse> {
+  const response = await authFetch(`/api/v1/enrollments/${enrollmentId}/consent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ consent_version: consentVersion }),
+  })
+  return (await response.json()) as ConsentResponse
 }
 
 export async function completeEnrollment(

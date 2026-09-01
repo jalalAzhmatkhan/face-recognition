@@ -3,9 +3,11 @@ import {
   ApiError,
   buildPresignRequestBody,
   completeEnrollment,
+  grantConsent,
   presignMedia,
   uploadToS3,
 } from './apiClient'
+import { CURRENT_CONSENT_VERSION } from './types'
 
 const ACCESS_TOKEN_KEY = 'frac_access_token'
 
@@ -81,6 +83,25 @@ describe('presignMedia / completeEnrollment (authenticated requests)', () => {
     expect(url).toContain('/api/v1/enrollments/enroll-1/complete')
     expect(init.method).toBe('POST')
     expect(result.state).toBe('QC_RUNNING')
+  })
+
+  it('grantConsent (EC-FE-05) posts consent_version=CURRENT_CONSENT_VERSION to /enrollments/{id}/consent', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ id: 'enroll-1', state: 'CONSENTED' }), {
+        status: 200,
+      }),
+    )
+
+    expect(CURRENT_CONSENT_VERSION).toBe('v1.1')
+    const result = await grantConsent('enroll-1', CURRENT_CONSENT_VERSION)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/api/v1/enrollments/enroll-1/consent')
+    expect(init.method).toBe('POST')
+    expect(init.headers.get('Authorization')).toBe('Bearer test-token')
+    expect(JSON.parse(init.body)).toEqual({ consent_version: 'v1.1' })
+    expect(result.state).toBe('CONSENTED')
   })
 
   it('throws ApiError with status and body on a non-2xx response', async () => {

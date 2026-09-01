@@ -80,3 +80,27 @@ export interface CompleteResponse {
   id: string
   state: string
 }
+
+export interface ConsentRequestBody {
+  consent_version: string
+}
+
+export interface ConsentResponse {
+  id: string
+  state: string
+}
+
+/**
+ * Single source of truth (FE side) for the consent clause version this
+ * wizard sends in `POST /enrollments/{id}/consent`.
+ *
+ * EC-FE-05 (task-breakdown.md "EC-4. Keputusan Susulan"): bumped from the
+ * prior `"v1.0"` to add the three clauses now shown on the consent step
+ * (synthetic masked template, door-camera event-frame calibration/probe
+ * use, adaptive probe-buffer refresh) per ASM-EC-05
+ * (`documentation/tsd/TSD-edge-cases.md`). MUST match the backend constant
+ * `CURRENT_CONSENT_VERSION` in `backend/app/models/consent.py` (EC-BE-09) —
+ * duplicated here rather than imported, since there is no shared
+ * frontend/backend constants module in this codebase yet.
+ */
+export const CURRENT_CONSENT_VERSION = 'v1.1'
