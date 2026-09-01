@@ -84,6 +84,21 @@ tracking tickets):
    last-resort fallback -- see that module's docstring for why layers 1 and
    3 collapse into the same `Settings` fields, a documented gap pending a
    real MLflow-artefact-metadata mechanism).
+9. ~~EC-IN-06 (per-device_class config resolution)~~ **CLOSED (EC-IN-06,
+   TSD-edge-cases.md D-5), SHIP OFF BY DEFAULT**: EC-IN-04 above already
+   built the `device_class`/`recognition_configs` resolution machinery, but
+   coupled reading it entirely to `dual_mode_threshold_enabled` -- an
+   operator could not adopt a device_class-scoped threshold override
+   without also opting into the (separately, still-unvalidated) masked/
+   normal dual-mode experiment. `Settings.device_class_config_resolution_
+   enabled` (default `False`) is a SEPARATE flag that, on its own, resolves
+   the SAME `recognition_configs` DEVICE_CLASS/GLOBAL override for the
+   ordinary `mode="normal"` path -- it never changes the masked-vs-normal
+   MODE choice itself (still exclusively `dual_mode_threshold_enabled`'s
+   job). A device with no `device_class` (or a class with no matching
+   override row) resolves to the exact same threshold/margin/min_frames as
+   with the flag off, so the only observable change is for a device whose
+   class HAS a configured override.
 
 `decide_from_scores` (and its `FrameCandidate`/`RecognitionResult` types) is
 pure Python -- no cv2/torch/DB -- and is fully unit tested
@@ -662,28 +677,40 @@ def run_recognition(
     # which is itself gated on the same setting.
     aggregated_condition_flags["low_confidence_masked"] = any_frame_low_confidence_masked
 
-    # EC-IN-04 (TSD-edge-cases.md D-4.2, OQ-6): resolve which decision
-    # parameters to hand to `decide_from_scores` below. `dual_mode_
-    # threshold_enabled=False` (default) takes the exact pre-EC-IN-04 path
-    # -- `settings.similarity_threshold`/`margin_threshold`/
-    # `min_frames_for_grant` unconditionally, no DB read, no mode decision
-    # -- so this task changes ZERO behavior out of the box, same convention
-    # as EC-IN-02's `quality_gate_enforcing`.
-    if settings.dual_mode_threshold_enabled:
-        # "Probe ber-flag masked" (task brief) is a per-REQUEST decision,
-        # not per-frame: the OR-merged aggregate (same aggregation already
-        # used for every other condition flag) decides ONE mode for the
-        # whole decide_from_scores call below, applied uniformly across all
-        # frames' candidates -- simpler and more faithful to "one probe, one
-        # mode" than threading a per-frame threshold through voting (which
-        # `decide_from_scores` does not otherwise support). The GALLERY
-        # SEARCH filter above is still decided per-frame (it has to be --
-        # embedding/search happens inside the loop, before this aggregate
-        # exists), so a request with a flickering masked flag can mix
-        # masked-filtered and unfiltered searches across frames while still
-        # applying one resolved threshold/margin/min_frames at decision
-        # time.
-        request_mode = "masked" if aggregated_condition_flags.get("masked") else "normal"
+    # EC-IN-04 (TSD-edge-cases.md D-4.2, OQ-6) + EC-IN-06 (D-5): resolve
+    # which decision parameters to hand to `decide_from_scores` below. Both
+    # `dual_mode_threshold_enabled` and `device_class_config_resolution_
+    # enabled` default False -- with both off, this is the exact pre-EC-IN-04
+    # path: `settings.similarity_threshold`/`margin_threshold`/
+    # `min_frames_for_grant` unconditionally, no DB read, no mode decision,
+    # zero behavior change out of the box, same convention as EC-IN-02's
+    # `quality_gate_enforcing`.
+    if settings.dual_mode_threshold_enabled or settings.device_class_config_resolution_enabled:
+        # "Probe ber-flag masked" (EC-IN-04 task brief) is a per-REQUEST
+        # decision, not per-frame: the OR-merged aggregate (same aggregation
+        # already used for every other condition flag) decides ONE mode for
+        # the whole decide_from_scores call below, applied uniformly across
+        # all frames' candidates -- simpler and more faithful to "one probe,
+        # one mode" than threading a per-frame threshold through voting
+        # (which `decide_from_scores` does not otherwise support). The
+        # GALLERY SEARCH filter above is still decided per-frame (it has to
+        # be -- embedding/search happens inside the loop, before this
+        # aggregate exists), so a request with a flickering masked flag can
+        # mix masked-filtered and unfiltered searches across frames while
+        # still applying one resolved threshold/margin/min_frames at
+        # decision time.
+        #
+        # EC-IN-06: the masked/normal MODE choice itself stays exclusively
+        # `dual_mode_threshold_enabled`'s job -- `device_class_config_
+        # resolution_enabled` on its own (dual-mode still off) always
+        # resolves `mode="normal"`, so a deployment that only wants
+        # per-device_class threshold overrides (without opting into the
+        # masked-mode experiment) gets exactly that, nothing more.
+        request_mode = (
+            "masked"
+            if settings.dual_mode_threshold_enabled and aggregated_condition_flags.get("masked")
+            else "normal"
+        )
         device_class = gallery.get_device_class(cursor, device_id) if device_id else None
 
         from ai_inference.pipeline.threshold_resolution import resolve_mode_params

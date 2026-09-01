@@ -1,6 +1,16 @@
-"""EC-IN-04: 3-layer threshold resolution for the normal/masked decision
-path (TSD-edge-cases.md D-4.2, OQ-6): artefact default -> `recognition_configs`
-DB override -> env fallback.
+"""EC-IN-04/EC-IN-06: 3-layer threshold resolution for the normal/masked
+decision path (TSD-edge-cases.md D-4.2/D-5, OQ-6): artefact default ->
+`recognition_configs` DB override -> env fallback.
+
+This module itself is `mode`-agnostic and does not know or care which
+`Settings` flag caused its caller to invoke it - `ai_inference.pipeline.
+recognize.run_recognition` calls it whenever EITHER `dual_mode_threshold_
+enabled` (the masked/normal mode experiment, EC-IN-04) OR
+`device_class_config_resolution_enabled` (per-device_class overrides
+independent of that experiment, EC-IN-06) is on, always with `mode=
+"normal"` unless the former specifically selected `"masked"`. See that
+module's docstring (closed-gaps list, EC-IN-06 entry) for the exact
+decoupling.
 
 Pure Python + a DB-API cursor (via `ai_inference.gallery`) -- no cv2/torch,
 importable and unit-testable on base CI, same convention as
