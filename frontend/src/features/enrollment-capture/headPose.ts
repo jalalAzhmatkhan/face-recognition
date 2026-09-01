@@ -43,9 +43,21 @@ export function estimateHeadPose(landmarks: Landmarks68): HeadPose | null {
   if (faceWidth <= 0 || faceHeight <= 0) return null
 
   // Yaw: how far the nose sits off the horizontal midline of the two jaw
-  // edges, as a fraction of half the face width.
+  // edges, as a fraction of half the face width. Negated (nose offset
+  // subtracted from midX, not the other way around) because `landmarks`
+  // come from the RAW, un-mirrored camera frame (`faceDetector.ts` runs
+  // detection on the canvas drawn straight from `<video>`), while the
+  // wizard's `<video>` preview -- and the clock-position ring overlaid on
+  // top of it -- is displayed mirrored (`scaleX(-1)` in
+  // EnrollmentCapturePage.css) so the subject sees a natural "look in a
+  // mirror" self-view. Without the negation, a subject turning their head
+  // toward what they SEE as the ring's 1 o'clock (upper-right on their
+  // mirrored screen) produces raw-frame yaw whose sign matches the
+  // OPPOSITE side of the clock (found live: turning toward the on-screen 1
+  // o'clock position lit up 11 o'clock instead, and vice versa for every
+  // other left/right pair).
   const midX = (leftEdge.x + rightEdge.x) / 2
-  const yawFraction = (nose.x - midX) / (faceWidth / 2)
+  const yawFraction = (midX - nose.x) / (faceWidth / 2)
   const yaw = clamp(yawFraction, -1, 1) * POSE_RANGE.maxYawDeg
 
   // Pitch: how far the nose sits off the vertical midline between the eye

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { resolveClockPosition } from './clockSectors'
 import { estimateHeadPose } from './headPose'
 import type { Landmarks68, Point2D } from './types'
 
@@ -42,12 +43,29 @@ describe('estimateHeadPose', () => {
     expect(pose!.pitch).toBeLessThan(0)
   })
 
-  it('produces nonzero, opposite-sign yaw for left vs. right nose offsets', () => {
-    const left = estimateHeadPose(buildLandmarks({ x: -20, y: 0 }))
-    const right = estimateHeadPose(buildLandmarks({ x: 20, y: 0 }))
-    expect(left!.yaw).toBeLessThan(0)
-    expect(right!.yaw).toBeGreaterThan(0)
-    expect(right!.yaw).toBeCloseTo(-left!.yaw, 5)
+  it('produces nonzero, opposite-sign yaw for left vs. right RAW nose offsets, matching the MIRRORED on-screen direction', () => {
+    // Regression: yaw is negated relative to the raw landmark offset
+    // because the wizard displays a mirrored preview (see estimateHeadPose's
+    // yaw comment) -- a nose offset of x:-20 in the raw, un-mirrored frame
+    // is what a subject turning toward their own on-screen RIGHT (positive
+    // yaw, clock positions 1-5) actually produces, and vice versa.
+    const onScreenRight = estimateHeadPose(buildLandmarks({ x: -20, y: 0 }))
+    const onScreenLeft = estimateHeadPose(buildLandmarks({ x: 20, y: 0 }))
+    expect(onScreenRight!.yaw).toBeGreaterThan(0)
+    expect(onScreenLeft!.yaw).toBeLessThan(0)
+    expect(onScreenLeft!.yaw).toBeCloseTo(-onScreenRight!.yaw, 5)
+  })
+
+  it('regression: turning toward the on-screen upper-right resolves to clock position 1-2, never the mirrored 10-11', () => {
+    // Raw nose offset (x:-20, up y:-20) is what a subject turning toward
+    // their own on-screen upper-right (where the ring draws 1/2 o'clock on
+    // the mirrored preview) actually produces in the un-mirrored landmark
+    // data -- see estimateHeadPose's yaw comment for the full mirroring
+    // explanation. Before that fix this resolved to 10/11 instead.
+    const pose = estimateHeadPose(buildLandmarks({ x: -20, y: -20 }))
+    expect(pose).not.toBeNull()
+    const position = resolveClockPosition(pose!)
+    expect([1, 2]).toContain(position)
   })
 
   it('returns null when fewer than 68 landmarks are provided', () => {
