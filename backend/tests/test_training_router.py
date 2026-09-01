@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.dependencies.auth import CurrentStaff, get_current_staff
 from app.main import create_app
-from app.models.enums import ModelStage, StaffRole, TrainingJobStatus
+from app.models.enums import ModelStage, StaffRole, TrainingJobStatus, TrainingJobType
 from app.models.model_registry import ModelVersion
 from app.models.training_job import TrainingJob
 from app.routers.training import (
@@ -206,6 +206,8 @@ def viewer_client(job_repo, model_repo, audit_repo) -> TestClient:
 def test_create_job_succeeds_for_admin(
     admin_client: TestClient, audit_repo: FakeAuditLogRepository, _no_real_celery_dispatch
 ) -> None:
+    """Pre-EC-BE-03 request shape (no `job_type` field at all) must still
+    work identically: zero regression for existing clients."""
     response = admin_client.post(
         "/api/v1/training/jobs",
         json={"model_version": "adaface-v2", "benchmark_id": "snap-1"},
@@ -213,10 +215,148 @@ def test_create_job_succeeds_for_admin(
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "PENDING"
+    assert body["job_type"] == "EVALUATION"
     assert body["model_version"] == "adaface-v2"
     assert body["benchmark_id"] == "snap-1"
+    assert body["snapshot_id"] is None
+    assert body["params"] is None
     assert any(e["action"] == "training.job_created" for e in audit_repo.entries)
     assert len(_no_real_celery_dispatch) == 1
+
+
+# --- EC-BE-03: job_type + params validation ---------------------------------
+
+
+def test_create_evaluation_job_still_requires_model_version_and_benchmark_id(
+    admin_client: TestClient,
+) -> None:
+    """Explicit `job_type=EVALUATION` behaves exactly like the implicit
+    default — both required fields still enforced."""
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={"job_type": "EVALUATION", "benchmark_id": "snap-1"},
+    )
+    assert response.status_code == 422
+
+
+def test_create_finetune_embedder_job_requires_augmentations(
+    admin_client: TestClient,
+) -> None:
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={"job_type": "FINETUNE_EMBEDDER", "params": {}},
+    )
+    assert response.status_code == 422
+
+
+def test_create_finetune_embedder_job_succeeds_with_augmentations(
+    admin_client: TestClient, _no_real_celery_dispatch
+) -> None:
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={
+            "job_type": "FINETUNE_EMBEDDER",
+            "params": {"augmentations": ["mask_mlfw", "occlusion_ocfr"]},
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["job_type"] == "FINETUNE_EMBEDDER"
+    assert body["model_version"] is None
+    assert body["benchmark_id"] is None
+    assert body["params"] == {"augmentations": ["mask_mlfw", "occlusion_ocfr"]}
+    # B-1 scope: no Celery task exists yet for this job_type, so nothing is
+    # dispatched (only EVALUATION dispatches today).
+    assert len(_no_real_celery_dispatch) == 0
+
+
+def test_create_finetune_liveness_job_requires_dataset_ref(
+    admin_client: TestClient,
+) -> None:
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={"job_type": "FINETUNE_LIVENESS", "params": {}},
+    )
+    assert response.status_code == 422
+
+
+def test_create_finetune_liveness_job_succeeds_with_dataset_ref(
+    admin_client: TestClient, _no_real_celery_dispatch
+) -> None:
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={
+            "job_type": "FINETUNE_LIVENESS",
+            "params": {"dataset_ref": "pad/collection-1"},
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["job_type"] == "FINETUNE_LIVENESS"
+    assert body["params"] == {"dataset_ref": "pad/collection-1"}
+    assert len(_no_real_celery_dispatch) == 0
+
+
+def test_create_gallery_reembed_job_requires_model_version(
+    admin_client: TestClient,
+) -> None:
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={"job_type": "GALLERY_REEMBED"},
+    )
+    assert response.status_code == 422
+
+
+def test_create_gallery_reembed_job_succeeds_with_model_version(
+    admin_client: TestClient, _no_real_celery_dispatch
+) -> None:
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={"job_type": "GALLERY_REEMBED", "model_version": "adaface-v3"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["job_type"] == "GALLERY_REEMBED"
+    assert body["model_version"] == "adaface-v3"
+    assert len(_no_real_celery_dispatch) == 0
+
+
+def test_create_backfill_masked_templates_job_succeeds_with_no_fields(
+    admin_client: TestClient, _no_real_celery_dispatch
+) -> None:
+    """No required fields beyond job_type itself (D-4.5)."""
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={"job_type": "BACKFILL_MASKED_TEMPLATES"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["job_type"] == "BACKFILL_MASKED_TEMPLATES"
+    assert body["model_version"] is None
+    assert body["benchmark_id"] is None
+    assert len(_no_real_celery_dispatch) == 0
+
+
+def test_create_job_with_snapshot_id_is_persisted(
+    admin_client: TestClient, _no_real_celery_dispatch
+) -> None:
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={
+            "job_type": "BACKFILL_MASKED_TEMPLATES",
+            "snapshot_id": "3f5b9c1a-0000-4000-8000-000000000001",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["snapshot_id"] == "3f5b9c1a-0000-4000-8000-000000000001"
+
+
+def test_create_job_rejects_unknown_job_type(admin_client: TestClient) -> None:
+    response = admin_client.post(
+        "/api/v1/training/jobs",
+        json={"job_type": "NOT_A_REAL_TYPE"},
+    )
+    assert response.status_code == 422
 
 
 def test_create_job_denied_for_operator(operator_client: TestClient) -> None:
@@ -253,6 +393,7 @@ def test_get_job_found_for_operator(
 ) -> None:
     job = job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v2",
             benchmark_id="snap-1",
             status=TrainingJobStatus.RUNNING,
@@ -274,6 +415,7 @@ def test_get_job_denied_for_viewer(
 ) -> None:
     job = job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v2",
             benchmark_id="snap-1",
             status=TrainingJobStatus.PENDING,
@@ -289,6 +431,7 @@ def test_get_job_exposes_error_message_when_failed(
 ) -> None:
     job = job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v2",
             benchmark_id="snap-1",
             status=TrainingJobStatus.FAILED,
@@ -304,11 +447,32 @@ def test_get_job_exposes_error_message_when_failed(
 # --- GET /training/jobs (BE-15) ---------------------------------------------
 
 
+def test_list_jobs_shows_job_type(
+    admin_client: TestClient, job_repo: FakeTrainingJobRepository
+) -> None:
+    """EC-BE-03 acceptance criterion: `GET /training/jobs` displays
+    `job_type`, including for non-EVALUATION jobs."""
+    job_repo.create(
+        TrainingJob(
+            job_type=TrainingJobType.GALLERY_REEMBED,
+            model_version="adaface-v3",
+            status=TrainingJobStatus.PENDING,
+            triggered_by=uuid.uuid4(),
+        )
+    )
+    response = admin_client.get("/api/v1/training/jobs")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["job_type"] == "GALLERY_REEMBED"
+
+
 def test_list_jobs_newest_first_for_operator(
     operator_client: TestClient, job_repo: FakeTrainingJobRepository
 ) -> None:
     older = job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v1",
             benchmark_id="snap-1",
             status=TrainingJobStatus.SUCCEEDED,
@@ -318,6 +482,7 @@ def test_list_jobs_newest_first_for_operator(
     )
     newer = job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v2",
             benchmark_id="snap-2",
             status=TrainingJobStatus.RUNNING,
@@ -337,6 +502,7 @@ def test_list_jobs_filters_by_status(
 ) -> None:
     job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v1",
             benchmark_id="snap-1",
             status=TrainingJobStatus.FAILED,
@@ -345,6 +511,7 @@ def test_list_jobs_filters_by_status(
     )
     succeeded = job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v2",
             benchmark_id="snap-2",
             status=TrainingJobStatus.SUCCEEDED,
@@ -363,6 +530,7 @@ def test_list_jobs_filters_by_model_version(
 ) -> None:
     job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v1",
             benchmark_id="snap-1",
             status=TrainingJobStatus.SUCCEEDED,
@@ -371,6 +539,7 @@ def test_list_jobs_filters_by_model_version(
     )
     target = job_repo.create(
         TrainingJob(
+            job_type=TrainingJobType.EVALUATION,
             model_version="adaface-v2",
             benchmark_id="snap-2",
             status=TrainingJobStatus.SUCCEEDED,
@@ -392,6 +561,7 @@ def test_list_jobs_respects_limit_and_offset(
     for i in range(5):
         job_repo.create(
             TrainingJob(
+                job_type=TrainingJobType.EVALUATION,
                 model_version=f"adaface-v{i}",
                 benchmark_id="snap",
                 status=TrainingJobStatus.SUCCEEDED,

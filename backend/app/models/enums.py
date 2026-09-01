@@ -85,6 +85,33 @@ class TrainingJobStatus(enum.StrEnum):
     FAILED = "FAILED"
 
 
+class TrainingJobType(enum.StrEnum):
+    """Kind of `training_jobs` row (EC-BE-03, TSD-edge-cases.md B-1/D-10).
+
+    `EVALUATION` is the only kind that existed before this column — every
+    pre-EC-BE-03 row backfills to it (see the EC-BE-03 migration), and its
+    validation/dispatch behaviour is UNCHANGED (still requires
+    `model_version` + `benchmark_id`, still dispatches
+    `run_training_evaluation_job`). The other four kinds formalize job
+    types that either had no API surface at all (`GALLERY_REEMBED` — TR-08
+    already runs this as a side effect of promotion, this just lets it be
+    triggered/tracked as a first-class job) or do not exist yet
+    (`FINETUNE_EMBEDDER`/B-2, `FINETUNE_LIVENESS`/B-3,
+    `BACKFILL_MASKED_TEMPLATES`/D-4.5) — this task (B-1) only adds the
+    schema + request validation for them; the Celery tasks that actually
+    execute `FINETUNE_EMBEDDER`/`FINETUNE_LIVENESS`/
+    `BACKFILL_MASKED_TEMPLATES` are separate, later tasks (see
+    `app/services/training_queue.py`), so creating a job of one of those
+    types today persists a validated row but does not dispatch anything.
+    """
+
+    EVALUATION = "EVALUATION"
+    FINETUNE_EMBEDDER = "FINETUNE_EMBEDDER"
+    FINETUNE_LIVENESS = "FINETUNE_LIVENESS"
+    GALLERY_REEMBED = "GALLERY_REEMBED"
+    BACKFILL_MASKED_TEMPLATES = "BACKFILL_MASKED_TEMPLATES"
+
+
 class DeviceStatus(enum.StrEnum):
     ONLINE = "ONLINE"
     OFFLINE = "OFFLINE"

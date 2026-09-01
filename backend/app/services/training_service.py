@@ -19,9 +19,10 @@ for it.
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from app.core.config import Settings
-from app.models.enums import ModelStage, TrainingJobStatus
+from app.models.enums import ModelStage, TrainingJobStatus, TrainingJobType
 from app.models.model_registry import ModelVersion
 from app.models.training_job import TrainingJob
 from app.repositories.audit_logs import AuditLogRepository
@@ -61,13 +62,34 @@ def create_training_job(
     job_repo: TrainingJobRepository,
     audit_repo: AuditLogRepository,
     *,
-    model_version: str,
-    benchmark_id: str,
+    job_type: TrainingJobType = TrainingJobType.EVALUATION,
+    model_version: str | None = None,
+    benchmark_id: str | None = None,
+    snapshot_id: str | None = None,
+    params: dict[str, Any] | None = None,
     actor: uuid.UUID,
 ) -> TrainingJob:
+    """Create a `training_jobs` row (EC-BE-03: `job_type`/`snapshot_id`/
+    `params` — see TrainingJobCreateRequest for the per-type required-field
+    validation that already ran before this is called).
+
+    Celery dispatch only happens for `EVALUATION` today
+    (`run_training_evaluation_job`) — UNCHANGED from pre-EC-BE-03 behaviour.
+    The other four job types persist a validated row but do not dispatch
+    anything yet: `FINETUNE_EMBEDDER`/`FINETUNE_LIVENESS`/
+    `BACKFILL_MASKED_TEMPLATES` have no Celery task implemented at all
+    (B-2/B-3/D-4.5 are separate follow-up tasks), and `GALLERY_REEMBED` is
+    already dispatched elsewhere as a side effect of `promote_model`
+    (`gallery_queue.enqueue_gallery_reembed`) — wiring a *second*,
+    independent dispatch path for it here is out of scope for this task
+    (B-1 is schema + validation only, per the task brief).
+    """
     job = TrainingJob(
+        job_type=job_type,
         model_version=model_version,
         benchmark_id=benchmark_id,
+        snapshot_id=snapshot_id,
+        params=params,
         status=TrainingJobStatus.PENDING,
         triggered_by=actor,
     )
@@ -77,10 +99,18 @@ def create_training_job(
         actor=str(actor),
         action="training.job_created",
         entity=f"training_job:{job.id}",
-        payload={"model_version": model_version, "benchmark_id": benchmark_id},
+        payload={
+            "job_type": job_type.value,
+            "model_version": model_version,
+            "benchmark_id": benchmark_id,
+            "snapshot_id": snapshot_id,
+            "params": params,
+        },
     )
 
-    training_queue.enqueue_training_job(job.id, model_version, benchmark_id)
+    if job_type == TrainingJobType.EVALUATION:
+        training_queue.enqueue_training_job(job.id, model_version, benchmark_id)
+
     return job
 
 

@@ -81,8 +81,11 @@ def create_training_job(
     job = training_service.create_training_job(
         job_repo,
         audit_repo,
+        job_type=body.job_type,
         model_version=body.model_version,
         benchmark_id=body.benchmark_id,
+        snapshot_id=body.snapshot_id,
+        params=body.params,
         actor=current.id,
     )
     return TrainingJobResponse.model_validate(job)
