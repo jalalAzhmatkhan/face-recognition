@@ -14,6 +14,19 @@ class EnrollmentCreateRequest(BaseModel):
 
 
 class ConsentRequest(BaseModel):
+    """Body for `POST /enrollments/{id}/consent`.
+
+    `consent_version` is client-supplied free text, not validated against an
+    enum here: the backend records whatever version string the caller sends
+    (append-only, see `app/repositories/consents.py`) and never gates access
+    on a specific value. For a *new* consent grant, the client should send
+    the current clause version — see `app.models.consent.CURRENT_CONSENT_VERSION`
+    (bumped `"v1.0"` -> `"v1.1"` by EC-BE-09) — which the frontend (EC-FE-05)
+    is expected to reference as the single source of truth. Sending an older
+    or otherwise different version string is still accepted; it is not this
+    endpoint's job to enforce which version is "current".
+    """
+
     consent_version: str = Field(..., min_length=1, max_length=50)
 
 
