@@ -89,7 +89,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_users_reenroll_due", table_name="users", postgresql_where=sa.text("reenroll_due IS TRUE"))
+    op.drop_index(
+        "ix_users_reenroll_due",
+        table_name="users",
+        postgresql_where=sa.text("reenroll_due IS TRUE"),
+    )
     op.drop_column("users", "reenroll_due_marked_at")
     op.drop_column("users", "reenroll_due_reason")
     op.drop_column("users", "reenroll_due")
