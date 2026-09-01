@@ -370,6 +370,7 @@ def presign_enrollment_media(
             size=body.size,
             sha256=body.sha256,
             actor=str(current.id),
+            variant=body.variant,
         )
     except enrollment_service.EnrollmentNotFoundError as exc:
         raise _not_found(session_id) from exc

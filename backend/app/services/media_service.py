@@ -48,7 +48,7 @@ from botocore.exceptions import ClientError
 
 from app.core.config import Settings
 from app.models.enrollment_session import EnrollmentSession
-from app.models.enums import EnrollmentState, MediaKind, MediaObjectStatus
+from app.models.enums import EnrollmentState, MediaKind, MediaObjectStatus, MediaVariant
 from app.models.media_object import MediaObject
 from app.repositories.audit_logs import AuditLogRepository
 from app.repositories.enrollments import EnrollmentSessionRepository
@@ -208,6 +208,7 @@ def request_presign(
     size: int,
     sha256: str,
     actor: str,
+    variant: str | None = None,
 ) -> PresignResult:
     """Handle `POST /enrollments/{id}/media/presign` (FR-ENR-02/04, TSD §7).
 
@@ -219,6 +220,12 @@ def request_presign(
     §4); a still-PENDING video row from an earlier, not-yet-completed
     presign call is replaced rather than accumulated, since only the most
     recent attempt can still land at that exact S3 key.
+
+    `variant` (EC-BE-02, TSD-edge-cases.md D-4.1) is optional — a caller
+    that omits it (every pre-EC-BE-02 caller, and most current ones) gets
+    `MediaVariant.DEFAULT` on the stored row. This keyword defaults to
+    `None` precisely so existing callers of this function keep working
+    unchanged.
     """
     session = enrollment_repo.get(session_id)
     if session is None:
@@ -252,6 +259,7 @@ def request_presign(
         size=size,
         content_type=content_type,
         status=MediaObjectStatus.PENDING,
+        variant=MediaVariant(variant) if variant else MediaVariant.DEFAULT,
     )
     media = media_repo.create(media)
 

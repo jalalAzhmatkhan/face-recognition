@@ -189,6 +189,56 @@ def test_presign_photo_succeeds_while_capturing(
     assert any(e["action"] == "enrollment.media_presigned" for e in audit_repo.entries)
 
 
+def test_presign_without_variant_field_defaults_to_default(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    media_repo: FakeMediaObjectRepository,
+) -> None:
+    """EC-BE-02: a presign request body without `variant` (every
+    pre-EC-BE-02 caller) still succeeds (201), and the stored row defaults
+    to `MediaVariant.DEFAULT` rather than staying NULL."""
+    from app.models.enums import MediaVariant
+
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+
+    response = admin_client.post(
+        f"/api/v1/enrollments/{session.id}/media/presign",
+        json={
+            "kind": "photo",
+            "content_type": "image/jpeg",
+            "size": 2_000_000,
+            "sha256": _sha256_hex(b"photo-bytes"),
+        },
+    )
+    assert response.status_code == 201, response.text
+    assert media_repo.items[0].variant == MediaVariant.DEFAULT
+
+
+def test_presign_with_explicit_variant_field_is_stored(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    media_repo: FakeMediaObjectRepository,
+) -> None:
+    from app.models.enums import MediaVariant
+
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+
+    response = admin_client.post(
+        f"/api/v1/enrollments/{session.id}/media/presign",
+        json={
+            "kind": "photo",
+            "content_type": "image/jpeg",
+            "size": 2_000_000,
+            "sha256": _sha256_hex(b"photo-bytes"),
+            "variant": "glasses",
+        },
+    )
+    assert response.status_code == 201, response.text
+    assert media_repo.items[0].variant == MediaVariant.GLASSES
+
+
 def test_presign_rejects_disallowed_content_type(
     admin_client: TestClient, enrollment_repo: FakeEnrollmentRepository
 ) -> None:

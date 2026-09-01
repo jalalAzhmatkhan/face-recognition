@@ -18,12 +18,20 @@ class PresignRequest(BaseModel):
     the specific allowed values/bounds. `sha256` is the client's claimed
     checksum of the bytes it is about to upload — hex-encoded, as produced
     by e.g. the browser `SubtleCrypto.digest("SHA-256", ...)` API.
+
+    `variant` (EC-BE-02, TSD-edge-cases.md D-4.1) is optional — every caller
+    that predates this field (or simply doesn't care) omits it, and
+    `media_service.request_presign` defaults the stored `MediaObject.variant`
+    to `"default"` in that case. It only matters once a later frontend task
+    (A-1/A-3, gelombang 3) starts requesting the extra no_glasses/glasses/
+    pitch_ext captures.
     """
 
     kind: Literal["photo", "video"]
     content_type: str = Field(..., min_length=1, max_length=255)
     size: int = Field(..., gt=0)
     sha256: str = Field(..., min_length=64, max_length=64)
+    variant: Literal["default", "no_glasses", "glasses", "pitch_ext"] | None = None
 
     @field_validator("sha256")
     @classmethod

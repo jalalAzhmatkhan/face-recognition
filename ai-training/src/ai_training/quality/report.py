@@ -27,3 +27,16 @@ class QCReport(BaseModel):
     coverage_ratio: float
     positions: list[PositionResult]
     generated_at: datetime
+    # EC-BE-02 (TSD-edge-cases.md D-4.1/D-10): additive, optional counters.
+    # `enrollment_sessions.qc_report` is an untyped jsonb column, so these
+    # don't need a migration -- they're just new optional keys in the
+    # dict this model serializes to. `None` (not populated) means "the QC
+    # worker run that produced this report predates these counters" or
+    # "this session's variant/masked-template pipeline hasn't run yet",
+    # never an error. `variants_captured`: which `MediaVariant` values
+    # (A-1/A-3, gelombang 3) were captured for this session, if any.
+    # `synthetic_templates_generated`: count of `synthetic_masked`
+    # templates the A-4/D-4.5 pipeline produced from this session's video,
+    # if that pipeline has run.
+    variants_captured: list[str] | None = None
+    synthetic_templates_generated: int | None = None

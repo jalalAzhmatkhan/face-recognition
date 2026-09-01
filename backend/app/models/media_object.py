@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import MediaKind, MediaObjectStatus
+from app.models.enums import MediaKind, MediaObjectStatus, MediaVariant
 from app.models.mixins import CreatedAtMixin, UUIDPKMixin
 
 
@@ -57,3 +57,19 @@ class MediaObject(UUIDPKMixin, CreatedAtMixin, Base):
     )
     # ASM-10: 90-day raw-media expiry, enforced by a retention job (BE-14).
     retention_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # EC-BE-02 (TSD-edge-cases.md D-4.1/D-10): capture variant. Nullable at
+    # the DB level so pre-EC-BE-02 rows stay valid untouched (NULL = "no
+    # variant on record", not an error state) -- but every NEW row written
+    # via `POST .../media/presign` always gets an explicit value: the
+    # service layer defaults to `MediaVariant.DEFAULT` when the caller omits
+    # `variant` (see app/services/media_service.py::request_presign), so in
+    # practice only legacy rows are ever NULL.
+    variant: Mapped[MediaVariant | None] = mapped_column(
+        Enum(
+            MediaVariant,
+            name="media_variant",
+            native_enum=True,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        nullable=True,
+    )
