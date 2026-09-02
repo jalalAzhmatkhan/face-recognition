@@ -320,13 +320,67 @@ def test_grant_consent_denied_for_viewer(
     assert response.status_code == 403
 
 
-def test_grant_consent_rejects_when_not_created(
-    admin_client: TestClient, enrollment_repo: FakeEnrollmentRepository, active_user: User
+@pytest.mark.parametrize(
+    "state", [EnrollmentState.CONSENTED, EnrollmentState.CAPTURING, EnrollmentState.CAPTURED]
+)
+def test_grant_consent_records_the_grant_on_an_in_flight_session(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    consent_repo: FakeConsentRepository,
+    active_user: User,
+    state: EnrollmentState,
 ) -> None:
-    session = enrollment_repo.create(_make_session(active_user.id, EnrollmentState.CONSENTED))
+    """The operator flow drives a session to CAPTURING before the capture
+    wizard ever opens, so the wizard's own consent step -- the one the
+    subject actually reads and ticks -- used to 409 every time and have its
+    grant dropped by the caller's catch-all. Record it; leave the state be."""
+    session = enrollment_repo.create(_make_session(active_user.id, state))
+
     response = admin_client.post(
-        f"/api/v1/enrollments/{session.id}/consent", json={"consent_version": "v1.0"}
+        f"/api/v1/enrollments/{session.id}/consent", json={"consent_version": "v1.2"}
     )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == state.value
+    assert [c.consent_version for c in consent_repo.list_for_user(active_user.id)] == ["v1.2"]
+
+
+def test_grant_consent_does_not_duplicate_a_version_already_on_record(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    consent_repo: FakeConsentRepository,
+    active_user: User,
+) -> None:
+    # The wizard fires this on every camera start, including retries.
+    session = enrollment_repo.create(_make_session(active_user.id, EnrollmentState.CAPTURING))
+    body = {"consent_version": "v1.2"}
+
+    for _ in range(3):
+        assert (
+            admin_client.post(f"/api/v1/enrollments/{session.id}/consent", json=body).status_code
+            == 200
+        )
+
+    assert len(consent_repo.list_for_user(active_user.id)) == 1
+
+
+@pytest.mark.parametrize(
+    "state", [EnrollmentState.REVOKED, EnrollmentState.CANCELLED, EnrollmentState.ENROLLED]
+)
+def test_grant_consent_still_conflicts_on_a_terminal_session(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    active_user: User,
+    state: EnrollmentState,
+) -> None:
+    """Consent for a revoked or finished enrollment is meaningless, and
+    accepting it would let a revoked subject look freshly consented."""
+    session = enrollment_repo.create(_make_session(active_user.id, state))
+
+    response = admin_client.post(
+        f"/api/v1/enrollments/{session.id}/consent", json={"consent_version": "v1.2"}
+    )
+
     assert response.status_code == 409
     assert response.headers["content-type"].startswith("application/problem+json")
 
