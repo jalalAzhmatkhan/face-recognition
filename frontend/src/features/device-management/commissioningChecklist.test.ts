@@ -24,6 +24,37 @@ describe('buildDefaultChecklist', () => {
     expect(nonQueueItems.every((c) => c.status === null)).toBe(true)
   })
 
+  it('emits every top-level field of the schema, so the object really is a CommissioningChecklist', () => {
+    // Regression: `reverify_due_at` was missing here, which `tsc --noEmit`
+    // (root tsconfig) did not catch but `tsc -b` (tsconfig.app.json, what
+    // `npm run build` uses) did -- the production build was broken on
+    // master for it. A key-set assertion catches the next omission at test
+    // time rather than at release time.
+    for (const deviceClass of ['door_entry', 'attendance'] as const) {
+      expect(Object.keys(buildDefaultChecklist(deviceClass)).sort()).toEqual([
+        'checks',
+        'commissioned_at',
+        'commissioned_by_name',
+        'commissioned_by_staff_id',
+        'device_class',
+        'overall_status',
+        'queue_zone',
+        'reverify_due_at',
+        'schema_version',
+        'site_notes',
+      ])
+    }
+  })
+
+  it('leaves reverify_due_at null rather than deriving a date', () => {
+    // camera-placement-guide.md §5.1: optional, "kebijakan operasional,
+    // tidak divalidasi otomatis oleh sistem di fase ini". It is also
+    // relative to COMMISSIONING, not to opening a blank form, so there is
+    // nothing sensible to compute at this point.
+    expect(buildDefaultChecklist('door_entry').reverify_due_at).toBeNull()
+    expect(buildDefaultChecklist('attendance').reverify_due_at).toBeNull()
+  })
+
   it('sets device-class-specific expected_range for mount.camera_height_m', () => {
     const attendance = buildDefaultChecklist('attendance')
     const doorEntry = buildDefaultChecklist('door_entry')
