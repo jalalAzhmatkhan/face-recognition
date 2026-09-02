@@ -9,6 +9,7 @@ from ai_training.db.enrollment_repo import (
     get_frontal_photo,
     get_latest_finalized_video,
     get_state,
+    get_sweep_photos,
     get_user_id,
     guarded_transition,
 )
@@ -99,6 +100,56 @@ def test_get_frontal_photo_returns_none_when_session_has_no_photo() -> None:
     cursor = MagicMock()
     cursor.fetchone.return_value = None
     assert get_frontal_photo(cursor, "session-1") is None
+
+
+def test_get_sweep_photos_zero_pads_the_smallint_clock_position() -> None:
+    """The DB column is a smallint; the QC pipeline keys positions by
+    "01".."12" (`quality.pose.CLOCK_POSITIONS`). Converting here means no
+    caller has to remember which representation it is holding."""
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [
+        (1, "frac-media", "enrollment/u1/s1/photo_pos_01_1.jpg"),
+        (12, "frac-media", "enrollment/u1/s1/photo_pos_12_1.jpg"),
+    ]
+
+    assert get_sweep_photos(cursor, "session-1") == [
+        ("01", "frac-media", "enrollment/u1/s1/photo_pos_01_1.jpg"),
+        ("12", "frac-media", "enrollment/u1/s1/photo_pos_12_1.jpg"),
+    ]
+
+
+def test_get_sweep_photos_excludes_the_frontal_photo() -> None:
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+
+    get_sweep_photos(cursor, "session-1")
+
+    sql = cursor.execute.call_args[0][0]
+    assert "clock_position IS NOT NULL" in sql
+    # Ordered so a burst's frames stay grouped by position, in capture order.
+    assert "ORDER BY clock_position ASC, created_at ASC" in sql
+
+
+def test_get_sweep_photos_returns_empty_for_a_legacy_video_session() -> None:
+    """Empty is the signal callers branch on to fall back to the video
+    path -- not an error, and not None."""
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+
+    assert get_sweep_photos(cursor, "session-1") == []
+
+
+def test_get_sweep_photos_keeps_every_frame_of_a_burst() -> None:
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [
+        (5, "frac-media", "enrollment/u1/s1/photo_pos_05_1.jpg"),
+        (5, "frac-media", "enrollment/u1/s1/photo_pos_05_2.jpg"),
+        (5, "frac-media", "enrollment/u1/s1/photo_pos_05_3.jpg"),
+    ]
+
+    result = get_sweep_photos(cursor, "session-1")
+
+    assert [position for position, _b, _k in result] == ["05", "05", "05"]
 
 
 def test_upsert_embeddings_deletes_then_inserts() -> None:

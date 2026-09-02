@@ -242,3 +242,41 @@
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
 }
+
+/* Per-position review list: one row per clock position with its frame count
+   and a retake button, so a single bad position can be redone without
+   discarding the other eleven. */
+.capture-position-list {
+  list-style: none;
+  margin: var(--space-4) 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-2);
+}
+
+.capture-position-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-w) solid var(--border-default);
+  border-left-width: 3px;
+  border-left-color: var(--danger);
+  border-radius: var(--radius-md);
+  font: var(--text-body);
+}
+
+.capture-position-list li[data-ok='true'] {
+  border-left-color: var(--success);
+}
+
+/* Inline action inside a dense list row — the default .btn touch target
+   would make each of the twelve rows twice as tall as its text. */
+.btn--small {
+  min-height: 0;
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
+  font: var(--text-caption);
+}

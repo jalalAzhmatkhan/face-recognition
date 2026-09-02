@@ -144,6 +144,32 @@ def get_frontal_photo(cursor: Cursor, session_id: str) -> tuple[str, str] | None
     return (row[0], row[1]) if row else None
 
 
+def get_sweep_photos(cursor: Cursor, session_id: str) -> list[tuple[str, str, str]]:
+    """Return `(clock_position, s3_bucket, s3_key)` for every FINALIZED
+    sweep frame of this session, ordered by position then upload time.
+
+    The sweep frames are the per-clock-position stills that replaced
+    `rotation.webm` (backend migration `e4b9d2f6a8c3`): `kind = 'photo'`
+    with a non-NULL `clock_position`. An EMPTY list is the signal that this
+    is a LEGACY video session — the caller falls back to
+    `get_latest_finalized_video`, which is why this returns a list rather
+    than raising on "nothing found".
+
+    `clock_position` is a smallint in the DB but comes back here as the
+    zero-padded "01".."12" string the QC pipeline keys positions by
+    (`ai_training.quality.pose.CLOCK_POSITIONS`), so callers never have to
+    remember which of the two representations they are holding.
+    """
+    cursor.execute(
+        "SELECT clock_position, s3_bucket, s3_key FROM media_objects "
+        "WHERE session_id = %s AND kind = 'photo' AND status = 'FINALIZED' "
+        "AND clock_position IS NOT NULL "
+        "ORDER BY clock_position ASC, created_at ASC",
+        (session_id,),
+    )
+    return [(f"{int(row[0]):02d}", row[1], row[2]) for row in cursor.fetchall()]
+
+
 @dataclass(frozen=True)
 class VideoMedia:
     """One FINALIZED video `media_objects` row, with its retention info

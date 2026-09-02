@@ -21,24 +21,37 @@ import {
   updateSectorState,
 } from './clockSectors'
 import type { SectorTrackerState } from './clockSectors'
+import {
+  admitFrame,
+  BURST_SIZE,
+  createEmptyBurstBuffer,
+  flattenBurstBuffer,
+  shouldAdmit,
+} from './burstBuffer'
+import type { BurstBuffer } from './burstBuffer'
 import { detectFace, loadFaceDetectionModels } from './faceDetector'
 import { averagePose, calibrateToNeutral, estimateHeadPose } from './headPose'
 import { assessQuality, QUALITY_THRESHOLDS } from './imageQuality'
-import { CURRENT_CONSENT_VERSION } from './types'
-import type { HeadPose, QualityStatus } from './types'
+import { runConcurrent } from './uploadQueue'
+import { CLOCK_POSITIONS, CURRENT_CONSENT_VERSION } from './types'
+import type { ClockPosition, HeadPose, QualityStatus } from './types'
 import './EnrollmentCapturePage.css'
 
 type WizardStep =
   | 'consent'
   | 'preflight'
   | 'countdown'
-  | 'video'
+  | 'sweep'
   | 'review'
   | 'uploading'
   | 'done'
 
-const MIN_DURATION_S = 10
 const SAMPLE_INTERVAL_MS = 150
+/** How many sweep-frame uploads are in flight at once. Each one is a
+ * presign round-trip plus a PUT, and there are up to 12 x BURST_SIZE of
+ * them; fully serial is needlessly slow, unbounded would hammer both our
+ * API and the browser's connection pool. */
+const UPLOAD_CONCURRENCY = 4
 const COUNTDOWN_START_S = 3
 /** How many recent preflight pose samples are averaged into the neutral
  * baseline (see `headPose.ts::calibrateToNeutral`). At SAMPLE_INTERVAL_MS
@@ -53,9 +66,19 @@ const NEUTRAL_SAMPLE_COUNT = 5
  * through the 12 clock positions. Every position must show a detected
  * face — there is no back-of-head / auto-pass sector.
  *
- * Media never touches local storage: the photo and the recorded webm live
- * only as in-memory Blobs in React state until they are uploaded straight
- * to S3 via BE-06's presigned URLs, after which they are dropped.
+ * Capture shape (changed 2026-09-02, was one `rotation.webm` of the whole
+ * sweep): the frontal photo, then a short BURST of stills auto-captured per
+ * clock position as the subject's head reaches it — no recording, no
+ * shutter button during the sweep. Positions may be reached in any order,
+ * which is what the video path could never police: with a video, a subject
+ * who jumped 12->1->2->3 then straight to 11->10->9 still produced one
+ * artifact the server had to decompose and guess at, whereas each still
+ * here carries the position it was captured for. See `burstBuffer.ts` for
+ * why a burst rather than a single still.
+ *
+ * Media never touches local storage: the frontal photo and every sweep
+ * frame live only as in-memory Blobs until they are uploaded straight to S3
+ * via BE-06's presigned URLs, after which they are dropped.
  *
  * EC-FE-02 (TSD-edge-cases.md A-2) matched-condition + preflight reject:
  * the consent step shows the matched-condition instruction text and gates
@@ -103,11 +126,11 @@ export default function EnrollmentCapturePage() {
   )
   const [elapsedS, setElapsedS] = useState(0)
   const [photoBlob, setPhotoBlob] = useState<Blob | null>(null)
-  const [videoBlob, setVideoBlob] = useState<Blob | null>(null)
   const [uploadStatus, setUploadStatus] = useState<{
     photo: 'idle' | 'uploading' | 'done' | 'error'
-    video: 'idle' | 'uploading' | 'done' | 'error'
-  }>({ photo: 'idle', video: 'idle' })
+    frames: 'idle' | 'uploading' | 'done' | 'error'
+  }>({ photo: 'idle', frames: 'idle' })
+  const [framesUploaded, setFramesUploaded] = useState(0)
   const [uploadError, setUploadError] = useState<string | null>(null)
   // 3-2-1 countdown shown right before recording actually starts (initial
   // start AND every retry) so the subject isn't caught off guard the
@@ -123,8 +146,18 @@ export default function EnrollmentCapturePage() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const recorderRef = useRef<MediaRecorder | null>(null)
-  const recordedChunksRef = useRef<Blob[]>([])
+  // Captured sweep frames, keyed by clock position. A ref, not state: the
+  // sampling loop writes to it every SAMPLE_INTERVAL_MS and re-rendering on
+  // each admitted frame would be wasted work -- `burstCounts` below is the
+  // cheap render-visible projection of it.
+  const burstRef = useRef<BurstBuffer>(createEmptyBurstBuffer())
+  const [burstCounts, setBurstCounts] = useState<Record<ClockPosition, number>>(
+    () => {
+      const counts = {} as Record<ClockPosition, number>
+      for (const position of CLOCK_POSITIONS) counts[position] = 0
+      return counts
+    },
+  )
   const sampleTimerRef = useRef<number | null>(null)
   const elapsedTimerRef = useRef<number | null>(null)
   // Neutral-pose calibration (see `headPose.ts::calibrateToNeutral` for WHY
@@ -136,7 +169,11 @@ export default function EnrollmentCapturePage() {
   const recentPreflightPosesRef = useRef<HeadPose[]>([])
   const neutralPoseRef = useRef<HeadPose | null>(null)
   const sectorsDone = countDone(tracker.status)
-  const canFinishVideo = isCaptureComplete(tracker.status)
+  const canFinishSweep = isCaptureComplete(tracker.status)
+  const totalFrames = CLOCK_POSITIONS.reduce(
+    (sum, position) => sum + burstCounts[position],
+    0,
+  )
   // Directional guidance animation ("animasi arahan") -- which not-yet-done
   // position ProgressRing's pulsing chevron should point at next.
   const targetPosition = nextTargetPosition(tracker.status)
@@ -216,7 +253,7 @@ export default function EnrollmentCapturePage() {
     const video = videoRef.current
     const stream = streamRef.current
     if (
-      (step === 'preflight' || step === 'countdown' || step === 'video') &&
+      (step === 'preflight' || step === 'countdown' || step === 'sweep') &&
       video &&
       stream &&
       video.srcObject !== stream
@@ -226,7 +263,18 @@ export default function EnrollmentCapturePage() {
     }
   }, [step])
 
-  // Continuous face/quality sampling while camera is live (preflight + video steps).
+  /** Encode the canvas' current contents as a JPEG blob. Promisified
+   * `toBlob` (not `toDataURL`) so the bytes are never materialised as a
+   * base64 string. */
+  const encodeCanvasJpeg = useCallback(
+    (canvas: HTMLCanvasElement): Promise<Blob | null> =>
+      new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.92)
+      }),
+    [],
+  )
+
+  // Continuous face/quality sampling while camera is live (preflight + sweep steps).
   const sampleFrame = useCallback(async () => {
     const video = videoRef.current
     const canvas = canvasRef.current
@@ -260,7 +308,7 @@ export default function EnrollmentCapturePage() {
       ].slice(-NEUTRAL_SAMPLE_COUNT)
     }
 
-    if (step !== 'video') return
+    if (step !== 'sweep') return
 
     const calibratedPose = pose ? calibrateToNeutral(pose, neutralPoseRef.current) : null
     const clockPosition = calibratedPose ? resolveClockPosition(calibratedPose) : null
@@ -272,10 +320,41 @@ export default function EnrollmentCapturePage() {
         quality: qualityAssessment.status,
       }),
     )
-  }, [step, qualityThresholds])
+
+    // THIS is the capture: a frame that shows a face, passes the live
+    // quality gate and resolves to a clock position IS a usable still for
+    // that position, so keep it. No shutter button and no dependence on
+    // whether the sector has been CONFIRMED yet -- the tracker's
+    // FRAMES_TO_CONFIRM streak is a UI/debounce concern, while every frame
+    // admitted here is independently valid. `shouldAdmit` is checked before
+    // encoding so a frame that would lose its slot never costs a
+    // `toBlob` on this loop.
+    if (
+      !detection.faceInFrame ||
+      clockPosition === null ||
+      qualityAssessment.status !== 'ok'
+    ) {
+      return
+    }
+    const buffer = burstRef.current[clockPosition]
+    if (!shouldAdmit(buffer, qualityAssessment.blurVariance)) return
+
+    const blob = await encodeCanvasJpeg(canvas)
+    if (!blob) return
+    const next = admitFrame(buffer, {
+      blob,
+      sharpness: qualityAssessment.blurVariance,
+    })
+    burstRef.current[clockPosition] = next
+    setBurstCounts((prev) =>
+      prev[clockPosition] === next.length
+        ? prev
+        : { ...prev, [clockPosition]: next.length },
+    )
+  }, [step, qualityThresholds, encodeCanvasJpeg])
 
   useEffect(() => {
-    if (step !== 'preflight' && step !== 'countdown' && step !== 'video') return
+    if (step !== 'preflight' && step !== 'countdown' && step !== 'sweep') return
     sampleTimerRef.current = window.setInterval(() => {
       void sampleFrame()
     }, SAMPLE_INTERVAL_MS)
@@ -305,51 +384,43 @@ export default function EnrollmentCapturePage() {
     )
   }, [])
 
-  const finishVideoCaptureRef = useRef<() => void>(() => {})
-
-  const finishVideoCapture = useCallback(() => {
-    if (elapsedTimerRef.current !== null) {
-      window.clearInterval(elapsedTimerRef.current)
-      elapsedTimerRef.current = null
-    }
-    const recorder = recorderRef.current
-    if (!recorder || recorder.state === 'inactive') return
-    recorder.onstop = () => {
-      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' })
-      recordedChunksRef.current = []
-      setVideoBlob(blob)
-      setStep('review')
-    }
-    recorder.stop()
-  }, [])
-  useEffect(() => {
-    finishVideoCaptureRef.current = finishVideoCapture
-  }, [finishVideoCapture])
-
-  const startVideoCapture = useCallback(() => {
-    const stream = streamRef.current
-    if (!stream) return
-    recordedChunksRef.current = []
+  /** Drop every buffered sweep frame and reset the tracker/counters that
+   * mirror it. Used by both "start the sweep" and "redo the sweep" — the
+   * blobs are simply dereferenced, nothing was ever written to disk or
+   * uploaded at this point. */
+  const resetSweep = useCallback(() => {
+    burstRef.current = createEmptyBurstBuffer()
+    const counts = {} as Record<ClockPosition, number>
+    for (const position of CLOCK_POSITIONS) counts[position] = 0
+    setBurstCounts(counts)
     setTracker(createInitialTrackerState())
     setElapsedS(0)
+  }, [])
 
-    const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' })
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) recordedChunksRef.current.push(event.data)
+  // Deliberately leaves the elapsed timer running: "Ulangi posisi ini" on
+  // the review step drops straight back into 'sweep', and stopping the
+  // clock here would freeze the readout for the rest of the session. It is
+  // cleared by `stopCamera` (upload, cancel, unmount) like every other
+  // timer this page owns.
+  const finishSweepCapture = useCallback(() => setStep('review'), [])
+
+  const startSweepCapture = useCallback(() => {
+    if (!streamRef.current) return
+    resetSweep()
+    if (elapsedTimerRef.current !== null) {
+      window.clearInterval(elapsedTimerRef.current)
     }
-    recorder.start(1000)
-    recorderRef.current = recorder
 
-    // No maximum duration: recording only ever stops via an explicit
-    // "Selesai" (gated on 12/12 positions + MIN_DURATION_S) or "Ulangi
-    // Rekam" click -- this interval exists purely to drive the REC mm:ss
-    // display, it never forces a stop or a transition on its own.
+    // Purely drives the elapsed mm:ss readout. There is no maximum
+    // duration and no minimum: with per-position capture, "how long the
+    // subject has been sweeping" says nothing about coverage — the frame
+    // count per position does, and that is what gates "Selesai".
     elapsedTimerRef.current = window.setInterval(() => {
       setElapsedS((prev) => prev + 1)
     }, 1000)
 
-    setStep('video')
-  }, [])
+    setStep('sweep')
+  }, [resetSweep])
 
   // Reset the countdown to COUNTDOWN_START_S exactly once, on the render
   // where `step` transitions TO 'countdown' (initial start or a retry) --
@@ -364,34 +435,40 @@ export default function EnrollmentCapturePage() {
   }
 
   // Drives the 'countdown' step: ticks COUNTDOWN_START_S down to 0 once per
-  // second, then hands off to `startVideoCapture` -- `startVideoCapture`
-  // itself has no reactive dependencies (stable identity across renders),
-  // so referencing it directly here is safe and doesn't need a ref.
+  // second, then hands off to `startSweepCapture` -- that callback's only
+  // dependency is `resetSweep`, which itself has none, so its identity is
+  // stable across renders and referencing it directly here is safe.
   useEffect(() => {
     if (step !== 'countdown') return
     const id = window.setInterval(() => {
       setCountdownValue((prev) => {
         if (prev <= 1) {
           window.clearInterval(id)
-          startVideoCapture()
+          startSweepCapture()
           return 0
         }
         return prev - 1
       })
     }, 1000)
     return () => window.clearInterval(id)
-  }, [step, startVideoCapture])
+  }, [step, startSweepCapture])
 
-  const retryVideoCapture = useCallback(() => {
-    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-      recorderRef.current.onstop = null
-      recorderRef.current.stop()
-    }
-    recordedChunksRef.current = []
-    setVideoBlob(null)
-    setTracker(createInitialTrackerState())
-    setElapsedS(0)
+  const retrySweepCapture = useCallback(() => {
+    resetSweep()
     setStep('countdown')
+  }, [resetSweep])
+
+  /** Redo ONE clock position without touching the other eleven — the whole
+   * point of capturing per position rather than as a single video. Drops
+   * that position's frames and un-confirms its sector, so the sampling loop
+   * starts collecting for it again the moment the subject looks there. */
+  const retakePosition = useCallback((position: ClockPosition) => {
+    burstRef.current[position] = []
+    setBurstCounts((prev) => ({ ...prev, [position]: 0 }))
+    setTracker((prev) => ({
+      status: { ...prev.status, [position]: 'pending' },
+      streaks: { ...prev.streaks, [position]: 0 },
+    }))
   }, [])
 
   // Retaking the photo invalidates the neutral baseline it was measured
@@ -413,31 +490,16 @@ export default function EnrollmentCapturePage() {
   const cancelCapture = useCallback(() => {
     if (
       !window.confirm(
-        'Batalkan capture ini? Foto dan video yang sudah direkam akan dihapus.',
+        'Batalkan capture ini? Foto yang sudah diambil akan dihapus.',
       )
     ) {
       return
     }
     stopCamera()
-    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-      recorderRef.current.onstop = null
-      recorderRef.current.stop()
-    }
-    recordedChunksRef.current = []
+    burstRef.current = createEmptyBurstBuffer()
     setPhotoBlob(null)
-    setVideoBlob(null)
     navigate('/enrollments')
   }, [stopCamera, navigate])
-
-  const videoPreviewUrl = useMemo(
-    () => (videoBlob ? URL.createObjectURL(videoBlob) : null),
-    [videoBlob],
-  )
-  useEffect(() => {
-    return () => {
-      if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl)
-    }
-  }, [videoPreviewUrl])
 
   const photoPreviewUrl = useMemo(
     () => (photoBlob ? URL.createObjectURL(photoBlob) : null),
@@ -450,7 +512,12 @@ export default function EnrollmentCapturePage() {
   }, [photoPreviewUrl])
 
   const uploadOne = useCallback(
-    async (kind: 'photo' | 'video', blob: Blob, contentType: string) => {
+    async (
+      kind: 'photo' | 'video',
+      blob: Blob,
+      contentType: string,
+      clockPosition?: ClockPosition,
+    ) => {
       const digest = await computeSha256(blob)
       const presigned = await presignMedia(
         enrollmentId ?? '',
@@ -458,6 +525,7 @@ export default function EnrollmentCapturePage() {
           contentType,
           size: blob.size,
           sha256Hex: digest.hex,
+          clockPosition,
         }),
       )
       await uploadToS3(presigned.upload_url, blob, digest.base64, contentType)
@@ -465,33 +533,81 @@ export default function EnrollmentCapturePage() {
     [enrollmentId],
   )
 
+  // Upload progress that must SURVIVE a failed attempt, so "Coba Lagi"
+  // resumes instead of restarting. With 36-odd sweep frames a restart is
+  // not merely slow: every re-uploaded frame mints another presigned key
+  // and another PENDING row, leaving duplicate objects in S3 for QC to sift
+  // through. `null` in `pendingFramesRef` means "no attempt started yet".
+  const pendingFramesRef = useRef<ReturnType<typeof flattenBurstBuffer> | null>(
+    null,
+  )
+  const photoUploadedRef = useRef(false)
+  const [framesToUpload, setFramesToUpload] = useState(0)
+
   const startUpload = useCallback(async () => {
-    if (!photoBlob || !videoBlob || !enrollmentId) return
+    if (!photoBlob || !enrollmentId) return
+    if (pendingFramesRef.current === null) {
+      const snapshot = flattenBurstBuffer(burstRef.current)
+      if (snapshot.length === 0) return
+      pendingFramesRef.current = snapshot
+      setFramesToUpload(snapshot.length)
+      setFramesUploaded(0)
+    }
+    const frames = pendingFramesRef.current
+
     setStep('uploading')
     setUploadError(null)
     stopCamera()
 
-    try {
-      setUploadStatus((prev) => ({ ...prev, photo: 'uploading' }))
-      await uploadOne('photo', photoBlob, 'image/jpeg')
-      setUploadStatus((prev) => ({ ...prev, photo: 'done' }))
-
-      setUploadStatus((prev) => ({ ...prev, video: 'uploading' }))
-      await uploadOne('video', videoBlob, 'video/webm')
-      setUploadStatus((prev) => ({ ...prev, video: 'done' }))
-
-      await completeEnrollment(enrollmentId)
-      setStep('done')
-    } catch (error) {
+    const fail = (error: unknown) => {
       setUploadError(
         error instanceof Error ? error.message : 'Upload gagal, coba lagi.',
       )
       setUploadStatus((prev) => ({
         photo: prev.photo === 'done' ? 'done' : 'error',
-        video: prev.video === 'done' ? 'done' : 'error',
+        frames: prev.frames === 'done' ? 'done' : 'error',
       }))
     }
-  }, [photoBlob, videoBlob, enrollmentId, uploadOne, stopCamera])
+
+    // The frontal photo goes FIRST and alone. It is the neutral-pose
+    // reference the server looks up as the earliest position-less photo
+    // (ai-training `get_frontal_photo`), and uploading it before any sweep
+    // frame keeps that ordering unambiguous.
+    if (!photoUploadedRef.current) {
+      setUploadStatus((prev) => ({ ...prev, photo: 'uploading' }))
+      try {
+        await uploadOne('photo', photoBlob, 'image/jpeg')
+      } catch (error) {
+        fail(error)
+        return
+      }
+      photoUploadedRef.current = true
+    }
+    setUploadStatus((prev) => ({ ...prev, photo: 'done' }))
+
+    setUploadStatus((prev) => ({ ...prev, frames: 'uploading' }))
+    const { pending, error } = await runConcurrent(
+      frames,
+      UPLOAD_CONCURRENCY,
+      ({ position, frame }) =>
+        uploadOne('photo', frame.blob, 'image/jpeg', position),
+      () => setFramesUploaded((done) => done + 1),
+    )
+    pendingFramesRef.current = pending
+    if (error !== null) {
+      fail(error)
+      return
+    }
+    setUploadStatus((prev) => ({ ...prev, frames: 'done' }))
+
+    try {
+      await completeEnrollment(enrollmentId)
+    } catch (completionError) {
+      fail(completionError)
+      return
+    }
+    setStep('done')
+  }, [photoBlob, enrollmentId, uploadOne, stopCamera])
 
   if (!enrollmentId) {
     return <p role="alert">ID sesi enrollment tidak ditemukan pada URL.</p>
@@ -541,11 +657,11 @@ export default function EnrollmentCapturePage() {
         </div>
       )}
 
-      {(step === 'preflight' || step === 'countdown' || step === 'video') && (
+      {(step === 'preflight' || step === 'countdown' || step === 'sweep') && (
         <div className="capture-stage">
           <div className="capture-viewport">
             <video ref={videoRef} className="capture-viewport__video" muted playsInline />
-            {step === 'video' && (
+            {step === 'sweep' && (
               <div className="capture-ring-overlay">
                 <ProgressRing status={tracker.status} targetPosition={targetPosition} />
               </div>
@@ -558,9 +674,9 @@ export default function EnrollmentCapturePage() {
               }
               aria-hidden="true"
             />
-            {step === 'video' && (
+            {step === 'sweep' && (
               <div className="capture-rec-indicator">
-                <span className="capture-rec-dot" /> REC{' '}
+                <span className="capture-rec-dot" /> {totalFrames} foto{' '}
                 <span className="mono">
                   {String(Math.floor(elapsedS / 60)).padStart(2, '0')}:
                   {String(elapsedS % 60).padStart(2, '0')}
@@ -572,7 +688,9 @@ export default function EnrollmentCapturePage() {
                 <span key={countdownValue} className="capture-countdown-number mono">
                   {countdownValue > 0 ? countdownValue : 'Mulai!'}
                 </span>
-                <span className="capture-countdown-text">Bersiap, rekam akan mulai…</span>
+                <span className="capture-countdown-text">
+                  Bersiap, foto akan diambil otomatis…
+                </span>
               </div>
             )}
           </div>
@@ -584,16 +702,19 @@ export default function EnrollmentCapturePage() {
               <li data-ok={quality === 'ok'}>
                 {quality === 'ok' ? '✔' : '✕'} Pencahayaan &amp; ketajaman baik
               </li>
-              {step === 'video' && (
-                <li data-ok={canFinishVideo}>
-                  {sectorsDone}/12 posisi jam tercakup
+              {step === 'sweep' && (
+                <li data-ok={canFinishSweep}>
+                  {sectorsDone}/12 posisi jam tercakup ({totalFrames} foto)
                 </li>
               )}
             </ul>
 
-            {step === 'video' && targetPosition !== null && (
+            {step === 'sweep' && targetPosition !== null && (
               <p className="capture-target-hint">
                 Selanjutnya: arahkan wajah ke jam <strong>{targetPosition}</strong>
+                {burstCounts[targetPosition] > 0 && (
+                  <> — {burstCounts[targetPosition]}/{BURST_SIZE} foto</>
+                )}
               </p>
             )}
 
@@ -630,25 +751,25 @@ export default function EnrollmentCapturePage() {
                     className="btn btn--primary"
                     onClick={() => setStep('countdown')}
                   >
-                    Lanjut ke Video 360°
+                    Lanjut ke Capture 360°
                   </button>
                 </div>
               </div>
             )}
 
-            {step === 'video' && (
+            {step === 'sweep' && (
               <div className="capture-actions">
                 <button type="button" className="btn" onClick={cancelCapture}>
                   Batal
                 </button>
-                <button type="button" className="btn" onClick={retryVideoCapture}>
-                  Ulangi Rekam
+                <button type="button" className="btn" onClick={retrySweepCapture}>
+                  Ulangi Semua
                 </button>
                 <button
                   type="button"
                   className="btn btn--primary"
-                  disabled={!canFinishVideo || elapsedS < MIN_DURATION_S}
-                  onClick={finishVideoCapture}
+                  disabled={!canFinishSweep}
+                  onClick={finishSweepCapture}
                 >
                   Selesai
                 </button>
@@ -663,14 +784,31 @@ export default function EnrollmentCapturePage() {
           <h2>Review</h2>
           <div className="capture-review-grid">
             {photoPreviewUrl && <img src={photoPreviewUrl} alt="Foto frontal" className="capture-thumb" />}
-            {videoPreviewUrl && (
-              <video src={videoPreviewUrl} controls className="capture-thumb" />
-            )}
           </div>
-          <p>{sectorsDone}/12 posisi jam tercakup. QC akhir dilakukan di server.</p>
+          <p>
+            {sectorsDone}/12 posisi jam tercakup, total {totalFrames} foto. QC
+            akhir dilakukan di server.
+          </p>
+          <ul className="capture-position-list">
+            {CLOCK_POSITIONS.map((position) => (
+              <li key={position} data-ok={burstCounts[position] > 0}>
+                Jam {position}: {burstCounts[position]}/{BURST_SIZE} foto{' '}
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  onClick={() => {
+                    retakePosition(position)
+                    setStep('sweep')
+                  }}
+                >
+                  Ulangi posisi ini
+                </button>
+              </li>
+            ))}
+          </ul>
           <div className="capture-actions">
-            <button type="button" className="btn" onClick={retryVideoCapture}>
-              Rekam Ulang Video
+            <button type="button" className="btn" onClick={retrySweepCapture}>
+              Ulangi Semua Posisi
             </button>
             <button type="button" className="btn btn--primary" onClick={() => void startUpload()}>
               Unggah &amp; Selesaikan
@@ -683,12 +821,18 @@ export default function EnrollmentCapturePage() {
         <div className="capture-card">
           <h2>Mengunggah…</h2>
           <ul>
-            <li>Foto: {uploadStatus.photo}</li>
-            <li>Video: {uploadStatus.video}</li>
+            <li>Foto frontal: {uploadStatus.photo}</li>
+            <li>
+              Foto posisi jam: {uploadStatus.frames} ({framesUploaded}/
+              {framesToUpload})
+            </li>
           </ul>
           {uploadError && (
             <>
               <p role="alert" className="capture-error">{uploadError}</p>
+              <p>
+                Mencoba lagi hanya mengunggah foto yang belum berhasil terkirim.
+              </p>
               <button type="button" className="btn btn--primary" onClick={() => void startUpload()}>
                 Coba Lagi
               </button>
