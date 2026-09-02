@@ -131,7 +131,7 @@ describe('EnrollmentCapturePage — EC-FE-05 consent text + consent_version subm
     ).toBeInTheDocument()
   })
 
-  it('sends consent_version="v1.1" (CURRENT_CONSENT_VERSION) when agreeing and starting', async () => {
+  it('sends consent_version="v1.2" (CURRENT_CONSENT_VERSION) when agreeing and starting', async () => {
     const grantConsentSpy = vi.spyOn(apiClient, 'grantConsent').mockResolvedValue({
       id: 'session-123',
       state: 'CONSENTED',
@@ -140,7 +140,7 @@ describe('EnrollmentCapturePage — EC-FE-05 consent text + consent_version subm
     renderPage('session-123')
     agreeAndStart()
 
-    await waitFor(() => expect(grantConsentSpy).toHaveBeenCalledWith('session-123', 'v1.1'))
+    await waitFor(() => expect(grantConsentSpy).toHaveBeenCalledWith('session-123', 'v1.2'))
   })
 
   it('attaches the acquired camera stream to the <video> element once the preflight step mounts (regression: the <video> element does not exist yet while still on the consent step, so assigning srcObject at that point was silently a no-op and the screen stayed blank)', async () => {

@@ -106,9 +106,17 @@ export interface ConsentResponse {
  * prior `"v1.0"` to add the three clauses now shown on the consent step
  * (synthetic masked template, door-camera event-frame calibration/probe
  * use, adaptive probe-buffer refresh) per ASM-EC-05
- * (`documentation/tsd/TSD-edge-cases.md`). MUST match the backend constant
- * `CURRENT_CONSENT_VERSION` in `backend/app/models/consent.py` (EC-BE-09) —
- * duplicated here rather than imported, since there is no shared
- * frontend/backend constants module in this codebase yet.
+ * (`documentation/tsd/TSD-edge-cases.md`).
+ *
+ * Bumped again to `"v1.2"` (2026-09-02): enrollment no longer records a
+ * video of the head sweep, it takes a burst of still photos at each of the
+ * 12 clock positions (FR-ENR-02). The v1.1 text promised "foto wajah dan
+ * video orientasi kepala", which is no longer what happens — see
+ * `components/EnrollmentConsentCopy.tsx` for the updated wording.
+ *
+ * MUST match the backend constant `CURRENT_CONSENT_VERSION` in
+ * `backend/app/models/consent.py` (EC-BE-09) — duplicated here rather than
+ * imported, since there is no shared frontend/backend constants module in
+ * this codebase yet.
  */
-export const CURRENT_CONSENT_VERSION = 'v1.1'
+export const CURRENT_CONSENT_VERSION = 'v1.2'
