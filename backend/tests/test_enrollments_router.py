@@ -350,8 +350,11 @@ def test_current_consent_version_was_bumped_from_v1_0() -> None:
     (EC-TR-09/EC-BE-07). The version string itself lives in exactly one
     place: `app.models.consent.CURRENT_CONSENT_VERSION`.
     """
-    assert CURRENT_CONSENT_VERSION == "v1.1"
-    assert CURRENT_CONSENT_VERSION != "v1.0"
+    # v1.2 (2026-09-02): enrollment records per-position PHOTOS, not a
+    # video, so what the subject consents to being recorded changed --
+    # see the constant's own docstring.
+    assert CURRENT_CONSENT_VERSION == "v1.2"
+    assert CURRENT_CONSENT_VERSION not in {"v1.0", "v1.1"}
 
 
 def test_grant_consent_stores_new_current_version(

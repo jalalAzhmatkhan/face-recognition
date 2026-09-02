@@ -114,7 +114,7 @@ describe('presignMedia / completeEnrollment (authenticated requests)', () => {
       }),
     )
 
-    expect(CURRENT_CONSENT_VERSION).toBe('v1.1')
+    expect(CURRENT_CONSENT_VERSION).toBe('v1.2')
     const result = await grantConsent('enroll-1', CURRENT_CONSENT_VERSION)
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -122,7 +122,7 @@ describe('presignMedia / completeEnrollment (authenticated requests)', () => {
     expect(url).toContain('/api/v1/enrollments/enroll-1/consent')
     expect(init.method).toBe('POST')
     expect(init.headers.get('Authorization')).toBe('Bearer test-token')
-    expect(JSON.parse(init.body)).toEqual({ consent_version: 'v1.1' })
+    expect(JSON.parse(init.body)).toEqual({ consent_version: 'v1.2' })
     expect(result.state).toBe('CONSENTED')
   })
 

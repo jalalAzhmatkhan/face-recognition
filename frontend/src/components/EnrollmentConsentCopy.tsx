@@ -1,7 +1,7 @@
 /**
  * Enrollment consent copywriting — the exact text a subject/operator must
  * read before consent can be granted, for the current `CURRENT_CONSENT_VERSION`
- * (`features/enrollment-capture/types.ts`, EC-BE-09's `v1.1`).
+ * (`features/enrollment-capture/types.ts`, currently `v1.2`).
  *
  * Shared between `features/enrollment-capture/EnrollmentCapturePage.tsx`
  * (the self-service capture wizard's own consent step) and
@@ -18,22 +18,24 @@ export default function EnrollmentConsentCopy() {
   return (
     <>
       <p style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}>
-        Subjek akan direkam foto wajah dan video orientasi kepala (menoleh dan
-        menunduk/mendongak mengikuti pola 12 posisi jam, wajah tetap menghadap
-        kamera sepanjang proses) untuk keperluan pendaftaran biometrik. Media
-        akan diunggah langsung ke penyimpanan aman dan tidak disimpan pada
-        perangkat ini.
+        Subjek akan <strong>difoto</strong> untuk keperluan pendaftaran
+        biometrik: satu foto wajah dari depan, lalu beberapa foto yang{' '}
+        <strong>diambil otomatis</strong> saat kepala berada di tiap posisi
+        dari pola 12 posisi jam (menoleh dan menunduk/mendongak, wajah tetap
+        menghadap kamera sepanjang proses).{' '}
+        <strong>Tidak ada video yang direkam.</strong> Foto akan diunggah
+        langsung ke penyimpanan aman dan tidak disimpan pada perangkat ini.
       </p>
       <p style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}>
         Tampil seperti Anda datang bekerja sehari-hari (hijab, kacamata,
         jenggot seperti biasa boleh dipakai). <strong>Lepaskan masker dan
-        kacamata hitam (sunglasses)</strong> selama perekaman — wajah harus
-        terlihat jelas dari dagu sampai dahi.
+        kacamata hitam (sunglasses)</strong> selama pengambilan foto — wajah
+        harus terlihat jelas dari dagu sampai dahi.
       </p>
       <ul style={{ font: 'var(--text-consent-body)', color: 'var(--text-secondary)' }}>
         <li>
           Sistem akan membuat <strong>template wajah sintetis</strong>{' '}
-          (misalnya versi bermasker) secara otomatis dari hasil rekaman ini,
+          (misalnya versi bermasker) secara otomatis dari foto-foto ini,
           khusus untuk keperluan pengenalan wajah saat memakai masker.
         </li>
         <li>

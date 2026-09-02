@@ -100,7 +100,7 @@ const NEUTRAL_SAMPLE_COUNT = 5
  * `backend/app/models/consent.py`): the consent step also now shows three
  * additional clauses (synthetic masked template, door-camera event-frame
  * calibration/probe use, adaptive probe-buffer refresh) and, on clicking
- * "Saya Setuju & Mulai", sends `CURRENT_CONSENT_VERSION` ("v1.1") to
+ * "Saya Setuju & Mulai", sends `CURRENT_CONSENT_VERSION` ("v1.2") to
  * `POST /enrollments/{id}/consent`. That call is intentionally best-effort:
  * the backend only accepts a new consent grant while the session is
  * `CREATED`, but most sessions reach this wizard already past that state

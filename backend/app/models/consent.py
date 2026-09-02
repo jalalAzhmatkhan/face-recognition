@@ -29,7 +29,17 @@ from app.models.mixins import UUIDPKMixin
 #: see `enrollment_service.grant_consent`). Frontend (EC-FE-05) should
 #: import/reference this exact string when sending new consent grants; the
 #: consent clause TEXT itself is a frontend concern (not modeled here).
-CURRENT_CONSENT_VERSION = "v1.1"
+#:
+#: Bumped to `"v1.2"` (2026-09-02) because what the subject is consenting to
+#: being RECORDED changed: enrollment no longer records a video of the head
+#: sweep, it takes a short burst of still photos at each of the 12 clock
+#: positions (FR-ENR-02, migration `e4b9d2f6a8c3`). The v1.1 text promised
+#: "foto wajah dan video orientasi kepala", which is no longer what happens
+#: -- a consent describing the wrong recording is not informed consent, so
+#: this is a version bump rather than a silent copy edit. Grants recorded
+#: under v1.0/v1.1 remain valid and are still honored, per the append-only
+#: rule above.
+CURRENT_CONSENT_VERSION = "v1.2"
 
 
 class Consent(UUIDPKMixin, Base):
