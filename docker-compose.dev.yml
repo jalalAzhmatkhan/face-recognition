@@ -90,8 +90,8 @@ services:
       AWS_REGION: ${AWS_REGION:-}
       AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-}
       AWS_S3_PREFIX: ${AWS_S3_PREFIX:-face-recognition/}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-minioadmin}}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:-minioadmin_dev_password}}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       # Two endpoints on purpose, and they are NOT interchangeable.
       #
       # This container reaches MinIO over the compose network as
@@ -109,8 +109,21 @@ services:
       #
       # Both unset in staging/prod, where real S3 is one endpoint for
       # everyone -- see app/core/config.py::aws_s3_public_endpoint_url.
-      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://minio:9000}
-      AWS_S3_PUBLIC_ENDPOINT_URL: ${AWS_S3_PUBLIC_ENDPOINT_URL:-http://localhost:${MINIO_PORT:-9000}}
+      # Which object store: "s3" (real AWS, the default) or "minio" (the
+      # container below). One switch rather than hand-pairing two endpoint
+      # URLs, because getting that pairing wrong fails silently -- presign
+      # still returns 201 with a well-formed URL and only the browser's PUT
+      # breaks. Defaults to "s3" so a deployment pointed at a real bucket is
+      # never hijacked by a dev-oriented default.
+      MEDIA_STORAGE_BACKEND: ${MEDIA_STORAGE_BACKEND:-s3}
+      MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://minio:9000}
+      MINIO_PUBLIC_ENDPOINT_URL: ${MINIO_PUBLIC_ENDPOINT_URL:-http://localhost:${MINIO_PORT:-9000}}
+      # Explicit overrides for any OTHER S3-compatible store; they win over
+      # the switch above. Forwarding them at all is itself a fix -- compose
+      # only passes variables it lists here, so before this they could not
+      # be set from .env no matter what the operator wrote.
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-}
+      AWS_S3_PUBLIC_ENDPOINT_URL: ${AWS_S3_PUBLIC_ENDPOINT_URL:-}
       # Forgot-password email (BE-03 follow-up): MailHog accepts any message
       # without real delivery -- view what was "sent" at http://localhost:8025.
       SMTP_HOST: mailhog
@@ -156,9 +169,11 @@ services:
       AWS_REGION: ${AWS_REGION:-}
       AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-}
       AWS_S3_PREFIX: ${AWS_S3_PREFIX:-face-recognition/}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-minioadmin}}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:-minioadmin_dev_password}}
-      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://minio:9000}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      MEDIA_STORAGE_BACKEND: ${MEDIA_STORAGE_BACKEND:-s3}
+      MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://minio:9000}
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-}
     volumes:
       - ./backend:/app
       - backend_venv:/app/.venv

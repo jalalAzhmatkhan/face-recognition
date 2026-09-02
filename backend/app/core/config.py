@@ -52,6 +52,49 @@ class Settings(BaseSettings):
     #: Unset in staging/prod, where both sides address real S3 identically.
     aws_s3_public_endpoint_url: str | None = None
 
+    # --- Which object store to talk to ------------------------------------
+    #
+    # One switch instead of remembering to set (or unset) two endpoint URLs
+    # consistently. Getting that pairing wrong does not fail loudly: the
+    # presign call still returns 201 with a well-formed URL, and only the
+    # browser's PUT fails.
+    #
+    #   "s3"    -> real AWS S3. boto3 resolves the endpoint from `aws_region`
+    #              and uses virtual-hosted addressing. The default, so a
+    #              deployment pointed at a real bucket cannot be hijacked by
+    #              a dev-oriented default.
+    #   "minio" -> the docker-compose MinIO, using the two endpoints below.
+    #
+    # `aws_s3_endpoint_url` / `aws_s3_public_endpoint_url` still override
+    # either mode, for anything else S3-compatible.
+    media_storage_backend: Literal["s3", "minio"] = "s3"
+    #: How THIS process reaches MinIO (compose DNS name).
+    minio_endpoint_url: str = "http://minio:9000"
+    #: How the BROWSER reaches the same MinIO (published port on the host).
+    #: Separate because SigV4 signs the Host header — see
+    #: `aws_s3_public_endpoint_url`.
+    minio_public_endpoint_url: str = "http://localhost:9000"
+
+    @property
+    def uses_minio(self) -> bool:
+        return self.media_storage_backend == "minio"
+
+    @property
+    def resolved_s3_endpoint_url(self) -> str | None:
+        """Endpoint for this process's own S3 calls. `None` means "let boto3
+        resolve real AWS", which is what `"s3"` mode wants."""
+        if self.aws_s3_endpoint_url:
+            return self.aws_s3_endpoint_url
+        return self.minio_endpoint_url if self.uses_minio else None
+
+    @property
+    def resolved_s3_public_endpoint_url(self) -> str | None:
+        """Endpoint the BROWSER will use, i.e. the one presigned URLs are
+        signed for. `None` means "same as above"."""
+        if self.aws_s3_public_endpoint_url:
+            return self.aws_s3_public_endpoint_url
+        return self.minio_public_endpoint_url if self.uses_minio else None
+
     # Staff AuthN/AuthZ (BE-03, NFR-SEC-04). Local email+password JWT auth
     # against `staff_accounts` — `oidc_sub` stays in the schema (nullable) as
     # prep for a future external-OIDC federation phase, but is NOT used here.

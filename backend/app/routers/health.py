@@ -33,6 +33,14 @@ class ReadinessResponse(BaseModel):
     schema_applied_revision: str | None
     schema_expected_revision: str | None
     detail: str
+    # Reported, not probed: no network call is made here, so readiness never
+    # flaps on an object-store hiccup. It is here because "which store am I
+    # actually pointed at" is otherwise invisible until a browser upload
+    # fails, and the answer is not guessable from the outside.
+    storage_backend: str
+    storage_bucket: str | None
+    storage_endpoint: str | None
+    storage_browser_endpoint: str | None
 
 
 @router.get("/healthz", response_model=HealthResponse)
@@ -47,6 +55,17 @@ def readyz(response: Response) -> ReadinessResponse:
     code. The body says which revision is applied, which is expected, and
     the command to fix it — the information that was missing when a pending
     migration presented as an unexplained 500 on an unrelated endpoint."""
+    settings = get_settings()
+    storage = {
+        "storage_backend": settings.media_storage_backend,
+        "storage_bucket": settings.aws_s3_bucket_name,
+        "storage_endpoint": settings.resolved_s3_endpoint_url or "aws-default",
+        "storage_browser_endpoint": (
+            settings.resolved_s3_public_endpoint_url
+            or settings.resolved_s3_endpoint_url
+            or "aws-default"
+        ),
+    }
     try:
         with get_engine().connect() as connection:
             connection.execute(text("SELECT 1"))
@@ -60,6 +79,7 @@ def readyz(response: Response) -> ReadinessResponse:
             schema_applied_revision=None,
             schema_expected_revision=schema_check.expected_head(),
             detail=f"Database is not reachable: {type(exc).__name__}",
+            **storage,
         )
 
     if not result.in_sync:
@@ -71,4 +91,5 @@ def readyz(response: Response) -> ReadinessResponse:
         schema_applied_revision=result.applied,
         schema_expected_revision=result.expected,
         detail=result.detail,
+        **storage,
     )

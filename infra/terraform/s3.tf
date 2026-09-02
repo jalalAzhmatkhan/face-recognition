@@ -29,6 +29,30 @@ resource "aws_s3_bucket_public_access_block" "media" {
   restrict_public_buckets = true
 }
 
+# CORS for direct browser -> S3 upload (FR-ENR-04). Without this the
+# enrollment wizard cannot upload at all: the browser blocks the response to
+# its presigned PUT and the failure surfaces only as "Failed to fetch".
+#
+# `x-amz-checksum-sha256` MUST be allowed -- BE-06 signs the presigned URL
+# with a checksum constraint, so the browser sends that header and a
+# preflight that does not permit it fails.
+#
+# ETag is exposed because it is the only response header a browser can read
+# by default; the app does not currently need it, but debugging an upload
+# without it is guesswork.
+resource "aws_s3_bucket_cors_configuration" "media" {
+  count  = length(var.browser_upload_origins) > 0 ? 1 : 0
+  bucket = aws_s3_bucket.media.id
+
+  cors_rule {
+    allowed_origins = var.browser_upload_origins
+    allowed_methods = ["PUT", "GET", "HEAD"]
+    allowed_headers = ["content-type", "x-amz-checksum-sha256", "x-amz-content-sha256", "x-amz-date"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3000
+  }
+}
+
 resource "aws_s3_bucket_versioning" "media" {
   bucket = aws_s3_bucket.media.id
   versioning_configuration {

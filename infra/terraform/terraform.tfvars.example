@@ -25,3 +25,9 @@ tags = {
   Owner   = "backend-engineer"
   Project = "face-recognition"
 }
+
+# Origins the staff console is served from. REQUIRED for enrollment capture:
+# the wizard PUTs media straight from the browser to a presigned URL, and
+# without a matching CORS rule the browser discards the reply and the upload
+# fails as "Failed to fetch". Include scheme and port.
+browser_upload_origins = ["http://localhost:5173"]

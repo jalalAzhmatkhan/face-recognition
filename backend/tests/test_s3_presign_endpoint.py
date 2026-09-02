@@ -27,6 +27,54 @@ def _settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **base)  # type: ignore[arg-type]
 
 
+def test_s3_mode_talks_to_real_aws_and_ignores_the_minio_endpoints() -> None:
+    """The default. A deployment pointed at a real bucket must not be
+    hijacked by dev-oriented defaults sitting in the same settings object."""
+    settings = _settings(
+        media_storage_backend="s3",
+        minio_endpoint_url="http://minio:9000",
+        minio_public_endpoint_url="http://localhost:9000",
+    )
+
+    assert settings.resolved_s3_endpoint_url is None
+    for client in (build_s3_client(settings), build_s3_client(settings, for_presign=True)):
+        assert "amazonaws.com" in client.meta.endpoint_url
+
+
+def test_minio_mode_splits_internal_and_browser_endpoints() -> None:
+    settings = _settings(media_storage_backend="minio")
+
+    assert "minio:9000" in build_s3_client(settings).meta.endpoint_url
+    assert "localhost:9000" in build_s3_client(settings, for_presign=True).meta.endpoint_url
+
+
+def test_minio_mode_signs_a_url_the_browser_can_actually_use() -> None:
+    settings = _settings(media_storage_backend="minio")
+    client = build_s3_client(settings, for_presign=True)
+
+    url = client.generate_presigned_url(
+        "put_object", Params={"Bucket": "frac-media", "Key": "a/b.jpg"}, ExpiresIn=300
+    )
+
+    # Path-style, browser-reachable host, and actually signed.
+    assert url.startswith("http://localhost:9000/frac-media/a/b.jpg")
+    assert "X-Amz-Signature=" in url
+
+
+def test_an_explicit_endpoint_overrides_either_mode() -> None:
+    # Escape hatch for any other S3-compatible store.
+    for mode in ("s3", "minio"):
+        settings = _settings(
+            media_storage_backend=mode,
+            aws_s3_endpoint_url="http://ceph:7480",
+            aws_s3_public_endpoint_url="http://ceph.example.test",
+        )
+        assert "ceph:7480" in build_s3_client(settings).meta.endpoint_url
+        assert (
+            "ceph.example.test" in build_s3_client(settings, for_presign=True).meta.endpoint_url
+        )
+
+
 def test_presign_client_uses_the_public_endpoint_when_set() -> None:
     settings = _settings(
         aws_s3_endpoint_url="http://minio:9000",
