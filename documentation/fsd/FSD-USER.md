@@ -20,9 +20,10 @@ Cara kerjanya seperti satpam digital yang sangat teliti:
 - Karyawan menyetujui dulu (persetujuan/consent dicatat) karena data wajah adalah data pribadi yang sensitif.
 - Karyawan difoto dari depan dulu (foto ini juga dipakai sistem sebagai "posisi kepala normal" orang tersebut — lihat di bawah).
 - Lalu karyawan **menggerakkan KEPALA** (badan tetap menghadap kamera, tidak berputar): mulai mendongak ke arah "jam 12", lalu bergerak searah jarum jam melalui posisi kepala lain (menoleh, menunduk, dst.) sampai kembali ke posisi "jam 12". Wajah tetap terlihat kamera sepanjang proses. Tujuannya agar sistem mengenal wajah dari berbagai sudut kepala, bukan hanya dari depan.
-- **Setiap kali kepala tepat berada di satu posisi jam, aplikasi otomatis memotret beberapa jepretan untuk posisi itu** — karyawan tidak perlu menekan tombol apa pun. Tidak ada video yang direkam.
-- Karena setiap posisi dipotret sendiri-sendiri, **urutannya bebas** dan **satu posisi bisa diulang sendiri** tanpa harus mengulang semuanya dari awal.
-- Aplikasi memandu selama proses: "wajah kurang terang", "gerakkan lebih pelan", indikator posisi jam mana yang sudah tertangkap, dan seterusnya.
+- Arah yang diminta ada **4**: **agak mendongak**, **agak menoleh ke kanan**, **agak menunduk**, **agak menoleh ke kiri**. Tidak perlu gerakan besar — cukup "agak".
+- **Setiap kali kepala sampai di salah satu arah itu, aplikasi otomatis memotret beberapa jepretan** — karyawan tidak perlu menekan tombol apa pun. Tidak ada video yang direkam.
+- Karena setiap arah dipotret sendiri-sendiri, **urutannya bebas** dan **satu arah bisa diulang sendiri** tanpa harus mengulang semuanya dari awal.
+- Aplikasi memandu selama proses: "wajah kurang terang", "gerakkan lebih pelan", indikator arah mana yang sudah tertangkap, dan seterusnya.
 - Sistem menyesuaikan diri dengan **posisi kepala normal** tiap orang. Kalau kepala seseorang secara alami sedikit menunduk atau mendongak saat santai, sistem memperhitungkannya — supaya posisi bagian bawah (jam 4–8) tidak jadi mustahil dicapai.
 - Jika hasilnya kurang bagus (buram, gelap, ada posisi yang belum lengkap), sistem meminta pengulangan — cukup posisi yang bermasalah saja.
 - **Semua foto langsung dikirim ke penyimpanan cloud yang aman (AWS S3)** — tidak ada yang disimpan di komputer lokal. Ini aturan mutlak.

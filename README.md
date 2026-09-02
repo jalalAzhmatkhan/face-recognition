@@ -32,7 +32,7 @@ Menggantikan otorisasi akses manual (kartu/PIN) di gedung/kantor dengan **verifi
 **Alur inti (core loop):**
 
 ```
-Enroll (foto depan + foto per posisi jam, orientasi kepala) → Simpan media di AWS S3
+Enroll (foto depan + foto 4 arah kepala: atas/kanan/bawah/kiri) → Simpan media di AWS S3
   → Quality Check + ekstraksi fitur wajah → Bangun galeri embedding
   → Model dipakai untuk inferensi real-time di pintu
   → Keputusan Grant/Deny + audit log
@@ -42,7 +42,7 @@ Enroll (foto depan + foto per posisi jam, orientasi kepala) → Simpan media di 
 
 1. **Media (foto/video) tidak pernah disimpan di disk lokal service manapun** — upload langsung browser→S3 via presigned URL; worker hanya streaming in-memory/temp-file yang segera dihapus.
 2. **Urutan metrik evaluasi model**: Recall (utama) → F1 → Precision, ditambah *inference speed* dalam milidetik sebagai metrik operasional.
-3. **Enrollment "360°"** berarti **orientasi kepala** (yaw + pitch: menoleh, menunduk, mendongak mengikuti 12 posisi jam) — **bukan** badan/kamera yang berputar. Wajah selalu menghadap kamera sepanjang capture, sehingga tidak ada segmen "belakang kepala" yang perlu dibuang.
+3. **Enrollment "360°"** berarti **orientasi kepala** (yaw + pitch: menoleh, menunduk, mendongak — dicapture pada 4 arah: atas, kanan, bawah, kiri) — **bukan** badan/kamera yang berputar. Wajah selalu menghadap kamera sepanjang capture, sehingga tidak ada segmen "belakang kepala" yang perlu dibuang.
 
 ---
 
@@ -309,10 +309,10 @@ sequenceDiagram
     API-->>FE: siap capture
 
     Note over FE,Karyawan: Wizard capture 360° (orientasi kepala,<br/>bukan badan berputar)
-    FE->>Karyawan: Panduan: 1 foto depan, lalu<br/>menoleh/menunduk/mendongak (12 posisi jam)
+    FE->>Karyawan: Panduan: 1 foto depan, lalu 4 arah:<br/>mendongak, kanan, menunduk, kiri
     FE->>API: POST /transition {target_state: CAPTURING}
     FE->>S3: Upload foto depan (presigned URL)
-    loop Tiap posisi jam yang terdeteksi tercapai
+    loop Tiap arah kepala yang terdeteksi tercapai
         FE->>FE: Auto-jepret burst 3-5 frame
         FE->>S3: Upload frame posisi itu (presigned URL)
     end
@@ -340,7 +340,7 @@ sequenceDiagram
 **Poin penting untuk pembaca non-teknis:**
 - **Consent dulu, baru rekam** — sistem tidak akan membuka akses ke kamera sebelum persetujuan tercatat.
 - **Rekaman langsung ke cloud** — perangkat admin/karyawan tidak pernah menyimpan file foto/video; begitu selesai diunggah, tidak ada jejak file di komputer/browser.
-- **Jepret otomatis per arah** — karyawan cukup menggerakkan kepala; aplikasi memotret sendiri begitu tiap posisi jam tercapai. Urutannya bebas, dan satu posisi bisa diulang tanpa mengulang semuanya.
+- **Jepret otomatis per arah** — karyawan cukup menggerakkan kepala ke **4 arah**: agak mendongak, agak ke kanan, agak menunduk, agak ke kiri. Aplikasi memotret sendiri begitu tiap arah tercapai. Urutannya bebas, dan satu arah bisa diulang tanpa mengulang semuanya.
 - **Menyesuaikan posisi kepala normal tiap orang** — kalau kepala seseorang secara alami sedikit menunduk/mendongak saat santai, sistem memperhitungkannya, sehingga posisi bawah (jam 4–8) tetap wajar dicapai.
 - **Validasi otomatis** — kalau hasilnya kurang jelas (goyang, gelap, wajah tidak lengkap terlihat), sistem menolak dengan alasan spesifik dan meminta pengulangan — bukan diterima seadanya.
 
@@ -515,7 +515,7 @@ flowchart TD
     A["Video orientasi kepala (webm)<br/>dari S3, in-memory"] --> B["Ekstraksi frame<br/>(sampling ~6 fps)"]
     B --> C["Per frame:<br/>Deteksi wajah + 468 landmark<br/><i>MediaPipe Face Landmarker</i>"]
     C --> D["Estimasi pose (yaw, pitch)<br/>via solvePnP terhadap model wajah 3D generik"]
-    D --> E["Petakan ke salah satu dari<br/>12 posisi jam terdekat"]
+    D --> E["Petakan ke arah kepala<br/>terdekat (atas/kanan/bawah/kiri)"]
     E --> F["Quality check per frame:<br/>blur (variance Laplacian),<br/>brightness, rasio ukuran wajah"]
     F --> G{"Cakupan posisi jam<br/>≥ ambang batas (mis. 75%)?"}
     G -->|Tidak| H["Sesi = REJECTED_QUALITY<br/>+ alasan per posisi jam"]

@@ -56,16 +56,16 @@ describe('estimateHeadPose', () => {
     expect(onScreenLeft!.yaw).toBeCloseTo(-onScreenRight!.yaw, 5)
   })
 
-  it('regression: turning toward the on-screen upper-right resolves to clock position 1-2, never the mirrored 10-11', () => {
+  it('regression: turning toward the on-screen right resolves to the RIGHT of the ring, never the mirrored left', () => {
     // Raw nose offset (x:-20, up y:-20) is what a subject turning toward
-    // their own on-screen upper-right (where the ring draws 1/2 o'clock on
-    // the mirrored preview) actually produces in the un-mirrored landmark
-    // data -- see estimateHeadPose's yaw comment for the full mirroring
-    // explanation. Before that fix this resolved to 10/11 instead.
+    // their own on-screen upper-right actually produces in the un-mirrored
+    // landmark data -- see estimateHeadPose's yaw comment for the full
+    // mirroring explanation. Before that fix this resolved to the left half
+    // of the ring. Now that capture snaps to the four cardinals it must land
+    // on 12 or 3, and in particular never on 9.
     const pose = estimateHeadPose(buildLandmarks({ x: -20, y: -20 }))
     expect(pose).not.toBeNull()
-    const position = resolveClockPosition(pose!)
-    expect([1, 2]).toContain(position)
+    expect([12, 3]).toContain(resolveClockPosition(pose!))
   })
 
   it('returns null when fewer than 68 landmarks are provided', () => {

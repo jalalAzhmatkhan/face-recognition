@@ -190,7 +190,11 @@ def test_get_returns_pose_sensitivity_defaults(admin_client: TestClient) -> None
     # range than it turns, and the frontend estimator under-reports pitch
     # badly enough that 12/6 o'clock were unreachable without this.
     assert body["pitch_gain"] == 3.5
-    assert body["min_pose_radius"] == 0.55
+    # 0.40, not 0.55: with four cardinal targets each owning a quadrant
+    # there are no neighbouring sectors to keep apart, so the gate only has
+    # to reject "sitting still" -- and 0.55 made "agak menoleh" mean 39
+    # degrees of yaw.
+    assert body["min_pose_radius"] == 0.4
     assert body["pose_tolerance_deg"] == 15.0
 
 

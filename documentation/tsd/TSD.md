@@ -87,7 +87,7 @@ sequenceDiagram
   A->>B: POST /enrollments/{id}/media/presign {kind: photo, checksum}
   B-->>A: presigned PUT URL (short TTL)
   A->>S: PUT frontal photo (direct upload)
-  loop each clock position 1..12 detected during the sweep
+  loop each captured head direction (clock 12/3/6/9) detected during the sweep
     A->>B: POST /enrollments/{id}/media/presign {kind: photo, clock_position, checksum}
     B-->>A: presigned PUT URL -> photo_pos_{PP}_{k}.jpg
     A->>S: PUT burst frames for that position (direct upload)
@@ -255,7 +255,7 @@ POST /api/v1/enrollments/{id}/media/presign
      {kind: "photo"|"video", content_type, size, sha256,
       variant?, clock_position?: 1..12}
      → {upload_url, s3_key, expires_at}
-     clock_position marks a photo as one of the 12 sweep frames and keys it
+     clock_position marks a photo as one of the captured sweep frames and keys it
      photo_pos_{PP}_{k}.jpg (k = burst index, so a burst or a re-shot
      position appends candidates instead of overwriting). Omit it for the
      frontal preflight shot, which keeps photo_{n}.jpg numbering counted

@@ -14,6 +14,38 @@ export const CLOCK_POSITIONS: ClockPosition[] = [
   1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
 ]
 
+/**
+ * The positions enrollment actually captures: the four cardinals.
+ *
+ * Reduced from all 12 on 2026-09-02, after repeated live testing. The
+ * browser's landmark-ratio estimator resolves the DOMINANT axis and its sign
+ * reliably, but the yaw-to-pitch RATIO — which is the only thing separating
+ * one diagonal from its neighbours — is not conditioned well enough to place
+ * a pose inside a 30-degree sector. Aiming at jam 4/5 kept landing on jam
+ * 1/2. Four targets 90 degrees apart need only the dominant axis and its
+ * sign, which is exactly the part the estimator gets right.
+ *
+ * `ClockPosition` deliberately still spans 1..12: the stored vocabulary
+ * (`media_objects.clock_position`, ai-training's pose buckets, every already
+ * enrolled session) is unchanged, so legacy 12-position data stays valid and
+ * widening the capture set again later needs no migration.
+ *
+ * Trade-off accepted with the user: the gallery gets 4 pose buckets per
+ * subject instead of 12, so multi-view coverage — and with it some Recall
+ * headroom on extreme poses — is narrower than the original design. Four
+ * well-separated views is still genuine multi-view coverage, and a capture
+ * users can complete beats one they cannot.
+ */
+export const CAPTURE_POSITIONS: ClockPosition[] = [12, 3, 6, 9]
+
+/** Instruction shown for each captured position. */
+export const CAPTURE_POSITION_LABEL: Record<number, string> = {
+  12: 'agak mendongak (ke atas)',
+  3: 'agak menoleh ke kanan',
+  6: 'agak menunduk (ke bawah)',
+  9: 'agak menoleh ke kiri',
+}
+
 /** Per-sector visual/logical state. No "auto-pass" state exists by design. */
 export type SectorStatus = 'pending' | 'active' | 'done' | 'poor'
 

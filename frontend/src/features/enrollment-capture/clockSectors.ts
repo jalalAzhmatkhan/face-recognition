@@ -4,7 +4,7 @@ import type {
   HeadPose,
   SectorState,
 } from './types'
-import { CLOCK_POSITIONS } from './types'
+import { CAPTURE_POSITIONS, CLOCK_POSITIONS } from './types'
 
 /**
  * Clock-position <-> head-pose mapping and the sector-coverage reducer.
@@ -14,12 +14,18 @@ import { CLOCK_POSITIONS } from './types'
  * moving clockwise mixes yaw (left/right) and pitch (up/down), the face is
  * always visible. This module treats each clock position as one point on a
  * circle in (yaw, pitch) space and maps a detected pose to the nearest
- * position — there is no "back of head" case, and no auto-pass: a sector
- * only advances when a pose sample actually lands near it.
+ * CAPTURED position — there is no "back of head" case, and no auto-pass: a
+ * sector only advances when a pose sample actually lands near it.
+ *
+ * Capture targets the four cardinals (see `types.ts::CAPTURE_POSITIONS`), so
+ * each one owns a 90-degree quadrant. The full 1..12 vocabulary is kept for
+ * the stored data model and for already-enrolled sessions.
  */
 
-/** Practical head-pose range for the 12-position sweep (degrees). Narrower
- * than a full head turn, per the ASM-03 correction. */
+/** Practical head-pose range for the sweep (degrees). Narrower than a full
+ * head turn, per the ASM-03 correction. Note these cancel out of the clock
+ * geometry itself — `describePose` divides by them and the gains below
+ * multiply back — so they set the reported DEGREES, not the sensitivity. */
 export const POSE_RANGE = {
   maxYawDeg: 25,
   maxPitchDeg: 20,
@@ -44,9 +50,10 @@ export const FRAMES_TO_CONFIRM = 5
  * ever confirmed — reported live, and the reason these gains exist.
  *
  * `pitchGain > yawGain` because a head pitches through a much smaller
- * comfortable range than it turns. With these defaults, 12 o'clock needs
- * roughly 25 degrees of pitch and 3 o'clock roughly 39 degrees of yaw,
- * instead of 59 and 64.
+ * comfortable range than it turns. With these defaults and the 0.40 radius
+ * gate, 12/6 need roughly 19 degrees of pitch and 3/9 roughly 31 degrees of
+ * yaw — "agak mendongak"/"agak menoleh", as opposed to the 59 and 64 degrees
+ * the ungained version demanded.
  *
  * These are estimator-specific, NOT physical: ai-training's `cv2.solvePnP`
  * reports true degrees and applies no gain (see `resolve_qc_settings`).
@@ -62,7 +69,13 @@ export interface PoseSensitivity {
 export const DEFAULT_POSE_SENSITIVITY: PoseSensitivity = {
   yawGain: 2.5,
   pitchGain: 3.5,
-  minPoseRadius: 0.55,
+  // Lowered from 0.55 when the capture set dropped to four cardinals. The
+  // old value existed to keep neighbouring 30-degree sectors apart; with a
+  // whole quadrant per target that separation is free, and 0.55 was asking
+  // for ~39 degrees of yaw to register "agak menoleh". At 0.40 the cardinals
+  // need roughly 19 degrees of pitch or 31 of yaw, which is what "agak"
+  // means. Sitting still is still nowhere near it.
+  minPoseRadius: 0.4,
 }
 
 function angleForClock(position: ClockPosition): number {
@@ -140,8 +153,14 @@ export function describePose(
   let angle = Math.atan2(normYaw, normPitch)
   if (angle < 0) angle += 2 * Math.PI
 
-  const raw = Math.round((angle / (2 * Math.PI)) * 12)
-  const candidate = raw === 0 ? 12 : (raw as ClockPosition)
+  // Snap to the nearest CAPTURE position rather than to one of twelve
+  // 30-degree sectors. Each cardinal owns a 90-degree quadrant, so the
+  // classification reduces to "which axis dominates, and what sign is it"
+  // -- the part this estimator measures reliably. Placing a pose inside a
+  // 30-degree sector additionally required the yaw-to-pitch RATIO to be
+  // accurate, which it is not (see CAPTURE_POSITIONS' docstring).
+  const quadrant = Math.round(angle / (Math.PI / 2)) % 4
+  const candidate = QUADRANT_POSITION[quadrant]
   return {
     yawDeg: pose.yaw,
     pitchDeg: pose.pitch,
@@ -149,9 +168,12 @@ export function describePose(
     normPitch,
     radius,
     angleDeg: (angle * 180) / Math.PI,
-    position: CLOCK_POSITIONS.includes(candidate) ? candidate : null,
+    position: candidate ?? null,
   }
 }
+
+/** Quadrant index (0 = up, 1 = right, 2 = down, 3 = left) to clock position. */
+const QUADRANT_POSITION: Record<number, ClockPosition> = { 0: 12, 1: 3, 2: 6, 3: 9 }
 
 /**
  * Resolve a detected head pose to the nearest clock position, or null when
@@ -236,26 +258,26 @@ export function updateSectorState(
   return { status, streaks }
 }
 
-/** "Selesai" is only enabled once every one of the 12 sectors is "done" —
+/** "Selesai" is only enabled once every CAPTURE position is "done" —
  * nothing is ever skipped or auto-completed. */
 export function isCaptureComplete(status: SectorState): boolean {
-  return CLOCK_POSITIONS.every((position) => status[position] === 'done')
+  return CAPTURE_POSITIONS.every((position) => status[position] === 'done')
 }
 
 export function countDone(status: SectorState): number {
-  return CLOCK_POSITIONS.filter((position) => status[position] === 'done')
-    .length
+  return CAPTURE_POSITIONS.filter((position) => status[position] === 'done').length
 }
 
 /** Clockwise sweep order starting at 12 (FSD-AI.md ASM-03: "mulai jam 12
- * lalu berputar searah jarum jam"). Used ONLY to pick which position the
- * directional guide animation (`ProgressRing`'s `targetPosition` prop)
- * points at next — it does not gate `updateSectorState` itself, which
- * still accepts a sample landing on any position regardless of order. */
-export const SWEEP_ORDER: ClockPosition[] = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+ * lalu berputar searah jarum jam"), over the captured cardinals. Used ONLY
+ * to pick which position the directional guide animation (`ProgressRing`'s
+ * `targetPosition` prop) points at next — it does not gate
+ * `updateSectorState`, which still accepts a sample landing on any position
+ * regardless of order. */
+export const SWEEP_ORDER: ClockPosition[] = [...CAPTURE_POSITIONS]
 
 /** The next position the directional guide should point at: the first
- * not-yet-`done` position in sweep order, or `null` once all 12 are done
+ * not-yet-`done` position in sweep order, or `null` once all are done
  * (nothing left to point at). */
 export function nextTargetPosition(status: SectorState): ClockPosition | null {
   return SWEEP_ORDER.find((position) => status[position] !== 'done') ?? null

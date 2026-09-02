@@ -105,11 +105,24 @@ class QCSettings(BaseModel):
     pose_tolerance_deg: float = 15.0
     yaw_range_deg: float = 35.0
     pitch_range_deg: float = 25.0
-    # Fraction of the 12 clock positions that must have >=1 passing frame
-    # for the session to be QC PASS. Not 100%: ASM-03 says every position
-    # should in principle show a valid face, but a small allowance covers
-    # camera/lighting variance without a hard all-12-or-nothing gate. Tune
-    # once real capture data exists.
+    # Which clock positions enrollment is REQUIRED to cover, and therefore
+    # what `coverage_ratio` is a fraction OF. The capture wizard was reduced
+    # to the four cardinals on 2026-09-02 (see
+    # `frontend/src/features/enrollment-capture/types.ts::CAPTURE_POSITIONS`)
+    # because the browser's pose estimator cannot reliably place a pose
+    # inside a 30-degree sector. Scoring coverage out of all 12 would fail
+    # every session outright -- 4/12 is well under `min_pass_ratio`.
+    #
+    # A tuple, not a hardcoded constant, so widening the capture set back out
+    # is config rather than a code change; frames captured for a position
+    # outside this set are still evaluated and still feed the embedding
+    # extractor, they just do not gate the verdict.
+    required_clock_positions: tuple[str, ...] = ("12", "03", "06", "09")
+    # Fraction of the REQUIRED clock positions that must have >=1 passing
+    # frame for the session to be QC PASS. Not 100%: ASM-03 says every
+    # position should in principle show a valid face, but a small allowance
+    # covers camera/lighting variance without a hard all-or-nothing gate.
+    # Tune once real capture data exists.
     min_pass_ratio: float = 0.75
     # Path to the official MediaPipe Face Landmarker `.task` model bundle
     # (Apache-2.0, published by Google at
