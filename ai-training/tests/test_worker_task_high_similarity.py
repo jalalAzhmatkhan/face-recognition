@@ -86,7 +86,10 @@ def _pass_report() -> QCReport:
 def _patch_qc_and_embedding(monkeypatch, *, frames_by_position: dict[str, Any]) -> None:
     monkeypatch.setattr(
         "ai_training.worker.tasks.run_quality_check",
-        lambda video_bytes, *, session_id, settings: (_pass_report(), frames_by_position),
+        lambda video_bytes, *, session_id, settings, neutral_pose=None: (
+            _pass_report(),
+            frames_by_position,
+        ),
     )
 
     class FakeTemplate:

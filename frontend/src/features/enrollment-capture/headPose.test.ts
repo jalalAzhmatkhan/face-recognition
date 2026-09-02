@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { resolveClockPosition } from './clockSectors'
-import { estimateHeadPose } from './headPose'
+import { POSE_RANGE, resolveClockPosition } from './clockSectors'
+import { averagePose, calibrateToNeutral, estimateHeadPose } from './headPose'
 import type { Landmarks68, Point2D } from './types'
 
 /** Build a synthetic, roughly face-shaped 68-point landmark set with the
@@ -76,5 +76,70 @@ describe('estimateHeadPose', () => {
     const pose = estimateHeadPose(buildLandmarks({ x: 1000, y: 1000 }))
     expect(Math.abs(pose!.yaw)).toBeLessThanOrEqual(25)
     expect(Math.abs(pose!.pitch)).toBeLessThanOrEqual(20)
+  })
+})
+
+describe('averagePose', () => {
+  it('returns null for no samples', () => {
+    expect(averagePose([])).toBeNull()
+  })
+
+  it('averages yaw and pitch independently', () => {
+    expect(
+      averagePose([
+        { yaw: 0, pitch: 4 },
+        { yaw: 10, pitch: 8 },
+      ]),
+    ).toEqual({ yaw: 5, pitch: 6 })
+  })
+
+  it('lets one outlier sample move the baseline only fractionally', () => {
+    const steady = Array.from({ length: 4 }, () => ({ yaw: 0, pitch: 6 }))
+    const withBlink = averagePose([...steady, { yaw: 0, pitch: 20 }])
+    expect(withBlink!.pitch).toBeCloseTo(8.8, 5)
+  })
+})
+
+describe('calibrateToNeutral', () => {
+  it('is a no-op when no baseline was measured', () => {
+    const pose = { yaw: 3, pitch: 7 }
+    expect(calibrateToNeutral(pose, null)).toEqual(pose)
+  })
+
+  it('re-centres a pose on the measured neutral', () => {
+    // The whole point: a subject sitting still measures a POSITIVE pitch,
+    // so their neutral must read as (0, 0) after calibration.
+    const neutral = { yaw: 1, pitch: 6.4 }
+    expect(calibrateToNeutral(neutral, neutral)).toEqual({ yaw: 0, pitch: 0 })
+  })
+
+  it('makes downward pitch reachable by the same margin as upward', () => {
+    const neutral = { yaw: 0, pitch: 6.4 }
+    const up = calibrateToNeutral({ yaw: 0, pitch: 6.4 + 11 }, neutral)
+    const down = calibrateToNeutral({ yaw: 0, pitch: 6.4 - 11 }, neutral)
+    expect(up.pitch).toBeCloseTo(11, 5)
+    expect(down.pitch).toBeCloseTo(-11, 5)
+    // 12 o'clock and 6 o'clock now cost the same head movement -- before
+    // calibration the same +-11 swing put 12 well past its threshold while
+    // leaving 6 short of it.
+    expect(Math.abs(up.pitch)).toBeCloseTo(Math.abs(down.pitch), 5)
+  })
+
+  it('saturates a mis-measured baseline at one full axis range', () => {
+    // Subject was tilted hard when the photo was taken: the offset applied
+    // must saturate rather than running away.
+    const wild = { yaw: 999, pitch: -999 }
+    const calibrated = calibrateToNeutral({ yaw: 0, pitch: 0 }, wild)
+    expect(calibrated.yaw).toBeCloseTo(-POSE_RANGE.maxYawDeg, 5)
+    expect(calibrated.pitch).toBeCloseTo(POSE_RANGE.maxPitchDeg, 5)
+  })
+
+  it('does not truncate a large but genuine baseline', () => {
+    // Regression guard for the bug the server-side twin of this function
+    // shipped with first: a cap of half the range left ~half of a real
+    // (large) estimator bias in place, which looks like a fix but leaves
+    // the bottom of the clock just as unreachable.
+    const largeButReal = { yaw: 0, pitch: POSE_RANGE.maxPitchDeg * 0.97 }
+    expect(calibrateToNeutral(largeButReal, largeButReal).pitch).toBeCloseTo(0, 5)
   })
 })

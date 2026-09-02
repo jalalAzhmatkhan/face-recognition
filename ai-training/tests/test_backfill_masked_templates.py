@@ -121,7 +121,7 @@ def _patch_pipeline(monkeypatch) -> None:
     test_worker_task_synthetic_masked.py's patches."""
     monkeypatch.setattr(
         "ai_training.worker.tasks.run_quality_check",
-        lambda video_bytes, *, session_id, settings: (
+        lambda video_bytes, *, session_id, settings, neutral_pose=None: (
             MagicMock(),
             {"12": [MagicMock(position="12", blur=100.0, yaw=0.0, passed=True)]},
         ),

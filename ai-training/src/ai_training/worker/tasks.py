@@ -36,6 +36,7 @@ from ai_training.db.embedding_repo import (
 )
 from ai_training.db.enrollment_repo import (
     Cursor,
+    get_frontal_photo,
     get_latest_finalized_video,
     get_latest_finalized_video_with_retention,
     get_state,
@@ -55,7 +56,11 @@ from ai_training.embedding.embedder import build_embedder
 from ai_training.embedding.extractor import extract_gallery_embeddings
 from ai_training.embedding.synthetic_masked import generate_synthetic_masked_templates
 from ai_training.quality.mask_overlay import MaskOverlayProvider, build_mask_overlay_provider
-from ai_training.quality.pipeline import resolve_qc_settings, run_quality_check
+from ai_training.quality.pipeline import (
+    estimate_neutral_pose,
+    resolve_qc_settings,
+    run_quality_check,
+)
 from ai_training.similarity.high_similarity_check import run_high_similarity_check_core
 from ai_training.worker.celery_app import celery_app
 
@@ -238,9 +243,29 @@ def run_enrollment_qc_core(
     # `resolve_qc_settings`'s docstring. No row saved yet -> `settings.qc`
     # unchanged, byte-identical to before this existed.
     effective_qc_settings = resolve_qc_settings(cursor, settings.qc)
+    # Neutral-pose calibration: the session's frontal photo shows the subject
+    # looking straight at the camera, so its pose is the baseline every sweep
+    # frame is measured against. Without it the solvePnP estimator's large
+    # upward pitch bias makes clock positions 4-8 effectively unreachable --
+    # see `apply_neutral_offset`. Best-effort by design: no photo, an
+    # undecodable one, or a failed download all fall back to `None`, i.e.
+    # exactly the pre-calibration behaviour.
+    neutral_pose: tuple[float, float] | None = None
+    photo_media = get_frontal_photo(cursor, session_id)
+    if photo_media is not None:
+        try:
+            photo_bytes = downloader(photo_media[0], photo_media[1], settings)
+            neutral_pose = estimate_neutral_pose(photo_bytes, effective_qc_settings)
+        except Exception:  # noqa: BLE001 - calibration must never fail QC
+            logger.warning(
+                "ai_training.worker.neutral_pose_unavailable session_id=%s", session_id
+            )
     try:
         report, frames_by_position = run_quality_check(
-            video_bytes, session_id=session_id, settings=effective_qc_settings
+            video_bytes,
+            session_id=session_id,
+            settings=effective_qc_settings,
+            neutral_pose=neutral_pose,
         )
     except RuntimeError:
         # A corrupt/undecodable video is a CONTENT quality problem, not a

@@ -111,6 +111,32 @@ def get_latest_finalized_video(cursor: Cursor, session_id: str) -> tuple[str, st
     return (row[0], row[1]) if row else None
 
 
+def get_frontal_photo(cursor: Cursor, session_id: str) -> tuple[str, str] | None:
+    """Return `(s3_bucket, s3_key)` of this session's FRONTAL photo -- the
+    EARLIEST FINALIZED `kind = 'photo'` row (`photo_1.jpg`, taken on the
+    wizard's preflight step before the sweep starts) -- or `None`.
+
+    Used as the NEUTRAL POSE REFERENCE for QC: the subject is looking
+    straight at the camera in this shot by construction, so estimating its
+    pose gives the per-subject baseline every sweep frame is measured
+    against. See `ai_training.quality.pipeline.apply_neutral_offset` for why
+    that baseline is needed at all.
+
+    `ORDER BY created_at ASC` (not DESC like the video lookups above): a
+    retaken photo appends a NEW row (`photo_2.jpg`, ...) rather than
+    replacing the first, and it is the earliest one that is the frontal
+    shot the presign flow numbers `photo_1`.
+    """
+    cursor.execute(
+        "SELECT s3_bucket, s3_key FROM media_objects "
+        "WHERE session_id = %s AND kind = 'photo' AND status = 'FINALIZED' "
+        "ORDER BY created_at ASC LIMIT 1",
+        (session_id,),
+    )
+    row = cursor.fetchone()
+    return (row[0], row[1]) if row else None
+
+
 @dataclass(frozen=True)
 class VideoMedia:
     """One FINALIZED video `media_objects` row, with its retention info

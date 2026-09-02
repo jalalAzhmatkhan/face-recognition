@@ -131,7 +131,56 @@ def resolve_qc_settings(cursor: Any, settings: QCSettings) -> QCSettings:
     return settings.model_copy(update=updates)
 
 
-def _evaluate_frame(frame: Any, settings: QCSettings) -> FrameQuality | None:
+def apply_neutral_offset(
+    yaw: float,
+    pitch: float,
+    neutral: tuple[float, float] | None,
+    *,
+    settings: QCSettings,
+) -> tuple[float, float]:
+    """Re-express `(yaw, pitch)` RELATIVE to the subject's own neutral
+    (straight-at-the-camera) reading.
+
+    `ai_training.quality.pose`'s clock geometry assumes a neutral face
+    measures `(0, 0)`, but `estimate_pose_from_landmarks` does not deliver
+    that: solvePnP against the generic 3D model reports a large POSITIVE
+    (upward) pitch for a frontal face -- a real portrait measured +24.3 deg
+    against a +-25 deg `pitch_range_deg`, recorded live in `pose.py`'s own
+    comments. Uncorrected, that bias makes the whole BOTTOM half of the
+    clock unreachable: 12 o'clock is satisfied by sitting still, while 6
+    o'clock would need roughly twice `pitch_range_deg` of real downward
+    tilt, and every genuine 4/5/7/8 lands one or two sectors too high
+    because the measured ANGLE is rotated upward too (found live during
+    pilot capture -- "jam 4-8 tidak terdeteksi").
+
+    The baseline comes from the session's own frontal photo (see
+    `ai_training.db.enrollment_repo.get_frontal_photo`), so it needs no
+    per-camera or per-face tuning and stays correct if the estimator is
+    ever swapped. The frontend applies the identical correction with its
+    own baseline and its own estimator
+    (`frontend/src/features/enrollment-capture/headPose.ts`).
+
+    `None` means "no baseline available" -> unchanged, pre-calibration
+    behaviour. The offset is capped at ONE FULL axis range (not half): the
+    genuine bias here is already ~97% of `pitch_range_deg`, so a tighter cap
+    would silently remove only part of it and leave the bottom half of the
+    clock just as unreachable (caught by
+    `tests/test_neutral_pose_offset.py`). One range is the largest shift the
+    geometry can express anyway, so it still bounds a mis-measured baseline.
+    """
+    if neutral is None:
+        return yaw, pitch
+    neutral_yaw, neutral_pitch = neutral
+    max_yaw_offset = settings.yaw_range_deg
+    max_pitch_offset = settings.pitch_range_deg
+    clamped_yaw = min(max_yaw_offset, max(-max_yaw_offset, neutral_yaw))
+    clamped_pitch = min(max_pitch_offset, max(-max_pitch_offset, neutral_pitch))
+    return yaw - clamped_yaw, pitch - clamped_pitch
+
+
+def _evaluate_frame(
+    frame: Any, settings: QCSettings, neutral_pose: tuple[float, float] | None = None
+) -> FrameQuality | None:
     detection = detect_face_and_landmarks(
         frame, model_path=settings.face_landmarker_model_path or None
     )
@@ -139,7 +188,8 @@ def _evaluate_frame(frame: Any, settings: QCSettings) -> FrameQuality | None:
         return None
 
     height, width = frame.shape[:2]
-    yaw, pitch, _roll = estimate_pose_from_landmarks(detection, (width, height))
+    raw_yaw, raw_pitch, _roll = estimate_pose_from_landmarks(detection, (width, height))
+    yaw, pitch = apply_neutral_offset(raw_yaw, raw_pitch, neutral_pose, settings=settings)
     position = nearest_clock_position(
         yaw, pitch, yaw_range_deg=settings.yaw_range_deg, pitch_range_deg=settings.pitch_range_deg
     )
@@ -173,8 +223,42 @@ def _evaluate_frame(frame: Any, settings: QCSettings) -> FrameQuality | None:
     )
 
 
+def estimate_neutral_pose(photo_bytes: bytes, settings: QCSettings) -> tuple[float, float] | None:
+    """`(yaw, pitch)` of the session's frontal photo, for use as the neutral
+    baseline in `apply_neutral_offset` -- or `None` if it cannot be
+    established (undecodable image, no face found, pose estimation failed).
+
+    Deliberately never raises: calibration is an ACCURACY improvement, not a
+    correctness precondition, so a session whose frontal photo cannot be
+    read must still go through QC exactly as it did before calibration
+    existed rather than failing outright.
+    """
+    try:
+        import numpy as np
+
+        cv2 = _require_cv2()  # inside the try: a missing `ml` extra must not raise either
+        buffer = np.frombuffer(photo_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+        if frame is None:
+            return None
+        detection = detect_face_and_landmarks(
+            frame, model_path=settings.face_landmarker_model_path or None
+        )
+        if detection is None:
+            return None
+        height, width = frame.shape[:2]
+        yaw, pitch, _roll = estimate_pose_from_landmarks(detection, (width, height))
+    except Exception:  # noqa: BLE001 - see docstring: never block QC on calibration
+        return None
+    return yaw, pitch
+
+
 def run_quality_check(
-    video_bytes: bytes, *, session_id: str, settings: QCSettings
+    video_bytes: bytes,
+    *,
+    session_id: str,
+    settings: QCSettings,
+    neutral_pose: tuple[float, float] | None = None,
 ) -> tuple[QCReport, dict[str, list[FrameQuality]]]:
     """Run the full QC pipeline and return `(report, frames_by_position)`.
 
@@ -182,11 +266,17 @@ def run_quality_check(
     the passing ones) is returned so the caller (the Celery task, on QC
     PASS) can feed it straight into TR-03's embedding extraction without
     re-decoding the video.
+
+    `neutral_pose` is the subject's straight-at-the-camera `(yaw, pitch)`
+    baseline, normally from `estimate_neutral_pose` over the session's
+    frontal photo. `None` (the default) keeps the exact pre-calibration
+    behaviour, which is what the batch re-embed/backfill jobs rely on for
+    legacy sessions -- see `apply_neutral_offset` for why it matters.
     """
     frames = extract_frames(video_bytes, fps_sample=settings.sample_fps)
     by_position: dict[str, list[FrameQuality]] = {position: [] for position in CLOCK_POSITIONS}
     for frame in frames:
-        evaluated = _evaluate_frame(frame, settings)
+        evaluated = _evaluate_frame(frame, settings, neutral_pose)
         if evaluated is not None:
             by_position[evaluated.position].append(evaluated)
 

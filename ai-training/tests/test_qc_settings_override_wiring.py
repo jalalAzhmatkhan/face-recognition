@@ -99,7 +99,7 @@ def _patch_embedding(monkeypatch) -> None:
 def test_no_system_parameters_row_passes_settings_qc_unchanged(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_run_quality_check(video_bytes, *, session_id, settings):
+    def fake_run_quality_check(video_bytes, *, session_id, settings, neutral_pose=None):
         captured["settings"] = settings
         frames = {"12": [MagicMock(position="12", blur=100.0, yaw=0.0, passed=True)]}
         return _pass_report(), frames
@@ -121,7 +121,7 @@ def test_no_system_parameters_row_passes_settings_qc_unchanged(monkeypatch) -> N
 def test_system_parameters_override_reaches_run_quality_check(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_run_quality_check(video_bytes, *, session_id, settings):
+    def fake_run_quality_check(video_bytes, *, session_id, settings, neutral_pose=None):
         captured["settings"] = settings
         frames = {"12": [MagicMock(position="12", blur=100.0, yaw=0.0, passed=True)]}
         return _pass_report(), frames

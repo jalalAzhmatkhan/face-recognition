@@ -22,10 +22,10 @@ import {
 } from './clockSectors'
 import type { SectorTrackerState } from './clockSectors'
 import { detectFace, loadFaceDetectionModels } from './faceDetector'
-import { estimateHeadPose } from './headPose'
+import { averagePose, calibrateToNeutral, estimateHeadPose } from './headPose'
 import { assessQuality, QUALITY_THRESHOLDS } from './imageQuality'
 import { CURRENT_CONSENT_VERSION } from './types'
-import type { QualityStatus } from './types'
+import type { HeadPose, QualityStatus } from './types'
 import './EnrollmentCapturePage.css'
 
 type WizardStep =
@@ -40,6 +40,10 @@ type WizardStep =
 const MIN_DURATION_S = 10
 const SAMPLE_INTERVAL_MS = 150
 const COUNTDOWN_START_S = 3
+/** How many recent preflight pose samples are averaged into the neutral
+ * baseline (see `headPose.ts::calibrateToNeutral`). At SAMPLE_INTERVAL_MS
+ * this is the last ~0.75 s before the frontal photo is taken. */
+const NEUTRAL_SAMPLE_COUNT = 5
 
 /**
  * S-30 Enrollment capture wizard (FR-ENR-02/03/04).
@@ -123,6 +127,14 @@ export default function EnrollmentCapturePage() {
   const recordedChunksRef = useRef<Blob[]>([])
   const sampleTimerRef = useRef<number | null>(null)
   const elapsedTimerRef = useRef<number | null>(null)
+  // Neutral-pose calibration (see `headPose.ts::calibrateToNeutral` for WHY
+  // this exists): `recentPreflightPosesRef` is a rolling window of the last
+  // few poses seen while the subject was framing up for the frontal photo,
+  // and `neutralPoseRef` freezes their average at the instant that photo is
+  // taken. Refs, not state: they feed the sampling loop only and must never
+  // trigger a re-render (the loop runs every SAMPLE_INTERVAL_MS).
+  const recentPreflightPosesRef = useRef<HeadPose[]>([])
+  const neutralPoseRef = useRef<HeadPose | null>(null)
   const sectorsDone = countDone(tracker.status)
   const canFinishVideo = isCaptureComplete(tracker.status)
   // Directional guidance animation ("animasi arahan") -- which not-yet-done
@@ -233,12 +245,25 @@ export default function EnrollmentCapturePage() {
     const detection = await detectFace(canvas)
     setFaceInFrame(detection.faceInFrame)
 
-    if (step !== 'video') return
-
     const pose = detection.landmarks
       ? estimateHeadPose(detection.landmarks)
       : null
-    const clockPosition = pose ? resolveClockPosition(pose) : null
+
+    // On the preflight step the subject is looking straight at the camera by
+    // definition (the "Ambil Foto Frontal" button is gated on a detected,
+    // good-quality face), so keep the most recent poses around as neutral-
+    // baseline candidates for `capturePhoto` to freeze.
+    if (step === 'preflight' && pose) {
+      recentPreflightPosesRef.current = [
+        ...recentPreflightPosesRef.current,
+        pose,
+      ].slice(-NEUTRAL_SAMPLE_COUNT)
+    }
+
+    if (step !== 'video') return
+
+    const calibratedPose = pose ? calibrateToNeutral(pose, neutralPoseRef.current) : null
+    const clockPosition = calibratedPose ? resolveClockPosition(calibratedPose) : null
 
     setTracker((prev) =>
       updateSectorState(prev, {
@@ -265,6 +290,12 @@ export default function EnrollmentCapturePage() {
   const capturePhoto = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+    // Freeze the subject's straight-at-the-camera pose as this session's
+    // neutral baseline, at the exact instant the frontal photo is taken —
+    // every clock position from here on is measured RELATIVE to it. `null`
+    // (no pose sampled yet) simply means no calibration, i.e. the previous
+    // uncalibrated behaviour.
+    neutralPoseRef.current = averagePose(recentPreflightPosesRef.current)
     canvas.toBlob(
       (blob) => {
         if (blob) setPhotoBlob(blob)
@@ -363,7 +394,13 @@ export default function EnrollmentCapturePage() {
     setStep('countdown')
   }, [])
 
-  const retakePhoto = useCallback(() => setPhotoBlob(null), [])
+  // Retaking the photo invalidates the neutral baseline it was measured
+  // alongside — the next `capturePhoto` re-freezes a fresh one.
+  const retakePhoto = useCallback(() => {
+    neutralPoseRef.current = null
+    recentPreflightPosesRef.current = []
+    setPhotoBlob(null)
+  }, [])
 
   // "Batal" on the frontal-photo and video-recording steps: discards
   // whatever has been captured so far (photo and/or video, neither is ever
