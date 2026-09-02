@@ -43,6 +43,27 @@ services:
     command: ["alembic", "upgrade", "head"]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-frac}:${POSTGRES_PASSWORD:-frac_dev_password}@postgres:5432/${POSTGRES_DB:-frac}
+    volumes:
+      # Same bind-mount as `backend`/`celery-worker`, and for a sharper
+      # reason than live reload: WITHOUT it this service runs whatever
+      # migration scripts were baked into the image at its last build, while
+      # `backend` (which is mounted) runs the host's current models.
+      #
+      # That asymmetry fails silently and misleadingly. A stale image simply
+      # does not contain the newest revision, so its head is the OLD one, the
+      # database is already there, and `alembic upgrade head` prints its two
+      # INFO lines and exits 0 -- looking exactly like success. Meanwhile the
+      # live backend maps a column the database does not have, and every
+      # request touching it returns an opaque 500. Hit twice on this project:
+      # `d1e5c8a3f7b2` (System Parameter menu) and `e4b9d2f6a8c3`
+      # (media_objects.clock_position -> media/presign).
+      #
+      # Mounting the source means the migration scripts are always the ones
+      # on disk, so `upgrade head` cannot no-op against a head it has never
+      # heard of. `/readyz` (app/services/schema_check.py) reports the
+      # mismatch if it ever happens anyway.
+      - ./backend:/app
+      - backend_venv:/app/.venv
     depends_on:
       postgres:
         condition: service_healthy
