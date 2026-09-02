@@ -24,5 +24,16 @@ export default defineConfig({
     globals: false,
     setupFiles: ['./src/setupTests.ts'],
     css: false,
+    // Headroom for `asyncUtilTimeout` (3000 ms, see setupTests.ts): a test
+    // doing two sequential async waits on a contended worker can legitimately
+    // need more than the 5000 ms default, and a test that blows its budget
+    // for machine reasons reports as an unrelated assertion failure rather
+    // than as a timeout -- see setupTests.ts for why.
+    testTimeout: 15000,
+    // A spy that outlives its test is a cross-test coupling waiting to
+    // happen. Restoring centrally means no suite can forget to (three of the
+    // four suites in EnrollmentCapturePage.test.tsx called
+    // `vi.restoreAllMocks()`; the fourth did not).
+    restoreMocks: true,
   },
 })
