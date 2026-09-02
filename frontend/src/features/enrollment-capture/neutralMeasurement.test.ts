@@ -83,6 +83,29 @@ describe('what a missing baseline does to detection', () => {
     expect(resolved).toBe(6)
   })
 
+  it('does not call a frontal face jam 12 once calibrated', () => {
+    // Reported live: sitting still, looking straight ahead, registered as
+    // jam 12 and got captured. Uncalibrated it must, arithmetically: +6.6
+    // pitch x 3.5 gain = 1.16 normalised, well past the 0.40 radius gate.
+    const neutral = measure(Array.from({ length: 10 }, frontal)).neutral
+
+    expect(describePose(calibrateToNeutral(frontal(), null)).position).toBe(12)
+    expect(describePose(calibrateToNeutral(frontal(), neutral)).position).toBeNull()
+  })
+
+  it('leaves a small unintentional drift below the gate', () => {
+    // Calibration alone is not enough — the radius gate still has to reject
+    // someone who is merely not perfectly still.
+    const neutral = measure(Array.from({ length: 10 }, frontal)).neutral
+    for (const drift of [
+      { yaw: 0, pitch: 8.4 },
+      { yaw: 2, pitch: 5 },
+      { yaw: -2.5, pitch: 7.5 },
+    ]) {
+      expect(describePose(calibrateToNeutral(drift, neutral)).position).toBeNull()
+    }
+  })
+
   it('keeps a genuinely leftward look on jam 9 after calibration', () => {
     // The fix must not simply bias everything downward: a real left turn is
     // still a left turn.

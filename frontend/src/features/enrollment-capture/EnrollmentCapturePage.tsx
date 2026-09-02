@@ -399,7 +399,17 @@ export default function EnrollmentCapturePage() {
 
     if (step !== 'sweep') return
 
-    const calibratedPose = pose ? calibrateToNeutral(pose, neutralPoseRef.current) : null
+    // No baseline, no detection. Every direction is measured RELATIVE to
+    // neutral, so an unmeasured baseline does not make the readings merely
+    // less accurate -- it makes them wrong in a specific direction. A
+    // frontal face reads about +6.6 degrees of pitch structurally, which
+    // `pitchGain` turns into ~1.16 normalised: past the radius gate and
+    // straight into jam 12. Reported live as "wajah menghadap depan masih
+    // terdeteksi jam 12". Refusing to resolve anything is the only honest
+    // answer here, and the banner on this step says why nothing is
+    // registering.
+    const neutral = neutralPoseRef.current
+    const calibratedPose = pose && neutral ? calibrateToNeutral(pose, neutral) : null
     const clockPosition = calibratedPose
       ? describePose(calibratedPose, poseSensitivity).position
       : null
