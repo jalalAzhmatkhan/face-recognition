@@ -195,6 +195,13 @@ export function buildDefaultChecklist(deviceClass: DeviceClass): CommissioningCh
       checked_by_staff_id: null,
     })),
     queue_zone: deviceClass === 'attendance' ? buildDefaultQueueZone() : null,
+    // `null`, never a computed date. camera-placement-guide.md §5.1 lists
+    // `reverify_due_at` as optional and explicitly "kebijakan operasional,
+    // tidak divalidasi otomatis oleh sistem di fase ini" — nothing in this
+    // codebase reads or sets it yet. Deriving one here (e.g. now + 12
+    // months) would also be measuring from the wrong instant: the re-verify
+    // date is relative to COMMISSIONING, not to opening a blank form.
+    reverify_due_at: null,
   }
 }
 
