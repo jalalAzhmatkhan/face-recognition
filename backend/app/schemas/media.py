@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.enums import EnrollmentState
 
@@ -32,6 +32,16 @@ class PresignRequest(BaseModel):
     size: int = Field(..., gt=0)
     sha256: str = Field(..., min_length=64, max_length=64)
     variant: Literal["default", "no_glasses", "glasses", "pitch_ext"] | None = None
+    clock_position: int | None = Field(
+        None,
+        ge=1,
+        le=12,
+        description=(
+            "Which of the 12 sweep positions this photo captures. Omit for the "
+            "frontal preflight photo (and for videos) -- see "
+            "app/models/media_object.py::MediaObject.clock_position."
+        ),
+    )
 
     @field_validator("sha256")
     @classmethod
@@ -41,6 +51,12 @@ class PresignRequest(BaseModel):
         except ValueError as exc:
             raise ValueError("sha256 must be a 64-character hex string") from exc
         return value.lower()
+
+    @model_validator(mode="after")
+    def _clock_position_is_photo_only(self) -> "PresignRequest":
+        if self.clock_position is not None and self.kind != "photo":
+            raise ValueError("clock_position is only valid for kind='photo'")
+        return self
 
 
 class PresignResponse(BaseModel):

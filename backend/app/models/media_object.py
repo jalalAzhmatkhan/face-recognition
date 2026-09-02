@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, String
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, SmallInteger, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -79,3 +79,10 @@ class MediaObject(UUIDPKMixin, CreatedAtMixin, Base):
         ),
         nullable=True,
     )
+    # Which of the 12 sweep positions this photo captures (migration
+    # e4b9d2f6a8c3). NULL means "not a sweep frame": the frontal preflight
+    # photo (which doubles as the neutral-pose reference), any pre-column
+    # row, and every video/event_frame. Deliberately NOT unique per session
+    # -- the wizard captures a burst per position, and a re-shot position
+    # appends more candidates rather than replacing them.
+    clock_position: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
