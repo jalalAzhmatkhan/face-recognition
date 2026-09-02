@@ -180,6 +180,96 @@ def test_put_rejects_brightness_out_of_0_255_range(admin_client: TestClient) -> 
     assert response.status_code == 422
 
 
+# --- Head-pose sensitivity fields -------------------------------------------
+
+
+def test_get_returns_pose_sensitivity_defaults(admin_client: TestClient) -> None:
+    body = admin_client.get("/api/v1/system-parameters/enrollment-quality").json()
+    assert body["yaw_gain"] == 2.5
+    # Higher than yaw: a head pitches through a much smaller comfortable
+    # range than it turns, and the frontend estimator under-reports pitch
+    # badly enough that 12/6 o'clock were unreachable without this.
+    assert body["pitch_gain"] == 3.5
+    assert body["min_pose_radius"] == 0.55
+    assert body["pose_tolerance_deg"] == 15.0
+
+
+def test_a_row_saved_before_the_pose_fields_existed_still_reads_back(
+    admin_client: TestClient, param_repo: FakeSystemParameterRepository
+) -> None:
+    """The pose fields carry defaults precisely so this cannot 500. A
+    deployment that had already used the menu has a row with only the three
+    original keys; making the new ones required would break every GET for
+    exactly the sites that adopted the feature earliest."""
+    param_repo.upsert(
+        "enrollment_capture_quality",
+        {"min_blur_variance": 25.0, "min_brightness": 30.0, "max_brightness": 230.0},
+        updated_by=uuid.uuid4(),
+    )
+
+    response = admin_client.get("/api/v1/system-parameters/enrollment-quality")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["min_blur_variance"] == 25.0
+    assert body["pitch_gain"] == 3.5
+
+
+def test_put_persists_pose_sensitivity(admin_client: TestClient) -> None:
+    body = {
+        "min_blur_variance": 20.0,
+        "min_brightness": 30.0,
+        "max_brightness": 230.0,
+        "yaw_gain": 3.0,
+        "pitch_gain": 5.0,
+        "min_pose_radius": 0.4,
+        "pose_tolerance_deg": 20.0,
+    }
+    assert (
+        admin_client.put("/api/v1/system-parameters/enrollment-quality", json=body).status_code
+        == 200
+    )
+
+    follow_up = admin_client.get("/api/v1/system-parameters/enrollment-quality").json()
+    assert follow_up["pitch_gain"] == 5.0
+    assert follow_up["min_pose_radius"] == 0.4
+    assert follow_up["pose_tolerance_deg"] == 20.0
+
+
+def test_put_omitting_pose_fields_falls_back_to_defaults(admin_client: TestClient) -> None:
+    body = {"min_blur_variance": 20.0, "min_brightness": 30.0, "max_brightness": 230.0}
+    saved = admin_client.put("/api/v1/system-parameters/enrollment-quality", json=body).json()
+    assert saved["yaw_gain"] == 2.5
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("yaw_gain", 0),
+        ("yaw_gain", 25),
+        ("pitch_gain", -1),
+        # A radius above 1 can never be reached: the frontend caps the
+        # gained pose vector at magnitude 1, so this would silently make
+        # every position unreachable -- the very bug being fixed.
+        ("min_pose_radius", 1.5),
+        ("min_pose_radius", 0),
+        ("pose_tolerance_deg", 0),
+        ("pose_tolerance_deg", 120),
+    ],
+)
+def test_put_rejects_out_of_range_pose_sensitivity(
+    admin_client: TestClient, field: str, value: float
+) -> None:
+    body = {
+        "min_blur_variance": 20.0,
+        "min_brightness": 30.0,
+        "max_brightness": 230.0,
+        field: value,
+    }
+    response = admin_client.put("/api/v1/system-parameters/enrollment-quality", json=body)
+    assert response.status_code == 422
+
+
 def test_get_requires_authentication() -> None:
     app = create_app()
     client = TestClient(app, raise_server_exceptions=False)

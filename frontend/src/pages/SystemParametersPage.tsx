@@ -23,6 +23,10 @@ export default function SystemParametersPage() {
   const [minBlurVariance, setMinBlurVariance] = useState('')
   const [minBrightness, setMinBrightness] = useState('')
   const [maxBrightness, setMaxBrightness] = useState('')
+  const [yawGain, setYawGain] = useState('')
+  const [pitchGain, setPitchGain] = useState('')
+  const [minPoseRadius, setMinPoseRadius] = useState('')
+  const [poseToleranceDeg, setPoseToleranceDeg] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
@@ -44,6 +48,14 @@ export default function SystemParametersPage() {
     setMinBlurVariance(String(paramsQuery.data.min_blur_variance))
     setMinBrightness(String(paramsQuery.data.min_brightness))
     setMaxBrightness(String(paramsQuery.data.max_brightness))
+    // `?? ''` rather than a hardcoded fallback: a backend older than these
+    // fields omits them, and blanking the input is honest about that instead
+    // of showing a number the server would not agree with. The submit
+    // handler treats blank as "leave at the server's default".
+    setYawGain(paramsQuery.data.yaw_gain?.toString() ?? '')
+    setPitchGain(paramsQuery.data.pitch_gain?.toString() ?? '')
+    setMinPoseRadius(paramsQuery.data.min_pose_radius?.toString() ?? '')
+    setPoseToleranceDeg(paramsQuery.data.pose_tolerance_deg?.toString() ?? '')
   }
 
   const saveMutation = useMutation({
@@ -122,10 +134,30 @@ export default function SystemParametersPage() {
       return
     }
 
+    // Blank = "don't send it", so the backend keeps its own default rather
+    // than us inventing one here and having two sources of truth.
+    const poseFields: Record<string, number> = {}
+    const optional: [string, string, string, number, number][] = [
+      ['yaw_gain', yawGain, 'Sensitivitas Menoleh (Yaw)', 0, 20],
+      ['pitch_gain', pitchGain, 'Sensitivitas Mendongak/Menunduk (Pitch)', 0, 20],
+      ['min_pose_radius', minPoseRadius, 'Ambang Jarak dari Netral', 0, 1],
+      ['pose_tolerance_deg', poseToleranceDeg, 'Toleransi Sudut QC Server', 0, 90],
+    ]
+    for (const [key, raw, label, min, max] of optional) {
+      if (raw.trim() === '') continue
+      const parsed = Number(raw)
+      if (!Number.isFinite(parsed) || parsed <= min || parsed > max) {
+        setValidationError(`${label} harus berupa angka di antara ${min} dan ${max}.`)
+        return
+      }
+      poseFields[key] = parsed
+    }
+
     saveMutation.mutate({
       min_blur_variance: parsedMinBlur,
       min_brightness: parsedMinBrightness,
       max_brightness: parsedMaxBrightness,
+      ...poseFields,
     })
   }
 
@@ -228,6 +260,113 @@ export default function SystemParametersPage() {
                   border: 'var(--border-w) solid var(--border-default)',
                 }}
               />
+            </label>
+
+            <div
+              style={{
+                borderTop: 'var(--border-w) solid var(--border-default)',
+                paddingTop: 'var(--space-4)',
+              }}
+            >
+              <h3 style={{ margin: 0, font: 'var(--text-h4, var(--text-body))' }}>
+                Sensitivitas Arah Kepala (Capture 360°)
+              </h3>
+              <p
+                style={{
+                  margin: 'var(--space-2) 0 0',
+                  font: 'var(--text-small)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                Naikkan bila ada posisi jam yang sulit terdeteksi meskipun kepala sudah
+                digerakkan. Deteksi arah di browser mengukur pergeseran hidung terhadap
+                garis tengah wajah — sinyalnya kecil untuk gerakan mendongak/menunduk,
+                sehingga tanpa penguatan arah jam 12 dan 6 praktis mustahil dicapai.
+                Nilai terlalu tinggi membuat posisi jam salah tertangkap saat kepala
+                baru bergerak sedikit.
+              </p>
+            </div>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+              <span>Sensitivitas Menoleh (Yaw) — kiri/kanan</span>
+              <input
+                type="number"
+                step="any"
+                value={yawGain}
+                onChange={(event) => setYawGain(event.target.value)}
+                style={{
+                  minHeight: 'var(--touch-target)',
+                  padding: '0 var(--space-3)',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'var(--border-w) solid var(--border-default)',
+                }}
+              />
+              <span style={{ font: 'var(--text-caption)', color: 'var(--text-muted)' }}>
+                Default 2.5. Nilai 1 = tanpa penguatan.
+              </span>
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+              <span>Sensitivitas Mendongak/Menunduk (Pitch) — atas/bawah</span>
+              <input
+                type="number"
+                step="any"
+                value={pitchGain}
+                onChange={(event) => setPitchGain(event.target.value)}
+                style={{
+                  minHeight: 'var(--touch-target)',
+                  padding: '0 var(--space-3)',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'var(--border-w) solid var(--border-default)',
+                }}
+              />
+              <span style={{ font: 'var(--text-caption)', color: 'var(--text-muted)' }}>
+                Default 3.5 — sengaja lebih tinggi dari Yaw, karena kepala bisa menoleh
+                jauh lebih lebar daripada mendongak/menunduk. Naikkan bila jam 12 dan 6
+                masih sulit.
+              </span>
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+              <span>Ambang Jarak dari Netral (0-1)</span>
+              <input
+                type="number"
+                step="any"
+                value={minPoseRadius}
+                onChange={(event) => setMinPoseRadius(event.target.value)}
+                style={{
+                  minHeight: 'var(--touch-target)',
+                  padding: '0 var(--space-3)',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'var(--border-w) solid var(--border-default)',
+                }}
+              />
+              <span style={{ font: 'var(--text-caption)', color: 'var(--text-muted)' }}>
+                Default 0.55. Seberapa jauh kepala harus bergerak dari posisi netral
+                sebelum dianggap berada di satu posisi jam. Turunkan agar lebih mudah.
+              </span>
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+              <span>Toleransi Sudut QC Server (derajat)</span>
+              <input
+                type="number"
+                step="any"
+                value={poseToleranceDeg}
+                onChange={(event) => setPoseToleranceDeg(event.target.value)}
+                style={{
+                  minHeight: 'var(--touch-target)',
+                  padding: '0 var(--space-3)',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'var(--border-w) solid var(--border-default)',
+                }}
+              />
+              <span style={{ font: 'var(--text-caption)', color: 'var(--text-muted)' }}>
+                Default 15. Hanya untuk QC di server (bukan browser): selisih sudut yang
+                masih diterima antara pose foto dan posisi jam yang dituju. Longgarkan
+                bila capture lolos di browser tapi ditolak QC dengan alasan
+                &quot;pose_out_of_range&quot;.
+              </span>
             </label>
 
             {validationError && (

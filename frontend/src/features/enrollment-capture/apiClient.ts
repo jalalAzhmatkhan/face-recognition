@@ -184,15 +184,19 @@ export async function completeEnrollment(
  * `imageQuality.QUALITY_THRESHOLDS` (see `EnrollmentCapturePage.tsx`) — a
  * settings-service hiccup must never block enrollment capture.
  */
-export async function getEnrollmentQualityParams(): Promise<{
+export interface EnrollmentQualityParams {
   min_blur_variance: number
   min_brightness: number
   max_brightness: number
-}> {
+  /** Head-pose sensitivity (see `clockSectors.ts::PoseSensitivity`). Optional
+   * because a deployment whose backend predates these fields simply omits
+   * them, and the wizard then keeps its built-in defaults. */
+  yaw_gain?: number
+  pitch_gain?: number
+  min_pose_radius?: number
+}
+
+export async function getEnrollmentQualityParams(): Promise<EnrollmentQualityParams> {
   const response = await authFetch('/api/v1/system-parameters/enrollment-quality')
-  return (await response.json()) as {
-    min_blur_variance: number
-    min_brightness: number
-    max_brightness: number
-  }
+  return (await response.json()) as EnrollmentQualityParams
 }

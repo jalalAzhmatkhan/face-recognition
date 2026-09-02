@@ -107,7 +107,16 @@ def resolve_qc_settings(cursor: Any, settings: QCSettings) -> QCSettings:
     `backend/app/services/system_parameter_service.py`) on top of the
     env-driven `QCSettings` defaults, for the fields the admin menu exposes
     (`min_blur_variance`/`min_brightness`/`max_brightness` -> this class's
-    `blur_variance_min`/`brightness_min`/`brightness_max`).
+    `blur_variance_min`/`brightness_min`/`brightness_max`, plus
+    `pose_tolerance_deg` straight through).
+
+    The menu's `yaw_gain`/`pitch_gain`/`min_pose_radius` are deliberately NOT
+    mapped here: they correct the FRONTEND's landmark-ratio pose estimator,
+    which under-reports pitch badly. This side uses `cv2.solvePnP`, which
+    reports true degrees and needs no such correction -- applying a gain here
+    would double-count it. `pose_tolerance_deg` is the knob that belongs to
+    this side, and it is in the same parameter so the two halves of the gate
+    can be retuned together.
 
     No row saved yet (ADMIN has never touched the menu) -> `settings`
     returned completely unchanged, byte-identical to before this function
@@ -130,6 +139,8 @@ def resolve_qc_settings(cursor: Any, settings: QCSettings) -> QCSettings:
         updates["brightness_min"] = float(override["min_brightness"])
     if "max_brightness" in override:
         updates["brightness_max"] = float(override["max_brightness"])
+    if "pose_tolerance_deg" in override:
+        updates["pose_tolerance_deg"] = float(override["pose_tolerance_deg"])
     if not updates:
         return settings
     return settings.model_copy(update=updates)

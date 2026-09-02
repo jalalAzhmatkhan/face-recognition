@@ -43,10 +43,12 @@ def _to_response(
     updated_at: datetime | None,
     is_default: bool,
 ) -> EnrollmentQualityParamsResponse:
+    # Spread the model rather than listing fields by hand: the response
+    # schema EXTENDS `EnrollmentQualityParams`, so hand-listing meant every
+    # new parameter silently came back as its schema default no matter what
+    # was saved (found live when the pose-sensitivity fields were added).
     return EnrollmentQualityParamsResponse(
-        min_blur_variance=params.min_blur_variance,
-        min_brightness=params.min_brightness,
-        max_brightness=params.max_brightness,
+        **params.model_dump(),
         updated_by=updated_by,
         updated_at=updated_at,
         is_default=is_default,

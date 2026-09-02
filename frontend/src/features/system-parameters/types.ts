@@ -13,6 +13,16 @@ export interface EnrollmentQualityParams {
   min_blur_variance: number
   min_brightness: number
   max_brightness: number
+  /**
+   * Head-pose sensitivity for clock-position detection. Optional on the wire
+   * because the backend added them after the first overrides were saved, and
+   * a row persisted without them still validates (the backend fills its own
+   * defaults) — so a GET can legitimately come back without these keys.
+   */
+  yaw_gain?: number
+  pitch_gain?: number
+  min_pose_radius?: number
+  pose_tolerance_deg?: number
 }
 
 export interface EnrollmentQualityParamsResponse extends EnrollmentQualityParams {

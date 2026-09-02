@@ -48,3 +48,32 @@ def test_never_touches_unrelated_qc_settings_fields() -> None:
     resolved = resolve_qc_settings(cursor, settings)
     assert resolved.face_ratio_min == 0.12
     assert resolved.min_pass_ratio == 0.75
+
+
+def test_applies_the_pose_tolerance_override() -> None:
+    """The server-side half of the head-pose gate. Exposed in the same admin
+    parameter as the frontend's sensitivity so an operator who loosens the
+    browser side can loosen the QC side to match, instead of trading a
+    "position never lights up" complaint for a "REJECTED_QUALITY:
+    pose_out_of_range" one."""
+    settings = QCSettings(pose_tolerance_deg=15.0)
+    cursor = _cursor_returning({"pose_tolerance_deg": 22.0})
+    assert resolve_qc_settings(cursor, settings).pose_tolerance_deg == 22.0
+
+
+def test_ignores_the_frontend_only_pose_gains() -> None:
+    """`yaw_gain`/`pitch_gain`/`min_pose_radius` correct the FRONTEND's
+    landmark-ratio estimator, which under-reports pitch. This side uses
+    solvePnP, which reports true degrees -- applying the gains here would
+    double-count the correction and start passing genuinely wrong poses."""
+    settings = QCSettings(yaw_range_deg=35.0, pitch_range_deg=25.0, pose_tolerance_deg=15.0)
+    cursor = _cursor_returning(
+        {"yaw_gain": 2.5, "pitch_gain": 3.5, "min_pose_radius": 0.55}
+    )
+
+    resolved = resolve_qc_settings(cursor, settings)
+
+    assert resolved.yaw_range_deg == 35.0
+    assert resolved.pitch_range_deg == 25.0
+    assert resolved.pose_tolerance_deg == 15.0
+    assert resolved == settings

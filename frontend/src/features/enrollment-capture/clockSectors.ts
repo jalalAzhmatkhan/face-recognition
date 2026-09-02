@@ -29,9 +29,41 @@ export const POSE_RANGE = {
  * confirmed "done" (debounces flicker / a single lucky frame). */
 export const FRAMES_TO_CONFIRM = 5
 
-/** Minimum fraction of the max pose range a sample must reach before it is
- * considered "at" a clock position rather than still near neutral/center. */
-const MIN_POSE_RADIUS_FRACTION = 0.55
+/**
+ * Per-axis correction for `headPose.ts`'s estimator, ADMIN-tunable via the
+ * System Parameter menu (`enrollment_capture_quality`).
+ *
+ * Why gains are needed at all: `estimateHeadPose` measures how far the nose
+ * sits off the face's midlines, so its output is roughly
+ * `protrusion x tan(angle)` — and the nose only protrudes about a third of
+ * the eye-to-chin half-height. Reaching this module's radius gate on pitch
+ * alone therefore took ~59 degrees of neck extension, which is past what
+ * most people can manage and past where the landmark model stays reliable.
+ * Sideways the head turns far enough that the same insensitivity was
+ * survivable, so in practice ONLY the yaw-dominant positions (2,3,4,8,9,10)
+ * ever confirmed — reported live, and the reason these gains exist.
+ *
+ * `pitchGain > yawGain` because a head pitches through a much smaller
+ * comfortable range than it turns. With these defaults, 12 o'clock needs
+ * roughly 25 degrees of pitch and 3 o'clock roughly 39 degrees of yaw,
+ * instead of 59 and 64.
+ *
+ * These are estimator-specific, NOT physical: ai-training's `cv2.solvePnP`
+ * reports true degrees and applies no gain (see `resolve_qc_settings`).
+ */
+export interface PoseSensitivity {
+  yawGain: number
+  pitchGain: number
+  /** Minimum distance from neutral (0..1, AFTER the gains) before a sample
+   * counts as being at a clock position rather than still near centre. */
+  minPoseRadius: number
+}
+
+export const DEFAULT_POSE_SENSITIVITY: PoseSensitivity = {
+  yawGain: 2.5,
+  pitchGain: 3.5,
+  minPoseRadius: 0.55,
+}
 
 function angleForClock(position: ClockPosition): number {
   // 12 -> 0 rad (straight up), clockwise positive, matching a clock face.
@@ -48,16 +80,60 @@ export function targetPoseForClock(position: ClockPosition): HeadPose {
   }
 }
 
+/** Everything the clock geometry derives from one pose sample. Returned as
+ * a whole so the dev-only debug overlay can show exactly why a position did
+ * or did not register, instead of leaving "nothing lights up" unexplained. */
+export interface PoseBreakdown {
+  /** Neutral-calibrated estimator output, in its nominal degrees. */
+  yawDeg: number
+  pitchDeg: number
+  /** After normalising by POSE_RANGE and applying the sensitivity gains. */
+  normYaw: number
+  normPitch: number
+  /** Distance from neutral; must reach `minPoseRadius` to resolve. */
+  radius: number
+  /** Clockwise from 12, in degrees. `null` when the radius gate fails. */
+  angleDeg: number | null
+  position: ClockPosition | null
+}
+
 /**
- * Resolve a detected head pose to the nearest clock position, or null when
- * the pose is too close to neutral to belong to any position (e.g. subject
- * hasn't started moving yet).
+ * Full geometry for one pose sample. `resolveClockPosition` is the thin
+ * wrapper the capture loop uses; this exists so the same numbers can be
+ * displayed and unit-tested without duplicating the maths.
  */
-export function resolveClockPosition(pose: HeadPose): ClockPosition | null {
-  const normYaw = pose.yaw / POSE_RANGE.maxYawDeg
-  const normPitch = pose.pitch / POSE_RANGE.maxPitchDeg
-  const radius = Math.hypot(normYaw, normPitch)
-  if (radius < MIN_POSE_RADIUS_FRACTION) return null
+export function describePose(
+  pose: HeadPose,
+  sensitivity: PoseSensitivity = DEFAULT_POSE_SENSITIVITY,
+): PoseBreakdown {
+  // Gain first, then cap the RADIUS rather than each axis. Clamping the
+  // axes independently would rotate the result whenever one of them
+  // saturated -- with a pitch gain above 1, an honest 1 o'clock pose
+  // saturates both axes and lands at exactly 45 degrees, i.e. on the 1/2
+  // boundary. Scaling the vector back along its own direction caps the
+  // magnitude at 1 while leaving the angle untouched.
+  //
+  // Clamping the raw fraction BEFORE the gain would be worse still: it
+  // would discard exactly the signal the gain exists to recover.
+  const gainedYaw = (pose.yaw / POSE_RANGE.maxYawDeg) * sensitivity.yawGain
+  const gainedPitch = (pose.pitch / POSE_RANGE.maxPitchDeg) * sensitivity.pitchGain
+  const gainedRadius = Math.hypot(gainedYaw, gainedPitch)
+  const scale = gainedRadius > 1 ? 1 / gainedRadius : 1
+  const normYaw = gainedYaw * scale
+  const normPitch = gainedPitch * scale
+  const radius = Math.min(gainedRadius, 1)
+
+  if (radius < sensitivity.minPoseRadius) {
+    return {
+      yawDeg: pose.yaw,
+      pitchDeg: pose.pitch,
+      normYaw,
+      normPitch,
+      radius,
+      angleDeg: null,
+      position: null,
+    }
+  }
 
   // atan2(x, y) with y=pitch, x=yaw gives angle measured clockwise from
   // "up" (pitch axis), matching angleForClock's convention.
@@ -65,8 +141,28 @@ export function resolveClockPosition(pose: HeadPose): ClockPosition | null {
   if (angle < 0) angle += 2 * Math.PI
 
   const raw = Math.round((angle / (2 * Math.PI)) * 12)
-  const position = raw === 0 ? 12 : (raw as ClockPosition)
-  return CLOCK_POSITIONS.includes(position) ? position : null
+  const candidate = raw === 0 ? 12 : (raw as ClockPosition)
+  return {
+    yawDeg: pose.yaw,
+    pitchDeg: pose.pitch,
+    normYaw,
+    normPitch,
+    radius,
+    angleDeg: (angle * 180) / Math.PI,
+    position: CLOCK_POSITIONS.includes(candidate) ? candidate : null,
+  }
+}
+
+/**
+ * Resolve a detected head pose to the nearest clock position, or null when
+ * the pose is too close to neutral to belong to any position (e.g. subject
+ * hasn't started moving yet).
+ */
+export function resolveClockPosition(
+  pose: HeadPose,
+  sensitivity: PoseSensitivity = DEFAULT_POSE_SENSITIVITY,
+): ClockPosition | null {
+  return describePose(pose, sensitivity).position
 }
 
 export function createInitialSectorState(): SectorState {
