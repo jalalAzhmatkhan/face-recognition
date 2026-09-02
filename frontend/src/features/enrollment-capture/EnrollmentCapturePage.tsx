@@ -76,6 +76,16 @@ const COUNTDOWN_START_S = 3
  * cheapest way to keep that error small.
  */
 const NEUTRAL_SAMPLE_COUNT = 20
+/**
+ * Fewest samples that may be averaged into a usable baseline.
+ *
+ * The window above is sized for the whole countdown, but a few frames in it
+ * routinely have no detectable face, so REQUIRING a full window would leave
+ * the baseline unmeasured. Latching as soon as this many are in hand — and
+ * continuing to refine it while more arrive — is what makes the measurement
+ * succeed in practice instead of silently producing nothing.
+ */
+const MIN_NEUTRAL_SAMPLES = 5
 
 /**
  * S-30 Enrollment capture wizard (FR-ENR-02/03/04).
@@ -198,6 +208,16 @@ export default function EnrollmentCapturePage() {
   // trigger a re-render (the loop runs every SAMPLE_INTERVAL_MS).
   const recentNeutralPosesRef = useRef<HeadPose[]>([])
   const neutralPoseRef = useRef<HeadPose | null>(null)
+  // A ref AND a state copy: the ref is what the sampling loop reads (it must
+  // not go stale in the interval's closure), the state is what renders the
+  // progress readout.
+  const measuringNeutralRef = useRef(false)
+  const [measuringNeutral, setMeasuringNeutral] = useState(false)
+  const [neutralSampleCount, setNeutralSampleCount] = useState(0)
+  // Mirrors `neutralPoseRef` for rendering only. Without it the "titik netral
+  // belum terukur" warning could never appear, since a ref change does not
+  // re-render.
+  const [neutralMeasured, setNeutralMeasured] = useState(false)
   const sectorsDone = countDone(tracker.status)
   const canFinishSweep = isCaptureComplete(tracker.status)
   const totalFrames = CLOCK_POSITIONS.reduce(
@@ -336,19 +356,29 @@ export default function EnrollmentCapturePage() {
       ? estimateHeadPose(detection.landmarks)
       : null
 
-    // Neutral-baseline candidates. Collected on the countdown step as well
-    // as preflight, because the countdown is the better moment: it tells the
-    // subject in as many words to look straight at the CAMERA, and it lasts
-    // long enough to average ~20 frames. Preflight only gives whatever the
-    // subject happened to be doing at the instant they clicked the shutter —
-    // usually looking at the screen (below the camera on a laptop), which
-    // bakes a downward tilt into the baseline and rotates the whole dial
-    // upward once `pitchGain` multiplies it.
-    if ((step === 'preflight' || step === 'countdown') && pose) {
-      recentNeutralPosesRef.current = [
-        ...recentNeutralPosesRef.current,
-        pose,
-      ].slice(-NEUTRAL_SAMPLE_COUNT)
+    // Neutral baseline. Driven by an explicit "measuring now" flag rather
+    // than by inferring the moment from `step`: the previous version
+    // collected during preflight/countdown and latched the average at the
+    // end, and if that handshake did not line up the baseline stayed null
+    // with nothing saying so. A null baseline is not a small degradation —
+    // it leaves the estimator's structural +6.6 degree pitch offset in
+    // place, so "menunduk" still reads as tilted UP and whichever way the
+    // head happens to be turned wins the quadrant.
+    //
+    // Latch as soon as MIN_NEUTRAL_SAMPLES are in hand and keep refining
+    // while more arrive, so a few faceless frames cannot starve it.
+    if (measuringNeutralRef.current && pose) {
+      const next = [...recentNeutralPosesRef.current, pose].slice(-NEUTRAL_SAMPLE_COUNT)
+      recentNeutralPosesRef.current = next
+      setNeutralSampleCount(next.length)
+      if (next.length >= MIN_NEUTRAL_SAMPLES) {
+        neutralPoseRef.current = averagePose(next)
+      }
+      if (next.length >= MIN_NEUTRAL_SAMPLES) setNeutralMeasured(true)
+      if (next.length >= NEUTRAL_SAMPLE_COUNT) {
+        measuringNeutralRef.current = false
+        setMeasuringNeutral(false)
+      }
     }
 
     // Dev-only pose readout. Computed on BOTH preflight and sweep so the
@@ -465,19 +495,25 @@ export default function EnrollmentCapturePage() {
   // timer this page owns.
   const finishSweepCapture = useCallback(() => setStep('review'), [])
 
-  /** Re-zero the clock against wherever the head is right now. The subject
-   * must be looking straight at the camera when this runs. */
-  const recalibrateNeutral = useCallback(() => {
-    const measured = averagePose(recentNeutralPosesRef.current)
-    if (measured !== null) neutralPoseRef.current = measured
+  /** Start measuring a fresh neutral baseline from the head's CURRENT
+   * position. The subject must be looking straight at the camera while this
+   * runs; the sampling loop latches the average and stops on its own. */
+  const beginNeutralMeasurement = useCallback(() => {
+    recentNeutralPosesRef.current = []
+    setNeutralSampleCount(0)
+    measuringNeutralRef.current = true
+    setMeasuringNeutral(true)
   }, [])
 
   const startSweepCapture = useCallback(() => {
     if (!streamRef.current) return
-    // Re-zero from the countdown window, which just spent 3 seconds telling
-    // the subject to look at the camera. Falls back to the baseline frozen
-    // at photo time when the countdown produced no usable pose.
-    recalibrateNeutral()
+    // The countdown just spent 3 seconds telling the subject to look at the
+    // camera, and the sampling loop has been latching the baseline as those
+    // frames arrived. Close the measurement window here; whether it actually
+    // succeeded is surfaced by the warning on the sweep step, not assumed.
+    measuringNeutralRef.current = false
+    setMeasuringNeutral(false)
+    setNeutralMeasured(neutralPoseRef.current !== null)
     resetSweep()
     if (elapsedTimerRef.current !== null) {
       window.clearInterval(elapsedTimerRef.current)
@@ -492,7 +528,7 @@ export default function EnrollmentCapturePage() {
     }, 1000)
 
     setStep('sweep')
-  }, [resetSweep, recalibrateNeutral])
+  }, [resetSweep])
 
   // Reset the countdown to COUNTDOWN_START_S exactly once, on the render
   // where `step` transitions TO 'countdown' (initial start or a retry) --
@@ -503,7 +539,15 @@ export default function EnrollmentCapturePage() {
   const [prevStep, setPrevStep] = useState<WizardStep>(step)
   if (step !== prevStep) {
     setPrevStep(step)
-    if (step === 'countdown') setCountdownValue(COUNTDOWN_START_S)
+    if (step === 'countdown') {
+      setCountdownValue(COUNTDOWN_START_S)
+      // State half of starting the neutral measurement. Split from the ref
+      // half (in the countdown effect below) because setState belongs in a
+      // render-time adjustment and ref mutation does not — the two lint
+      // rules pull in opposite directions here.
+      setMeasuringNeutral(true)
+      setNeutralSampleCount(0)
+    }
   }
 
   // Drives the 'countdown' step: ticks COUNTDOWN_START_S down to 0 once per
@@ -512,12 +556,13 @@ export default function EnrollmentCapturePage() {
   // stable across renders and referencing it directly here is safe.
   useEffect(() => {
     if (step !== 'countdown') return
-    // Start the neutral window empty so the baseline comes from the
-    // countdown itself (where the subject is told to look at the camera)
-    // rather than from stale preflight frames taken while they were looking
-    // at the screen, which sits below the camera on a laptop and tilts the
-    // baseline downward.
+    // Ref half of starting the neutral measurement (state half is in the
+    // render-time adjustment above). Measured from the countdown itself,
+    // where the subject is told to look at the camera — not from preflight
+    // frames taken while they were looking at the screen, which sits below
+    // the camera on a laptop and tilts the baseline downward.
     recentNeutralPosesRef.current = []
+    measuringNeutralRef.current = true
     const id = window.setInterval(() => {
       setCountdownValue((prev) => {
         if (prev <= 1) {
@@ -768,7 +813,11 @@ export default function EnrollmentCapturePage() {
                 </span>
                 <span className="capture-countdown-text">
                   Lihat lurus ke <strong>kamera</strong> (bukan ke layar) — posisi
-                  ini dipakai sebagai titik netral arah jam.
+                  ini dipakai sebagai titik netral arah kepala.
+                </span>
+                <span className="capture-countdown-text mono">
+                  Titik netral: {neutralSampleCount}/{NEUTRAL_SAMPLE_COUNT} sampel
+                  {neutralSampleCount < MIN_NEUTRAL_SAMPLES && ' — wajah belum terdeteksi'}
                 </span>
               </div>
             )}
@@ -787,6 +836,14 @@ export default function EnrollmentCapturePage() {
                 </li>
               )}
             </ul>
+
+            {step === 'sweep' && !neutralMeasured && (
+              <p role="alert" className="capture-error">
+                Titik netral belum terukur, arah kepala bisa salah terdeteksi.
+                Lihat lurus ke <strong>kamera</strong>, lalu tekan
+                &quot;Set Titik Netral&quot;.
+              </p>
+            )}
 
             {step === 'sweep' && targetPosition !== null && (
               <p className="capture-target-hint">
@@ -918,14 +975,21 @@ export default function EnrollmentCapturePage() {
                 <button type="button" className="btn" onClick={cancelCapture}>
                   Batal
                 </button>
-                {/* Re-zero without restarting. The clock is measured
-                    RELATIVE to a neutral reading, and that reading is only
-                    as good as where the head happened to be when it was
-                    taken — if the whole dial feels rotated (aiming at jam 4
-                    lights up jam 2), looking at the camera and pressing this
-                    fixes it in place. */}
-                <button type="button" className="btn" onClick={recalibrateNeutral}>
-                  Set Titik Netral
+                {/* Re-measure without restarting. Every direction is judged
+                    RELATIVE to the neutral reading, so if the whole dial
+                    feels rotated, look at the camera and press this. It
+                    samples afresh rather than reusing the countdown's window
+                    — reusing it meant the button could not actually change
+                    anything. */}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={beginNeutralMeasurement}
+                  disabled={measuringNeutral}
+                >
+                  {measuringNeutral
+                    ? `Mengukur… ${neutralSampleCount}/${NEUTRAL_SAMPLE_COUNT}`
+                    : 'Set Titik Netral'}
                 </button>
                 <button type="button" className="btn" onClick={retrySweepCapture}>
                   Ulangi Semua
