@@ -15,7 +15,7 @@ from botocore.client import Config as BotoConfig
 from app.core.config import Settings, get_settings
 
 
-def build_s3_client(settings: Settings) -> Any:
+def build_s3_client(settings: Settings, *, for_presign: bool = False) -> Any:
     """Build a boto3 S3 client from `Settings`.
 
     - `aws_s3_endpoint_url` is `None` in staging/prod: boto3 uses its own
@@ -28,18 +28,25 @@ def build_s3_client(settings: Settings) -> Any:
       support virtual-hosted-style addressing (`bucket.host.com/key`) the
       way AWS S3 does, only `host.com/bucket/key`.
     """
+    # A presigned URL is consumed by the BROWSER, which may reach the object
+    # store at a different hostname than this process does (MinIO under
+    # docker-compose: `minio:9000` inside the network, `localhost:9000` from
+    # the host). SigV4 signs the Host header, so the URL must be signed for
+    # the hostname that will actually be used -- rewriting it afterwards
+    # invalidates the signature. `aws_s3_public_endpoint_url` is unset in
+    # staging/prod, where both are the same real S3 endpoint.
+    endpoint_url = settings.aws_s3_endpoint_url
+    if for_presign and settings.aws_s3_public_endpoint_url is not None:
+        endpoint_url = settings.aws_s3_public_endpoint_url
+
     boto_config = BotoConfig(
         signature_version="s3v4",
-        s3=(
-            {"addressing_style": "path"}
-            if settings.aws_s3_endpoint_url is not None
-            else {}
-        ),
+        s3=({"addressing_style": "path"} if endpoint_url is not None else {}),
     )
     return boto3.client(
         "s3",
         region_name=settings.aws_region,
-        endpoint_url=settings.aws_s3_endpoint_url,
+        endpoint_url=endpoint_url,
         aws_access_key_id=settings.aws_access_key_id,
         aws_secret_access_key=(
             settings.aws_secret_access_key.get_secret_value()
@@ -48,6 +55,14 @@ def build_s3_client(settings: Settings) -> Any:
         ),
         config=boto_config,
     )
+
+
+@lru_cache
+def get_s3_presign_client() -> Any:
+    """Client used ONLY to sign presigned URLs handed to the browser. Same
+    credentials and region as `get_s3_client`, but addressed at
+    `aws_s3_public_endpoint_url` when that is set — see `build_s3_client`."""
+    return build_s3_client(get_settings(), for_presign=True)
 
 
 @lru_cache

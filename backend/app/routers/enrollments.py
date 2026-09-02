@@ -38,7 +38,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.aws import get_s3_client
+from app.core.aws import get_s3_client, get_s3_presign_client
 from app.core.config import Settings, get_settings
 from app.core.problem import ProblemError
 from app.db.session import get_db
@@ -115,6 +115,15 @@ def get_s3_client_dependency() -> Any:
     mock/fake boto3 client — no real AWS/MinIO call is ever made from
     automated tests (BE-06)."""
     return get_s3_client()
+
+
+def get_s3_presign_client_dependency() -> Any:
+    """The client used to SIGN browser-facing upload URLs. Separate from
+    `get_s3_client_dependency` because the browser may address the object
+    store at a different hostname than this process does, and SigV4 signs
+    that hostname — see `app/core/aws.py::build_s3_client`. Identical to it
+    whenever `aws_s3_public_endpoint_url` is unset, which is staging/prod."""
+    return get_s3_presign_client()
 
 
 def _not_found(session_id: uuid.UUID) -> ProblemError:
@@ -351,7 +360,7 @@ def presign_enrollment_media(
     enrollment_repo: EnrollmentSessionRepository = Depends(get_enrollment_repository),
     media_repo: MediaObjectRepository = Depends(get_media_object_repository),
     audit_repo: AuditLogRepository = Depends(get_audit_log_repository),
-    s3_client: Any = Depends(get_s3_client_dependency),
+    s3_client: Any = Depends(get_s3_presign_client_dependency),
     settings: Settings = Depends(get_settings_dependency),
 ) -> PresignResponse:
     """BE-06: issue a presigned S3 PUT URL (TSD §7). Media bytes never pass
