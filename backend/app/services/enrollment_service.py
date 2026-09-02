@@ -114,32 +114,61 @@ def grant_consent(
     consent_version: str,
     actor: str,
 ) -> EnrollmentSession:
-    """Record a versioned consent entry and transition CREATED -> CONSENTED.
+    """Record a versioned consent entry; transition CREATED -> CONSENTED.
 
-    Only legal while the session is still CREATED — consent is meant to
-    precede everything else in the flow (FR-ENR-08), so granting it twice
-    or granting it on an already-consented/further-along/terminal session
-    is rejected as a conflict rather than silently accepted.
+    Consent precedes everything else in the flow (FR-ENR-08), so on a
+    CREATED session this records the grant AND advances the state.
+
+    On a session that has already moved on, the grant is still RECORDED but
+    the state is left alone. That is not a loosening of the gate, it fixes a
+    hole in it: the operator flow (`EnrollmentDetailPage`'s consent +
+    recapture) drives a session to CAPTURING before the wizard ever opens,
+    so the wizard's own consent step -- the one the subject actually reads
+    and ticks, at the CURRENT clause version -- always hit a 409 and its
+    grant was silently dropped by the caller's catch-all. ASM-EC-05 requires
+    re-consent never to block an existing user's capture; it does not
+    require throwing the record away. `consents` is append-only per user, so
+    recording an additional, newer-version grant is strictly more complete.
+
+    Re-granting a version the user already has on record is a no-op rather
+    than a duplicate row -- the wizard fires this on every camera start.
+
+    A terminal session (CANCELLED/REVOKED) still conflicts: consent for a
+    revoked enrollment is meaningless, and silently accepting it would let a
+    revoked subject look consented.
     """
     session = enrollment_repo.get(session_id)
     if session is None:
         raise EnrollmentNotFoundError(str(session_id))
-    if session.state != EnrollmentState.CREATED:
+    if session.state in fsm.TERMINAL_STATES:
         raise InvalidConsentStateError(session_id, session.state)
 
-    fsm.validate_transition(session.state, EnrollmentState.CONSENTED)
-
-    consent = Consent(
-        user_id=session.user_id,
-        consent_version=consent_version,
-        granted_at=datetime.now(UTC),
+    existing = next(
+        (
+            row
+            for row in consent_repo.list_for_user(session.user_id)
+            if row.consent_version == consent_version
+        ),
+        None,
     )
-    consent_repo.create(consent)
+    consent = existing or consent_repo.create(
+        Consent(
+            user_id=session.user_id,
+            consent_version=consent_version,
+            granted_at=datetime.now(UTC),
+        )
+    )
 
     previous_state = session.state
-    session.state = EnrollmentState.CONSENTED
-    session = enrollment_repo.update(session)
+    if session.state == EnrollmentState.CREATED:
+        fsm.validate_transition(session.state, EnrollmentState.CONSENTED)
+        session.state = EnrollmentState.CONSENTED
+        session = enrollment_repo.update(session)
 
+    # Audited in both cases. A grant recorded against an in-flight session
+    # transitions nothing, but it is still a consent event and the audit log
+    # is the compliance record (FR-ENR-08) -- `from`/`to` being equal is the
+    # honest description of what happened.
     audit_repo.record(
         actor=actor,
         action="enrollment.consent_granted",
@@ -147,6 +176,7 @@ def grant_consent(
         payload={
             "consent_id": str(consent.id),
             "consent_version": consent_version,
+            "already_on_record": existing is not None,
             "from": previous_state.value,
             "to": session.state.value,
         },

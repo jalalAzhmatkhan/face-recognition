@@ -58,6 +58,12 @@ const SAMPLE_INTERVAL_MS = 150
  * them; fully serial is needlessly slow, unbounded would hammer both our
  * API and the browser's connection pool. */
 const UPLOAD_CONCURRENCY = 4
+/** Shared so re-acquiring the camera mid-wizard cannot drift from the
+ * constraints the first acquisition used. */
+const CAMERA_CONSTRAINTS: MediaStreamConstraints = {
+  audio: false,
+  video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+}
 const COUNTDOWN_START_S = 3
 /** How many recent preflight pose samples are averaged into the neutral
  * baseline (see `headPose.ts::calibrateToNeutral`). At SAMPLE_INTERVAL_MS
@@ -160,6 +166,18 @@ export default function EnrollmentCapturePage() {
     frames: 'idle' | 'uploading' | 'done' | 'error'
   }>({ photo: 'idle', frames: 'idle' })
   const [framesUploaded, setFramesUploaded] = useState(0)
+  const [framesToUpload, setFramesToUpload] = useState(0)
+  // Upload progress that must SURVIVE a failed attempt, so "Coba Lagi"
+  // resumes instead of restarting. With ~13 objects a restart is not merely
+  // slow: every re-uploaded frame mints another presigned key and another
+  // PENDING row, leaving duplicates in S3 for QC to sift through. `null`
+  // means "no attempt started yet"; `retrySweepCapture` resets it to null so
+  // a redone sweep is snapshotted afresh rather than resuming a list of
+  // frames the subject just discarded.
+  const pendingFramesRef = useRef<ReturnType<typeof flattenBurstBuffer> | null>(
+    null,
+  )
+  const photoUploadedRef = useRef(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   // 3-2-1 countdown shown right before recording actually starts (initial
   // start AND every retry) so the subject isn't caught off guard the
@@ -280,17 +298,20 @@ export default function EnrollmentCapturePage() {
     if (enrollmentId) {
       try {
         await grantConsent(enrollmentId, CURRENT_CONSENT_VERSION)
-      } catch {
-        // Best-effort — see the module docstring: a session that already
-        // has consent on record (the common case) 409s here, and
-        // ASM-EC-05 says that must never block capture from starting.
+      } catch (error) {
+        // Still non-blocking (ASM-EC-05: re-consent must never stop an
+        // existing user capturing), but no longer a blanket swallow. The
+        // backend now RECORDS a grant on an in-flight session instead of
+        // 409-ing it, so the only remaining conflict is a terminal session
+        // -- and anything else here is a genuine failure that used to be
+        // invisible. Logged rather than shown: the subject can do nothing
+        // about it, and blocking capture on it is exactly what ASM-EC-05
+        // forbids.
+        console.warn('Consent grant did not record', error)
       }
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-      })
+      const stream = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS)
       streamRef.current = stream
       setCameraError(null)
       setStep('preflight')
@@ -586,7 +607,31 @@ export default function EnrollmentCapturePage() {
     return () => window.clearInterval(id)
   }, [step, startSweepCapture])
 
-  const retrySweepCapture = useCallback(() => {
+  /**
+   * Redo the whole 360 sweep, keeping the frontal photo.
+   *
+   * Re-acquires the camera because `startUpload` stops it: after a failed
+   * upload the only route out used to be retrying that upload, with a dead
+   * `<video>` and no way back to capture. Also clears the upload
+   * bookkeeping, so the next submit snapshots the NEW frames instead of
+   * resuming the previous attempt's list — resuming there would upload
+   * frames the subject just discarded.
+   */
+  const retrySweepCapture = useCallback(async () => {
+    if (!streamRef.current) {
+      try {
+        streamRef.current = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS)
+        setCameraError(null)
+      } catch {
+        setCameraError('Tidak dapat mengakses kamera. Periksa izin kamera pada browser.')
+        return
+      }
+    }
+    pendingFramesRef.current = null
+    setFramesUploaded(0)
+    setFramesToUpload(0)
+    setUploadStatus((prev) => ({ ...prev, frames: 'idle' }))
+    setUploadError(null)
     resetSweep()
     setStep('countdown')
   }, [resetSweep])
@@ -665,17 +710,6 @@ export default function EnrollmentCapturePage() {
     },
     [enrollmentId],
   )
-
-  // Upload progress that must SURVIVE a failed attempt, so "Coba Lagi"
-  // resumes instead of restarting. With 36-odd sweep frames a restart is
-  // not merely slow: every re-uploaded frame mints another presigned key
-  // and another PENDING row, leaving duplicate objects in S3 for QC to sift
-  // through. `null` in `pendingFramesRef` means "no attempt started yet".
-  const pendingFramesRef = useRef<ReturnType<typeof flattenBurstBuffer> | null>(
-    null,
-  )
-  const photoUploadedRef = useRef(false)
-  const [framesToUpload, setFramesToUpload] = useState(0)
 
   const startUpload = useCallback(async () => {
     if (!photoBlob || !enrollmentId) return
@@ -1001,7 +1035,11 @@ export default function EnrollmentCapturePage() {
                     ? `Mengukur… ${neutralSampleCount}/${NEUTRAL_SAMPLE_COUNT}`
                     : 'Set Titik Netral'}
                 </button>
-                <button type="button" className="btn" onClick={retrySweepCapture}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void retrySweepCapture()}
+                >
                   Ulangi Semua
                 </button>
                 <button
@@ -1046,7 +1084,11 @@ export default function EnrollmentCapturePage() {
             ))}
           </ul>
           <div className="capture-actions">
-            <button type="button" className="btn" onClick={retrySweepCapture}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void retrySweepCapture()}
+            >
               Ulangi Semua Posisi
             </button>
             <button type="button" className="btn btn--primary" onClick={() => void startUpload()}>
@@ -1071,10 +1113,25 @@ export default function EnrollmentCapturePage() {
               <p role="alert" className="capture-error">{uploadError}</p>
               <p>
                 Mencoba lagi hanya mengunggah foto yang belum berhasil terkirim.
+                Jika hasil capture-nya sendiri yang ingin diganti, ulangi
+                capture 360° — foto frontal tetap dipakai.
               </p>
-              <button type="button" className="btn btn--primary" onClick={() => void startUpload()}>
-                Coba Lagi
-              </button>
+              <div className="capture-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void retrySweepCapture()}
+                >
+                  Ulangi Capture 360°
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => void startUpload()}
+                >
+                  Coba Lagi
+                </button>
+              </div>
             </>
           )}
         </div>
