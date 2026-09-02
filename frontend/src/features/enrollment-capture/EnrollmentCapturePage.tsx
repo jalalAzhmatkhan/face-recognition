@@ -57,7 +57,20 @@ const COUNTDOWN_START_S = 3
 /** How many recent preflight pose samples are averaged into the neutral
  * baseline (see `headPose.ts::calibrateToNeutral`). At SAMPLE_INTERVAL_MS
  * this is the last ~0.75 s before the frontal photo is taken. */
-const NEUTRAL_SAMPLE_COUNT = 5
+/**
+ * How many recent poses are averaged into the neutral baseline.
+ *
+ * Sized to cover the whole 3s countdown at SAMPLE_INTERVAL_MS (~20 frames)
+ * rather than the ~0.75s the old value of 5 covered. The baseline has to be
+ * GOOD, not merely present: the estimator's usable pitch swing is only about
+ * +-8 degrees and it sits on a structural +6.6 degree offset (a frontal face
+ * reads "tilted up", because the nose tip sits above the eye/chin midpoint),
+ * and `pitchGain` then multiplies whatever is left over by 3.5. A baseline
+ * off by two degrees is therefore worth ~0.35 of normalised pitch — enough
+ * to rotate the entire dial. Averaging a longer, purposeful window is the
+ * cheapest way to keep that error small.
+ */
+const NEUTRAL_SAMPLE_COUNT = 20
 
 /**
  * S-30 Enrollment capture wizard (FR-ENR-02/03/04).
@@ -151,7 +164,9 @@ export default function EnrollmentCapturePage() {
   // Dev-only live pose readout (see the debug panel in the JSX). Held in
   // state so it re-renders, but ONLY populated while `import.meta.env.DEV`
   // is set -- in production the sampling loop never touches it.
-  const [poseDebug, setPoseDebug] = useState<PoseBreakdown | null>(null)
+  const [poseDebug, setPoseDebug] = useState<
+    (PoseBreakdown & { raw: HeadPose; neutral: HeadPose | null }) | null
+  >(null)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -171,12 +186,12 @@ export default function EnrollmentCapturePage() {
   const sampleTimerRef = useRef<number | null>(null)
   const elapsedTimerRef = useRef<number | null>(null)
   // Neutral-pose calibration (see `headPose.ts::calibrateToNeutral` for WHY
-  // this exists): `recentPreflightPosesRef` is a rolling window of the last
+  // this exists): `recentNeutralPosesRef` is a rolling window of the last
   // few poses seen while the subject was framing up for the frontal photo,
   // and `neutralPoseRef` freezes their average at the instant that photo is
   // taken. Refs, not state: they feed the sampling loop only and must never
   // trigger a re-render (the loop runs every SAMPLE_INTERVAL_MS).
-  const recentPreflightPosesRef = useRef<HeadPose[]>([])
+  const recentNeutralPosesRef = useRef<HeadPose[]>([])
   const neutralPoseRef = useRef<HeadPose | null>(null)
   const sectorsDone = countDone(tracker.status)
   const canFinishSweep = isCaptureComplete(tracker.status)
@@ -316,13 +331,17 @@ export default function EnrollmentCapturePage() {
       ? estimateHeadPose(detection.landmarks)
       : null
 
-    // On the preflight step the subject is looking straight at the camera by
-    // definition (the "Ambil Foto Frontal" button is gated on a detected,
-    // good-quality face), so keep the most recent poses around as neutral-
-    // baseline candidates for `capturePhoto` to freeze.
-    if (step === 'preflight' && pose) {
-      recentPreflightPosesRef.current = [
-        ...recentPreflightPosesRef.current,
+    // Neutral-baseline candidates. Collected on the countdown step as well
+    // as preflight, because the countdown is the better moment: it tells the
+    // subject in as many words to look straight at the CAMERA, and it lasts
+    // long enough to average ~20 frames. Preflight only gives whatever the
+    // subject happened to be doing at the instant they clicked the shutter —
+    // usually looking at the screen (below the camera on a laptop), which
+    // bakes a downward tilt into the baseline and rotates the whole dial
+    // upward once `pitchGain` multiplies it.
+    if ((step === 'preflight' || step === 'countdown') && pose) {
+      recentNeutralPosesRef.current = [
+        ...recentNeutralPosesRef.current,
         pose,
       ].slice(-NEUTRAL_SAMPLE_COUNT)
     }
@@ -332,7 +351,15 @@ export default function EnrollmentCapturePage() {
     // (a frontal face should read close to 0/0 once calibrated).
     if (import.meta.env.DEV) {
       const debugPose = pose ? calibrateToNeutral(pose, neutralPoseRef.current) : null
-      setPoseDebug(debugPose ? describePose(debugPose, poseSensitivity) : null)
+      setPoseDebug(
+        debugPose && pose
+          ? {
+              ...describePose(debugPose, poseSensitivity),
+              raw: pose,
+              neutral: neutralPoseRef.current,
+            }
+          : null,
+      )
     }
 
     if (step !== 'sweep') return
@@ -403,7 +430,7 @@ export default function EnrollmentCapturePage() {
     // every clock position from here on is measured RELATIVE to it. `null`
     // (no pose sampled yet) simply means no calibration, i.e. the previous
     // uncalibrated behaviour.
-    neutralPoseRef.current = averagePose(recentPreflightPosesRef.current)
+    neutralPoseRef.current = averagePose(recentNeutralPosesRef.current)
     canvas.toBlob(
       (blob) => {
         if (blob) setPhotoBlob(blob)
@@ -433,8 +460,19 @@ export default function EnrollmentCapturePage() {
   // timer this page owns.
   const finishSweepCapture = useCallback(() => setStep('review'), [])
 
+  /** Re-zero the clock against wherever the head is right now. The subject
+   * must be looking straight at the camera when this runs. */
+  const recalibrateNeutral = useCallback(() => {
+    const measured = averagePose(recentNeutralPosesRef.current)
+    if (measured !== null) neutralPoseRef.current = measured
+  }, [])
+
   const startSweepCapture = useCallback(() => {
     if (!streamRef.current) return
+    // Re-zero from the countdown window, which just spent 3 seconds telling
+    // the subject to look at the camera. Falls back to the baseline frozen
+    // at photo time when the countdown produced no usable pose.
+    recalibrateNeutral()
     resetSweep()
     if (elapsedTimerRef.current !== null) {
       window.clearInterval(elapsedTimerRef.current)
@@ -449,7 +487,7 @@ export default function EnrollmentCapturePage() {
     }, 1000)
 
     setStep('sweep')
-  }, [resetSweep])
+  }, [resetSweep, recalibrateNeutral])
 
   // Reset the countdown to COUNTDOWN_START_S exactly once, on the render
   // where `step` transitions TO 'countdown' (initial start or a retry) --
@@ -469,6 +507,12 @@ export default function EnrollmentCapturePage() {
   // stable across renders and referencing it directly here is safe.
   useEffect(() => {
     if (step !== 'countdown') return
+    // Start the neutral window empty so the baseline comes from the
+    // countdown itself (where the subject is told to look at the camera)
+    // rather than from stale preflight frames taken while they were looking
+    // at the screen, which sits below the camera on a laptop and tilts the
+    // baseline downward.
+    recentNeutralPosesRef.current = []
     const id = window.setInterval(() => {
       setCountdownValue((prev) => {
         if (prev <= 1) {
@@ -504,7 +548,7 @@ export default function EnrollmentCapturePage() {
   // alongside — the next `capturePhoto` re-freezes a fresh one.
   const retakePhoto = useCallback(() => {
     neutralPoseRef.current = null
-    recentPreflightPosesRef.current = []
+    recentNeutralPosesRef.current = []
     setPhotoBlob(null)
   }, [])
 
@@ -718,7 +762,8 @@ export default function EnrollmentCapturePage() {
                   {countdownValue > 0 ? countdownValue : 'Mulai!'}
                 </span>
                 <span className="capture-countdown-text">
-                  Bersiap, foto akan diambil otomatis…
+                  Lihat lurus ke <strong>kamera</strong> (bukan ke layar) — posisi
+                  ini dipakai sebagai titik netral arah jam.
                 </span>
               </div>
             )}
@@ -760,6 +805,24 @@ export default function EnrollmentCapturePage() {
                   <p className="mono">wajah / landmark tidak terdeteksi</p>
                 ) : (
                   <dl className="mono">
+                    {/* raw and netral are shown because the clock is measured
+                        RELATIVE to netral. A frontal face reads about +6.6
+                        pitch structurally, so if netral did not capture that,
+                        every position is skewed toward the top of the dial. */}
+                    <div>
+                      <dt>raw</dt>
+                      <dd>
+                        {poseDebug.raw.yaw.toFixed(1)}° / {poseDebug.raw.pitch.toFixed(1)}°
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>netral</dt>
+                      <dd data-ok={poseDebug.neutral !== null}>
+                        {poseDebug.neutral === null
+                          ? 'BELUM DIUKUR'
+                          : `${poseDebug.neutral.yaw.toFixed(1)}° / ${poseDebug.neutral.pitch.toFixed(1)}°`}
+                      </dd>
+                    </div>
                     <div>
                       <dt>yaw</dt>
                       <dd>{poseDebug.yawDeg.toFixed(1)}°</dd>
@@ -848,6 +911,15 @@ export default function EnrollmentCapturePage() {
               <div className="capture-actions">
                 <button type="button" className="btn" onClick={cancelCapture}>
                   Batal
+                </button>
+                {/* Re-zero without restarting. The clock is measured
+                    RELATIVE to a neutral reading, and that reading is only
+                    as good as where the head happened to be when it was
+                    taken — if the whole dial feels rotated (aiming at jam 4
+                    lights up jam 2), looking at the camera and pressing this
+                    fixes it in place. */}
+                <button type="button" className="btn" onClick={recalibrateNeutral}>
+                  Set Titik Netral
                 </button>
                 <button type="button" className="btn" onClick={retrySweepCapture}>
                   Ulangi Semua
