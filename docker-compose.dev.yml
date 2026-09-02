@@ -90,8 +90,27 @@ services:
       AWS_REGION: ${AWS_REGION:-}
       AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-}
       AWS_S3_PREFIX: ${AWS_S3_PREFIX:-face-recognition/}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-minioadmin}}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:-minioadmin_dev_password}}
+      # Two endpoints on purpose, and they are NOT interchangeable.
+      #
+      # This container reaches MinIO over the compose network as
+      # `minio:9000`. The BROWSER cannot resolve that name at all -- it only
+      # sees `localhost:9000` via the published port. Presigned URLs are
+      # consumed by the browser, and SigV4 signs the Host header, so a URL
+      # signed for `minio:9000` cannot be rewritten to `localhost:9000`
+      # afterwards without invalidating it. Hence one endpoint for this
+      # process's own S3 calls (HEAD verification, worker downloads) and one
+      # for the URLs handed out to the browser.
+      #
+      # Without these the backend silently presigned against REAL AWS S3
+      # (boto3's default endpoint resolution), and the browser PUT failed
+      # with an opaque "Failed to fetch".
+      #
+      # Both unset in staging/prod, where real S3 is one endpoint for
+      # everyone -- see app/core/config.py::aws_s3_public_endpoint_url.
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://minio:9000}
+      AWS_S3_PUBLIC_ENDPOINT_URL: ${AWS_S3_PUBLIC_ENDPOINT_URL:-http://localhost:${MINIO_PORT:-9000}}
       # Forgot-password email (BE-03 follow-up): MailHog accepts any message
       # without real delivery -- view what was "sent" at http://localhost:8025.
       SMTP_HOST: mailhog
@@ -131,6 +150,15 @@ services:
       LOG_LEVEL: DEBUG
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-frac}:${POSTGRES_PASSWORD:-frac_dev_password}@postgres:5432/${POSTGRES_DB:-frac}
       REDIS_URL: redis://redis:6379/0
+      # Server-side S3 only (retention purge, BE-14) -- this process never
+      # hands a URL to a browser, so it needs the internal endpoint and not
+      # the public one.
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-}
+      AWS_S3_PREFIX: ${AWS_S3_PREFIX:-face-recognition/}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-minioadmin}}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:-minioadmin_dev_password}}
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://minio:9000}
     volumes:
       - ./backend:/app
       - backend_venv:/app/.venv
@@ -292,6 +320,13 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_dev_password}
+      # The enrollment wizard PUTs media straight from the browser to a
+      # presigned URL (FR-ENR-04: bytes never pass through the backend), so
+      # this is a cross-origin request from the Vite dev origin. Without CORS
+      # MinIO's reply carries no Access-Control-Allow-Origin, the browser
+      # discards it, and the upload surfaces as a bare "Failed to fetch"
+      # with nothing useful in the network panel.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${CORS_ALLOW_ORIGINS:-http://localhost:5173}
     ports:
       - "${MINIO_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"

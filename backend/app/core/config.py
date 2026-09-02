@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     # instead of real AWS. MUST stay unset in staging/prod so boto3 falls
     # back to AWS's own endpoint resolution for `aws_region`.
     aws_s3_endpoint_url: str | None = None
+    #: Dev/test ONLY. The endpoint a BROWSER must use to reach the same
+    #: object store, when that differs from the one this process uses.
+    #:
+    #: With MinIO in docker-compose the two genuinely differ: the backend
+    #: container reaches it at `http://minio:9000` (compose DNS), while the
+    #: browser can only reach it at `http://localhost:9000`. A presigned URL
+    #: is consumed by the BROWSER, so it has to be signed for the browser's
+    #: hostname — and the host is part of the SigV4 signature, so rewriting
+    #: it after signing invalidates the URL. Hence a second endpoint rather
+    #: than a string replace.
+    #:
+    #: Unset in staging/prod, where both sides address real S3 identically.
+    aws_s3_public_endpoint_url: str | None = None
 
     # Staff AuthN/AuthZ (BE-03, NFR-SEC-04). Local email+password JWT auth
     # against `staff_accounts` — `oidc_sub` stays in the schema (nullable) as
