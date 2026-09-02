@@ -75,3 +75,25 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "browser_upload_origins" {
+  description = <<-EOT
+    Origins allowed to PUT enrollment media straight from the browser to a
+    presigned URL (FR-ENR-04: bytes never pass through the backend).
+
+    This is REQUIRED, not optional hardening. A cross-origin PUT whose reply
+    carries no Access-Control-Allow-Origin is discarded by the browser, and
+    the upload fails as an opaque "Failed to fetch" with nothing useful in
+    the network panel -- the presign call itself succeeds, so the backend
+    logs look clean.
+
+    Note this is unrelated to Block Public Access: a presigned URL is an
+    AUTHENTICATED (SigV4) request, so it keeps working with every public-
+    access block enabled. CORS governs whether the BROWSER will hand the
+    response to the page, nothing about who may read the bucket.
+
+    List every origin the console is served from, scheme and port included.
+  EOT
+  type        = list(string)
+  default     = []
+}

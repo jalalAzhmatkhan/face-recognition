@@ -108,6 +108,24 @@ def test_readyz_reports_503_when_the_database_is_unreachable(client: TestClient)
     assert response.json()["database"] == "unreachable"
 
 
+def test_readyz_reports_which_object_store_is_configured(client: TestClient) -> None:
+    """Reported, not probed. "Which store am I actually pointed at" is
+    otherwise invisible until a browser upload fails -- and a presigned URL
+    for the wrong host looks perfectly well-formed from the server side."""
+    ok = schema_check.SchemaStatus(
+        applied="e4b9d2f6a8c3", expected="e4b9d2f6a8c3", in_sync=True, detail="ok"
+    )
+    with (
+        patch("app.routers.health.get_engine"),
+        patch("app.routers.health.schema_check.check_schema", return_value=ok),
+    ):
+        body = client.get("/readyz").json()
+
+    assert body["storage_backend"] in {"s3", "minio"}
+    assert "storage_endpoint" in body
+    assert "storage_browser_endpoint" in body
+
+
 def test_readyz_is_200_when_everything_matches(client: TestClient) -> None:
     ok = schema_check.SchemaStatus(
         applied="e4b9d2f6a8c3", expected="e4b9d2f6a8c3", in_sync=True, detail="ok"

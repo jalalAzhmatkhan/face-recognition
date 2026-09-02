@@ -18,11 +18,15 @@ from app.core.config import Settings, get_settings
 def build_s3_client(settings: Settings, *, for_presign: bool = False) -> Any:
     """Build a boto3 S3 client from `Settings`.
 
-    - `aws_s3_endpoint_url` is `None` in staging/prod: boto3 uses its own
-      endpoint resolution for `aws_region` (real AWS S3), matching the
-      "app never provisions/assumes a specific endpoint" rule already
-      documented on `Settings.aws_s3_bucket_name`.
-    - When set (dev/test only, e.g. `http://localhost:9000` for MinIO),
+    Which endpoint applies is decided by `Settings.media_storage_backend`
+    (`"s3"` or `"minio"`) and its `resolved_s3_*_endpoint_url` properties —
+    see there for why one switch beats hand-pairing two URLs.
+
+    - Resolves to `None` for `"s3"`: boto3 uses its own endpoint resolution
+      for `aws_region` (real AWS S3), matching the "app never
+      provisions/assumes a specific endpoint" rule already documented on
+      `Settings.aws_s3_bucket_name`.
+    - When set (`"minio"`, or an explicit override),
       boto3 is pointed at that endpoint AND switched to path-style bucket
       addressing (`s3={"addressing_style": "path"}`) — MinIO does not
       support virtual-hosted-style addressing (`bucket.host.com/key`) the
@@ -35,9 +39,9 @@ def build_s3_client(settings: Settings, *, for_presign: bool = False) -> Any:
     # the hostname that will actually be used -- rewriting it afterwards
     # invalidates the signature. `aws_s3_public_endpoint_url` is unset in
     # staging/prod, where both are the same real S3 endpoint.
-    endpoint_url = settings.aws_s3_endpoint_url
-    if for_presign and settings.aws_s3_public_endpoint_url is not None:
-        endpoint_url = settings.aws_s3_public_endpoint_url
+    endpoint_url = settings.resolved_s3_endpoint_url
+    if for_presign and settings.resolved_s3_public_endpoint_url is not None:
+        endpoint_url = settings.resolved_s3_public_endpoint_url
 
     boto_config = BotoConfig(
         signature_version="s3v4",
