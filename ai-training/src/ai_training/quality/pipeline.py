@@ -384,7 +384,16 @@ def _build_report(
 ) -> QCReport:
     """Fold per-position frame evaluations into the session-level verdict.
     Shared by both capture shapes so a photo session and a legacy video
-    session are judged by identical rules."""
+    session are judged by identical rules.
+
+    `coverage_ratio` is scored over `settings.required_clock_positions` (the
+    four cardinals the wizard captures), NOT over all twelve -- a session
+    that covered everything asked of it would otherwise score 4/12 and be
+    rejected. Positions outside the required set are still reported, so a
+    legacy 12-position session keeps its full breakdown and any extra frames
+    still reach the embedding extractor; they simply do not gate the verdict.
+    """
+    required = set(settings.required_clock_positions)
     position_results: list[PositionResult] = []
     passed_count = 0
     for position in CLOCK_POSITIONS:
@@ -399,7 +408,8 @@ def _build_report(
                     best_score=max(c.blur for c in passing),
                 )
             )
-            passed_count += 1
+            if position in required:
+                passed_count += 1
         elif candidates:
             reasons = sorted({reason for c in candidates for reason in c.reasons})
             position_results.append(
@@ -410,7 +420,7 @@ def _build_report(
                 PositionResult(position=position, passed=False, reasons=["no_face_detected"])
             )
 
-    coverage_ratio = passed_count / len(CLOCK_POSITIONS)
+    coverage_ratio = passed_count / len(required) if required else 0.0
     overall = "PASS" if coverage_ratio >= settings.min_pass_ratio else "REJECTED_QUALITY"
     return QCReport(
         session_id=session_id,

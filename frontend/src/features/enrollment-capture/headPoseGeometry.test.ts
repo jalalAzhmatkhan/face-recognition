@@ -161,29 +161,45 @@ describe('estimateHeadPose conditioning — why the neutral baseline matters', (
     const raw = poseAt(20, -20)
     const calibrated = { yaw: raw.yaw - neutral.yaw, pitch: raw.pitch - neutral.pitch }
 
-    expect(describePose(calibrated).position).toBe(4)
+    // Down-and-right, so the lower or right cardinal -- emphatically not the
+    // top of the dial it landed on uncalibrated.
+    expect([3, 6]).toContain(describePose(calibrated).position)
   })
 
-  it('walks the whole dial when the nose is pointed at each hour in turn', () => {
-    // The motion the wizard actually asks for: keep the head at a constant
-    // 30 degrees off-centre and swing the NOSE DIRECTION around the clock,
-    // 12 -> 1 -> 2 -> ... -> 12. Every hour must come back as itself.
-    const AMPLITUDE_DEG = 30
+  it('resolves each captured direction from the movement its label describes', () => {
+    // The four instructions the wizard gives, taken literally.
     const neutral = poseAt(0, 0)
-
-    const hourFromNoseDirection = (hour: number) => {
-      const theta = ((hour % 12) / 12) * 2 * Math.PI
-      const raw = poseAt(
-        Math.sin(theta) * AMPLITUDE_DEG,
-        Math.cos(theta) * AMPLITUDE_DEG,
-      )
+    const calibratedAt = (yaw: number, pitch: number) => {
+      const raw = poseAt(yaw, pitch)
       return describePose({
         yaw: raw.yaw - neutral.yaw,
         pitch: raw.pitch - neutral.pitch,
       }).position
     }
 
-    const hours = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    expect(hours.map(hourFromNoseDirection)).toEqual(hours)
+    expect(calibratedAt(0, 25)).toBe(12) // agak mendongak
+    expect(calibratedAt(35, 0)).toBe(3) // agak menoleh ke kanan
+    expect(calibratedAt(0, -25)).toBe(6) // agak menunduk
+    expect(calibratedAt(-35, 0)).toBe(9) // agak menoleh ke kiri
+  })
+
+  it('still resolves correctly when the subject drifts well off the cardinal', () => {
+    // The whole reason for dropping to four targets: a sloppy "up and a bit
+    // to the right" must still be jam 12, where a 30-degree sector would
+    // have called it jam 1 or 2.
+    const neutral = poseAt(0, 0)
+    const calibratedAt = (yaw: number, pitch: number) => {
+      const raw = poseAt(yaw, pitch)
+      return describePose({
+        yaw: raw.yaw - neutral.yaw,
+        pitch: raw.pitch - neutral.pitch,
+      }).position
+    }
+
+    expect(calibratedAt(20, 30)).toBe(12)
+    expect(calibratedAt(-20, 30)).toBe(12)
+    expect(calibratedAt(20, -30)).toBe(6)
+    expect(calibratedAt(35, 15)).toBe(3)
+    expect(calibratedAt(-35, -15)).toBe(9)
   })
 })

@@ -34,7 +34,12 @@ import { detectFace, loadFaceDetectionModels } from './faceDetector'
 import { averagePose, calibrateToNeutral, estimateHeadPose } from './headPose'
 import { assessQuality, QUALITY_THRESHOLDS } from './imageQuality'
 import { runConcurrent } from './uploadQueue'
-import { CLOCK_POSITIONS, CURRENT_CONSENT_VERSION } from './types'
+import {
+  CAPTURE_POSITION_LABEL,
+  CAPTURE_POSITIONS,
+  CLOCK_POSITIONS,
+  CURRENT_CONSENT_VERSION,
+} from './types'
 import type { ClockPosition, HeadPose, QualityStatus } from './types'
 import './EnrollmentCapturePage.css'
 
@@ -778,14 +783,15 @@ export default function EnrollmentCapturePage() {
               </li>
               {step === 'sweep' && (
                 <li data-ok={canFinishSweep}>
-                  {sectorsDone}/12 posisi jam tercakup ({totalFrames} foto)
+                  {sectorsDone}/{CAPTURE_POSITIONS.length} arah tercakup ({totalFrames} foto)
                 </li>
               )}
             </ul>
 
             {step === 'sweep' && targetPosition !== null && (
               <p className="capture-target-hint">
-                Selanjutnya: arahkan wajah ke jam <strong>{targetPosition}</strong>
+                Selanjutnya:{' '}
+                <strong>{CAPTURE_POSITION_LABEL[targetPosition]}</strong>
                 {burstCounts[targetPosition] > 0 && (
                   <> — {burstCounts[targetPosition]}/{BURST_SIZE} foto</>
                 )}
@@ -945,13 +951,13 @@ export default function EnrollmentCapturePage() {
             {photoPreviewUrl && <img src={photoPreviewUrl} alt="Foto frontal" className="capture-thumb" />}
           </div>
           <p>
-            {sectorsDone}/12 posisi jam tercakup, total {totalFrames} foto. QC
+            {sectorsDone}/{CAPTURE_POSITIONS.length} arah tercakup, total {totalFrames} foto. QC
             akhir dilakukan di server.
           </p>
           <ul className="capture-position-list">
-            {CLOCK_POSITIONS.map((position) => (
+            {CAPTURE_POSITIONS.map((position) => (
               <li key={position} data-ok={burstCounts[position] > 0}>
-                Jam {position}: {burstCounts[position]}/{BURST_SIZE} foto{' '}
+                {CAPTURE_POSITION_LABEL[position]}: {burstCounts[position]}/{BURST_SIZE} foto{' '}
                 <button
                   type="button"
                   className="btn btn--small"

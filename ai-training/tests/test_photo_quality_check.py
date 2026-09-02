@@ -231,6 +231,69 @@ def test_neutral_pose_is_forwarded_to_every_frame(settings, monkeypatch) -> None
     assert seen == [(1.0, 24.0)] * 12
 
 
+def _cardinals() -> list[tuple[str, bytes]]:
+    return [_photo(position) for position in ("12", "03", "06", "09")]
+
+
+def test_the_four_cardinals_alone_are_full_coverage(settings, stub_frames) -> None:
+    """What the wizard actually captures since 2026-09-02. Scored out of all
+    twelve this would be 4/12 and rejected outright, so getting the
+    denominator right is the difference between every enrollment passing and
+    every enrollment failing."""
+    report, _ = run_photo_quality_check(_cardinals(), session_id="s1", settings=settings)
+
+    assert report.overall == "PASS"
+    assert report.coverage_ratio == 1.0
+
+
+def test_one_missing_cardinal_still_passes_on_the_allowance(settings, stub_frames) -> None:
+    # 3/4 = 0.75, exactly min_pass_ratio -- the same tolerance the 12-position
+    # set had at 9/12, not a new concession.
+    report, _ = run_photo_quality_check(
+        _cardinals()[:3], session_id="s1", settings=settings
+    )
+
+    assert report.overall == "PASS"
+    assert report.coverage_ratio == pytest.approx(0.75)
+
+
+def test_two_missing_cardinals_is_rejected(settings, stub_frames) -> None:
+    report, _ = run_photo_quality_check(
+        _cardinals()[:2], session_id="s1", settings=settings
+    )
+
+    assert report.overall == "REJECTED_QUALITY"
+    assert report.coverage_ratio == pytest.approx(0.5)
+
+
+def test_non_required_positions_do_not_inflate_coverage(settings, stub_frames) -> None:
+    """A legacy video session resolves frames onto all twelve. Those extra
+    positions still get reported and still feed the embedding extractor, but
+    they must not stand in for a cardinal that was never covered."""
+    photos = [_photo("12"), _photo("03"), _photo("01"), _photo("02"), _photo("04")]
+
+    report, by_position = run_photo_quality_check(
+        photos, session_id="s1", settings=settings
+    )
+
+    # 2 of 4 cardinals, despite five positions having passing frames.
+    assert report.coverage_ratio == pytest.approx(0.5)
+    assert report.overall == "REJECTED_QUALITY"
+    assert by_position["01"]  # still evaluated, still available for embedding
+
+
+def test_the_required_set_is_configuration_not_a_constant(stub_frames) -> None:
+    widened = QCSettings(required_clock_positions=("12", "03", "06", "09", "01", "02"))
+    report, _ = run_photo_quality_check(
+        _cardinals(), session_id="s1", settings=widened
+    )
+
+    # 4 of 6 = 0.67, under min_pass_ratio: widening the capture set is a
+    # config change, and the gate follows it without touching code.
+    assert report.coverage_ratio == pytest.approx(4 / 6)
+    assert report.overall == "REJECTED_QUALITY"
+
+
 def test_no_photos_at_all_rejects_with_full_position_breakdown(settings, stub_frames) -> None:
     report, _ = run_photo_quality_check([], session_id="s1", settings=settings)
 

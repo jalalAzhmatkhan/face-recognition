@@ -14,7 +14,7 @@ import {
   targetPoseForClock,
   updateSectorState,
 } from './clockSectors'
-import { CLOCK_POSITIONS } from './types'
+import { CAPTURE_POSITIONS, CLOCK_POSITIONS } from './types'
 import type { ClockPosition, FrameSample } from './types'
 
 /**
@@ -46,7 +46,7 @@ function poseAt(yawDeg: number, pitchDeg: number) {
 const COMFORTABLE_YAW_DEG = 40
 const COMFORTABLE_PITCH_DEG = 30
 
-describe('pose sensitivity — every clock position must be reachable', () => {
+describe('pose sensitivity — every captured position must be reachable', () => {
   /** Head angles (yaw, pitch) that aim at each clock position, at angles a
    * real neck can hold. */
   function realisticPoseFor(position: ClockPosition) {
@@ -57,11 +57,22 @@ describe('pose sensitivity — every clock position must be reachable', () => {
     )
   }
 
-  it('resolves all 12 positions from head angles a person can actually hold', () => {
-    const resolved = CLOCK_POSITIONS.map((position) =>
+  it('resolves every captured position from head angles a person can actually hold', () => {
+    const resolved = CAPTURE_POSITIONS.map((position) =>
       resolveClockPosition(realisticPoseFor(position)),
     )
-    expect(resolved).toEqual(CLOCK_POSITIONS)
+    expect(resolved).toEqual(CAPTURE_POSITIONS)
+  })
+
+  it('tolerates a pose well off its target, which 30-degree sectors did not', () => {
+    // The point of dropping to four cardinals. Aiming for "agak mendongak"
+    // but drifting 30 degrees toward the right still registers as jam 12,
+    // where previously that same drift landed on jam 1 or 2.
+    expect(resolveClockPosition(poseAt(18, 30))).toBe(12)
+    expect(resolveClockPosition(poseAt(-18, 30))).toBe(12)
+    expect(resolveClockPosition(poseAt(18, -30))).toBe(6)
+    expect(resolveClockPosition(poseAt(30, 18))).toBe(3)
+    expect(resolveClockPosition(poseAt(-30, -18))).toBe(9)
   })
 
   it('shows the reported asymmetry once the gains are removed', () => {
@@ -93,8 +104,8 @@ describe('pose sensitivity — every clock position must be reachable', () => {
       return Infinity
     }
 
-    expect(pitchNeeded(1)).toBeGreaterThan(55)
-    expect(pitchNeeded(DEFAULT_POSE_SENSITIVITY.pitchGain)).toBeLessThanOrEqual(27)
+    expect(pitchNeeded(1)).toBeGreaterThan(45)
+    expect(pitchNeeded(DEFAULT_POSE_SENSITIVITY.pitchGain)).toBeLessThanOrEqual(20)
   })
 
   it('keeps 6 o\'clock as reachable as 12 (the symmetric complaint)', () => {
@@ -148,11 +159,26 @@ describe('describePose', () => {
 })
 
 describe('targetPoseForClock / resolveClockPosition', () => {
-  it('round-trips every clock position through its target pose', () => {
-    for (const position of CLOCK_POSITIONS) {
+  it('round-trips every CAPTURED position through its target pose', () => {
+    for (const position of CAPTURE_POSITIONS) {
       const pose = targetPoseForClock(position)
       expect(resolveClockPosition(pose)).toBe(position)
     }
+  })
+
+  it('snaps an in-between pose to the nearest captured cardinal', () => {
+    // Each cardinal owns its whole quadrant. A pose aimed where jam 1 or
+    // jam 2 used to be now resolves to whichever cardinal it is nearest,
+    // rather than to a 30-degree sector the estimator cannot actually
+    // resolve (see CAPTURE_POSITIONS).
+    expect(resolveClockPosition(targetPoseForClock(1))).toBe(12)
+    expect(resolveClockPosition(targetPoseForClock(2))).toBe(3)
+    expect(resolveClockPosition(targetPoseForClock(4))).toBe(3)
+    expect(resolveClockPosition(targetPoseForClock(5))).toBe(6)
+    expect(resolveClockPosition(targetPoseForClock(7))).toBe(6)
+    expect(resolveClockPosition(targetPoseForClock(8))).toBe(9)
+    expect(resolveClockPosition(targetPoseForClock(10))).toBe(9)
+    expect(resolveClockPosition(targetPoseForClock(11))).toBe(12)
   })
 
   it('treats a near-neutral pose as no position (not 12 o\'clock)', () => {
@@ -236,21 +262,23 @@ describe('updateSectorState', () => {
     expect(tracker.status[12]).toBe('done')
   })
 
-  it('"Selesai" is enabled only once all 12 sectors are done', () => {
+  it('"Selesai" is enabled only once every captured position is done', () => {
     let tracker = createInitialTrackerState()
-    for (const position of CLOCK_POSITIONS.slice(0, 11)) {
+    const allButLast = CAPTURE_POSITIONS.slice(0, -1)
+    for (const position of allButLast) {
       for (let i = 0; i < FRAMES_TO_CONFIRM; i += 1) {
         tracker = updateSectorState(tracker, frame({ clockPosition: position }))
       }
     }
     expect(isCaptureComplete(tracker.status)).toBe(false)
-    expect(countDone(tracker.status)).toBe(11)
+    expect(countDone(tracker.status)).toBe(allButLast.length)
 
+    const last = CAPTURE_POSITIONS[CAPTURE_POSITIONS.length - 1]
     for (let i = 0; i < FRAMES_TO_CONFIRM; i += 1) {
-      tracker = updateSectorState(tracker, frame({ clockPosition: 12 }))
+      tracker = updateSectorState(tracker, frame({ clockPosition: last }))
     }
     expect(isCaptureComplete(tracker.status)).toBe(true)
-    expect(countDone(tracker.status)).toBe(12)
+    expect(countDone(tracker.status)).toBe(CAPTURE_POSITIONS.length)
   })
 })
 
@@ -262,15 +290,15 @@ describe('nextTargetPosition', () => {
   it('advances to the next position in sweep order once the current one is done', () => {
     const status = createInitialSectorState()
     status[12] = 'done'
-    expect(nextTargetPosition(status)).toBe(1)
-    status[1] = 'done'
-    expect(nextTargetPosition(status)).toBe(2)
+    expect(nextTargetPosition(status)).toBe(3)
+    status[3] = 'done'
+    expect(nextTargetPosition(status)).toBe(6)
   })
 
   it('skips over already-done positions even out of sweep order', () => {
     const status = createInitialSectorState()
-    status[1] = 'done'
-    status[2] = 'done'
+    status[3] = 'done'
+    status[6] = 'done'
     // 12 (first in sweep order) is still pending, so it's still the target.
     expect(nextTargetPosition(status)).toBe(12)
   })
@@ -289,7 +317,7 @@ describe('nextTargetPosition', () => {
     expect(nextTargetPosition(status)).toBeNull()
   })
 
-  it('sweep order starts at 12 and is otherwise clockwise 1..11', () => {
-    expect(SWEEP_ORDER).toEqual([12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+  it('sweep order starts at 12 and runs clockwise through the cardinals', () => {
+    expect(SWEEP_ORDER).toEqual([12, 3, 6, 9])
   })
 })

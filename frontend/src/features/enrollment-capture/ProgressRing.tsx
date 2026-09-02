@@ -1,4 +1,4 @@
-import { CLOCK_POSITIONS } from './types'
+import { CAPTURE_POSITIONS, CAPTURE_POSITION_LABEL } from './types'
 import type { ClockPosition, SectorState } from './types'
 
 interface ProgressRingProps {
@@ -20,9 +20,15 @@ const SECTOR_COLOR: Record<SectorState[keyof SectorState], string> = {
 }
 
 /**
- * 12-sector progress ring around the face oval (screen-plan S-30, step
- * 3b). Every sector must be individually confirmed — there is no
- * "auto-pass" sector, per FSD-AI.md ASM-03 (CORRECTED 2026-08-30).
+ * Progress ring around the face oval (screen-plan S-30, step 3b), one arc
+ * per CAPTURED position. Every arc must be individually confirmed — there
+ * is no "auto-pass" sector, per FSD-AI.md ASM-03 (CORRECTED 2026-08-30).
+ *
+ * Four quadrant arcs rather than twelve narrow sectors since 2026-09-02
+ * (see `types.ts::CAPTURE_POSITIONS`). Each arc spans the full quadrant it
+ * owns, so the ring shows the subject the same tolerance the detector
+ * actually applies instead of implying 30-degree precision it cannot
+ * deliver.
  */
 export default function ProgressRing({ status, size = 320, targetPosition = null }: ProgressRingProps) {
   const center = size / 2
@@ -36,7 +42,7 @@ export default function ProgressRing({ status, size = 320, targetPosition = null
       height={size}
       viewBox={`0 0 ${size} ${size}`}
       role="img"
-      aria-label="Progress cakupan 12 posisi jam"
+      aria-label={`Progress cakupan ${CAPTURE_POSITIONS.length} arah kepala`}
     >
       <ellipse
         cx={center}
@@ -48,8 +54,10 @@ export default function ProgressRing({ status, size = 320, targetPosition = null
         strokeWidth={2}
         strokeDasharray="4 4"
       />
-      {CLOCK_POSITIONS.map((position) => {
-        const sectorAngle = 30
+      {CAPTURE_POSITIONS.map((position) => {
+        // Each captured position owns the whole quadrant centred on it,
+        // matching how `describePose` classifies a pose.
+        const sectorAngle = 360 / CAPTURE_POSITIONS.length
         const startDeg = position * 30 - sectorAngle / 2 + gapDeg / 2 - 90
         const endDeg = position * 30 + sectorAngle / 2 - gapDeg / 2 - 90
         const toRad = (deg: number) => (deg * Math.PI) / 180
@@ -91,7 +99,8 @@ export default function ProgressRing({ status, size = 320, targetPosition = null
             }}
           >
             <title>
-              Jam {position}: {sectorStatus === 'done' ? 'selesai' : sectorStatus === 'poor' ? 'kualitas kurang' : sectorStatus === 'active' ? 'sedang direkam' : 'belum'}
+              Jam {position} — {CAPTURE_POSITION_LABEL[position]}:{' '}
+              {sectorStatus === 'done' ? 'selesai' : sectorStatus === 'poor' ? 'kualitas kurang' : sectorStatus === 'active' ? 'sedang direkam' : 'belum'}
             </title>
           </path>
         )
@@ -115,7 +124,9 @@ export default function ProgressRing({ status, size = 320, targetPosition = null
               className="capture-ring-target-marker"
               data-testid="ring-target-marker"
             >
-              <title>Selanjutnya: arahkan wajah ke jam {targetPosition}</title>
+              <title>
+                Selanjutnya: {CAPTURE_POSITION_LABEL[targetPosition] ?? `jam ${targetPosition}`}
+              </title>
               <polygon points="-9,9 9,9 0,-9" fill="var(--accent)" />
             </g>
           )

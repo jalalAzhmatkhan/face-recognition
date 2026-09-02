@@ -71,12 +71,13 @@ class EnrollmentQualityParams(BaseModel):
         ),
     )
     min_pose_radius: float = Field(
-        0.55,
+        0.4,
         gt=0,
         le=1,
         description=(
             "How far from neutral (0..1, after the gains) a pose must be before it "
-            "counts as being AT a clock position rather than still near centre."
+            "counts as being AT a captured direction rather than still near centre. "
+            "Lower = less head movement needed."
         ),
     )
     pose_tolerance_deg: float = Field(
