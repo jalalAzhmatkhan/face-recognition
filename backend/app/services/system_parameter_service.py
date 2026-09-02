@@ -29,6 +29,9 @@ ENROLLMENT_QUALITY_KEY = "enrollment_capture_quality"
 # JPEG compression routinely produce a noticeably lower variance-of-
 # Laplacian even on a perfectly in-focus, well-lit face, so `min_blur_
 # variance` is the main lever here.
+# Pose-sensitivity defaults are left to the schema (see
+# `EnrollmentQualityParams`), so a row saved before those fields existed and
+# this built-in default agree on the same starting point.
 DEFAULT_ENROLLMENT_QUALITY = EnrollmentQualityParams(
     min_blur_variance=30.0,
     min_brightness=35.0,

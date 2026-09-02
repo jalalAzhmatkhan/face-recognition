@@ -15,12 +15,13 @@ import { computeSha256 } from './checksum'
 import {
   countDone,
   createInitialTrackerState,
+  DEFAULT_POSE_SENSITIVITY,
+  describePose,
   isCaptureComplete,
   nextTargetPosition,
-  resolveClockPosition,
   updateSectorState,
 } from './clockSectors'
-import type { SectorTrackerState } from './clockSectors'
+import type { PoseBreakdown, PoseSensitivity, SectorTrackerState } from './clockSectors'
 import {
   admitFrame,
   BURST_SIZE,
@@ -142,6 +143,15 @@ export default function EnrollmentCapturePage() {
   // below succeeds, so this wizard is fully usable even before the first
   // frame samples if the settings service is briefly unavailable.
   const [qualityThresholds, setQualityThresholds] = useState(QUALITY_THRESHOLDS)
+  // Head-pose sensitivity, same System Parameter row as the thresholds above
+  // and the same best-effort fallback.
+  const [poseSensitivity, setPoseSensitivity] = useState<PoseSensitivity>(
+    DEFAULT_POSE_SENSITIVITY,
+  )
+  // Dev-only live pose readout (see the debug panel in the JSX). Held in
+  // state so it re-renders, but ONLY populated while `import.meta.env.DEV`
+  // is set -- in production the sampling loop never touches it.
+  const [poseDebug, setPoseDebug] = useState<PoseBreakdown | null>(null)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -190,15 +200,24 @@ export default function EnrollmentCapturePage() {
   // this is a quality-gate tuning knob, not a security control.
   useEffect(() => {
     getEnrollmentQualityParams()
-      .then((params) =>
+      .then((params) => {
         setQualityThresholds({
           minBlurVariance: params.min_blur_variance,
           minBrightness: params.min_brightness,
           maxBrightness: params.max_brightness,
-        }),
-      )
+        })
+        // Each pose field falls back individually: a backend older than
+        // these fields omits them, and a partially-populated row must not
+        // drag the others to `undefined`.
+        setPoseSensitivity({
+          yawGain: params.yaw_gain ?? DEFAULT_POSE_SENSITIVITY.yawGain,
+          pitchGain: params.pitch_gain ?? DEFAULT_POSE_SENSITIVITY.pitchGain,
+          minPoseRadius:
+            params.min_pose_radius ?? DEFAULT_POSE_SENSITIVITY.minPoseRadius,
+        })
+      })
       .catch(() => {
-        // Keep QUALITY_THRESHOLDS -- see effect docstring above.
+        // Keep QUALITY_THRESHOLDS / DEFAULT_POSE_SENSITIVITY -- see docstring.
       })
   }, [])
 
@@ -308,10 +327,20 @@ export default function EnrollmentCapturePage() {
       ].slice(-NEUTRAL_SAMPLE_COUNT)
     }
 
+    // Dev-only pose readout. Computed on BOTH preflight and sweep so the
+    // neutral baseline can be sanity-checked before the sweep even starts
+    // (a frontal face should read close to 0/0 once calibrated).
+    if (import.meta.env.DEV) {
+      const debugPose = pose ? calibrateToNeutral(pose, neutralPoseRef.current) : null
+      setPoseDebug(debugPose ? describePose(debugPose, poseSensitivity) : null)
+    }
+
     if (step !== 'sweep') return
 
     const calibratedPose = pose ? calibrateToNeutral(pose, neutralPoseRef.current) : null
-    const clockPosition = calibratedPose ? resolveClockPosition(calibratedPose) : null
+    const clockPosition = calibratedPose
+      ? describePose(calibratedPose, poseSensitivity).position
+      : null
 
     setTracker((prev) =>
       updateSectorState(prev, {
@@ -351,7 +380,7 @@ export default function EnrollmentCapturePage() {
         ? prev
         : { ...prev, [clockPosition]: next.length },
     )
-  }, [step, qualityThresholds, encodeCanvasJpeg])
+  }, [step, qualityThresholds, poseSensitivity, encodeCanvasJpeg])
 
   useEffect(() => {
     if (step !== 'preflight' && step !== 'countdown' && step !== 'sweep') return
@@ -716,6 +745,64 @@ export default function EnrollmentCapturePage() {
                   <> — {burstCounts[targetPosition]}/{BURST_SIZE} foto</>
                 )}
               </p>
+            )}
+
+            {/* Dev-only pose readout. Shows the calibrated estimator output
+                and every intermediate the clock geometry derives from it, so
+                "position X never lights up" can be diagnosed on the spot:
+                whether the face is even detected, whether the radius reaches
+                the gate, and which sector the angle lands in. Stripped from
+                production builds by the `import.meta.env.DEV` guard. */}
+            {import.meta.env.DEV && (
+              <div className="capture-pose-debug" data-testid="pose-debug">
+                <strong>Pose (dev)</strong>
+                {poseDebug === null ? (
+                  <p className="mono">wajah / landmark tidak terdeteksi</p>
+                ) : (
+                  <dl className="mono">
+                    <div>
+                      <dt>yaw</dt>
+                      <dd>{poseDebug.yawDeg.toFixed(1)}°</dd>
+                    </div>
+                    <div>
+                      <dt>pitch</dt>
+                      <dd>{poseDebug.pitchDeg.toFixed(1)}°</dd>
+                    </div>
+                    <div>
+                      <dt>norm</dt>
+                      <dd>
+                        {poseDebug.normYaw.toFixed(2)} / {poseDebug.normPitch.toFixed(2)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>radius</dt>
+                      <dd data-ok={poseDebug.radius >= poseSensitivity.minPoseRadius}>
+                        {poseDebug.radius.toFixed(2)} / {poseSensitivity.minPoseRadius}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>sudut</dt>
+                      <dd>
+                        {poseDebug.angleDeg === null
+                          ? '—'
+                          : `${poseDebug.angleDeg.toFixed(0)}°`}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>jam</dt>
+                      <dd data-ok={poseDebug.position !== null}>
+                        {poseDebug.position ?? 'belum'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>gain</dt>
+                      <dd>
+                        y {poseSensitivity.yawGain} / p {poseSensitivity.pitchGain}
+                      </dd>
+                    </div>
+                  </dl>
+                )}
+              </div>
             )}
 
             {step === 'preflight' && !photoBlob && (

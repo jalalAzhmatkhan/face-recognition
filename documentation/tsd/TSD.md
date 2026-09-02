@@ -240,6 +240,17 @@ Representative contracts — all JSON, all authenticated, errors follow RFC 9457
 ```
 POST /api/v1/enrollments            {user_id} → 201 {id, state}
 POST /api/v1/enrollments/{id}/consent  {consent_version} → {state: CONSENTED}
+GET  /api/v1/system-parameters/enrollment-quality → {min_blur_variance,
+     min_brightness, max_brightness, yaw_gain, pitch_gain, min_pose_radius,
+     pose_tolerance_deg, updated_by?, updated_at?, is_default}
+PUT  /api/v1/system-parameters/enrollment-quality  (ADMIN only)
+     Read is open to ADMIN/OPERATOR/VIEWER — the capture wizard needs it for
+     every role that can enrol. The pose fields are OPTIONAL on write and
+     default-filled on read, so a row saved before they existed still
+     validates. yaw_gain/pitch_gain/min_pose_radius correct the BROWSER's
+     landmark-ratio pose estimator only (ai-training uses solvePnP and needs
+     no gain); pose_tolerance_deg is the server-side QC half.
+
 POST /api/v1/enrollments/{id}/media/presign
      {kind: "photo"|"video", content_type, size, sha256,
       variant?, clock_position?: 1..12}
