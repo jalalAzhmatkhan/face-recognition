@@ -55,6 +55,18 @@ Sistem existing (enrollment 360° → QC → embedding AdaFace → gallery pgvec
 
 Sumber: `frontend/src/features/enrollment-capture/EnrollmentCapturePage.tsx`, `types.ts`; `backend/app/schemas/media.py`; `backend/app/models/media_object.py`, `face_embedding.py`.
 
+> **Catatan (snapshot).** Tabel di bawah adalah gap analysis pada saat dokumen
+> ini ditulis dan sengaja TIDAK di-rewrite, karena butir-butir rencana
+> (A-1..A-5) di bawahnya mereferensikan kondisi awal ini. Dua baris sudah
+> tidak berlaku lagi sejak ditulis:
+> - **Kontrak presign** kini punya `variant`
+>   (`default|no_glasses|glasses|pitch_ext`, EC-BE-02) dan `clock_position`
+>   (1..12, migrasi `e4b9d2f6a8c3`).
+> - **Media yang di-capture / skema `media_objects`** — video `rotation.webm`
+>   sedang digantikan **foto per posisi jam** (`photo_pos_{PP}_{k}.jpg`,
+>   ditandai kolom `clock_position`). Video tetap diterima untuk session
+>   legacy; lihat TSD.md §2.1 dan §7.
+
 | Aspek | Kondisi aktual | Bukti |
 |---|---|---|
 | Media yang di-capture | **1 foto frontal JPEG (quality 0.92)** + **1 video `video/webm`** | `EnrollmentCapturePage.tsx:171-181` (`canvas.toBlob('image/jpeg', 0.92)`), `:211` (`MediaRecorder(stream, { mimeType: 'video/webm' })`) |

@@ -10,7 +10,7 @@ through real boto3 code paths without touching any real cloud service.
 import base64
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import boto3
 import pytest
@@ -479,3 +479,256 @@ def test_complete_denied_for_viewer(
 
     response = viewer_client.post(f"/api/v1/enrollments/{session.id}/complete")
     assert response.status_code == 403
+
+
+# --- Per-clock-position photo capture (video -> photos migration) ----------
+
+
+def _put_photo(moto_s3, key: str, body: bytes) -> None:
+    moto_s3.put_object(
+        Bucket=BUCKET,
+        Key=key,
+        Body=body,
+        ContentType="image/jpeg",
+        ChecksumAlgorithm="SHA256",
+    )
+
+
+def _photo_row(session, key: str, body: bytes, *, clock_position: int | None, age_s: int = 0):
+    return MediaObject(
+        id=uuid.uuid4(),
+        session_id=session.id,
+        kind=MediaKind.PHOTO,
+        s3_bucket=BUCKET,
+        s3_key=key,
+        checksum=_sha256_hex(body),
+        size=len(body),
+        content_type="image/jpeg",
+        status=MediaObjectStatus.PENDING,
+        clock_position=clock_position,
+        created_at=datetime.now(UTC) - timedelta(seconds=age_s),
+    )
+
+
+def test_presign_positioned_photo_keys_by_position_and_burst_index(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    media_repo: FakeMediaObjectRepository,
+) -> None:
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+    body = {
+        "kind": "photo",
+        "content_type": "image/jpeg",
+        "size": 2000,
+        "sha256": "b" * 64,
+        "clock_position": 5,
+    }
+
+    first = admin_client.post(f"/api/v1/enrollments/{session.id}/media/presign", json=body)
+    second = admin_client.post(f"/api/v1/enrollments/{session.id}/media/presign", json=body)
+
+    assert first.status_code == 201, first.text
+    assert first.json()["s3_key"].endswith("photo_pos_05_1.jpg")
+    # A burst (and a re-shot position) appends candidates rather than
+    # overwriting the first frame.
+    assert second.json()["s3_key"].endswith("photo_pos_05_2.jpg")
+    assert [m.clock_position for m in media_repo.items] == [5, 5]
+
+
+def test_presign_frontal_photo_numbering_ignores_sweep_frames(
+    admin_client: TestClient, enrollment_repo: FakeEnrollmentRepository
+) -> None:
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+    base = {"kind": "photo", "content_type": "image/jpeg", "size": 2000, "sha256": "c" * 64}
+
+    admin_client.post(
+        f"/api/v1/enrollments/{session.id}/media/presign", json={**base, "clock_position": 7}
+    )
+    frontal = admin_client.post(f"/api/v1/enrollments/{session.id}/media/presign", json=base)
+
+    # Sweep frames must not push the frontal photo's index along -- QC looks
+    # up the neutral reference as the earliest position-less photo.
+    assert frontal.json()["s3_key"].endswith("photo_1.jpg")
+
+
+def test_presign_rejects_clock_position_on_a_video(
+    admin_client: TestClient, enrollment_repo: FakeEnrollmentRepository
+) -> None:
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+
+    response = admin_client.post(
+        f"/api/v1/enrollments/{session.id}/media/presign",
+        json={
+            "kind": "video",
+            "content_type": "video/webm",
+            "size": 100_000,
+            "sha256": "d" * 64,
+            "clock_position": 3,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_presign_rejects_out_of_range_clock_position(
+    admin_client: TestClient, enrollment_repo: FakeEnrollmentRepository
+) -> None:
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+
+    response = admin_client.post(
+        f"/api/v1/enrollments/{session.id}/media/presign",
+        json={
+            "kind": "photo",
+            "content_type": "image/jpeg",
+            "size": 2000,
+            "sha256": "e" * 64,
+            "clock_position": 13,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_complete_succeeds_with_positioned_photos_and_no_video(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    media_repo: FakeMediaObjectRepository,
+    audit_repo: FakeAuditLogRepository,
+    moto_s3,
+) -> None:
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+    prefix = f"{PREFIX}enrollment/{session.user_id}/{session.id}"
+
+    frontal_key = f"{prefix}/photo_1.jpg"
+    frontal_bytes = b"frontal-bytes"
+    _put_photo(moto_s3, frontal_key, frontal_bytes)
+    media_repo.items.append(_photo_row(session, frontal_key, frontal_bytes, clock_position=None))
+
+    for position in range(1, 13):
+        key = f"{prefix}/photo_pos_{position:02d}_1.jpg"
+        body = f"sweep-{position}".encode()
+        _put_photo(moto_s3, key, body)
+        media_repo.items.append(_photo_row(session, key, body, clock_position=position))
+
+    response = admin_client.post(f"/api/v1/enrollments/{session.id}/complete")
+
+    assert response.status_code == 202, response.text
+    assert session.state == EnrollmentState.QC_RUNNING
+    assert all(m.status == MediaObjectStatus.FINALIZED for m in media_repo.items)
+    completed = next(e for e in audit_repo.entries if e["action"] == "enrollment.media_completed")
+    assert completed["payload"]["video_count"] == 0
+    assert completed["payload"]["sweep_photo_count"] == 12
+    assert completed["payload"]["positions_captured"] == list(range(1, 13))
+
+
+def test_complete_rejects_mixing_positioned_photos_with_a_video(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    media_repo: FakeMediaObjectRepository,
+    moto_s3,
+) -> None:
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+    prefix = f"{PREFIX}enrollment/{session.user_id}/{session.id}"
+
+    frontal_key, frontal_bytes = f"{prefix}/photo_1.jpg", b"frontal-bytes"
+    sweep_key, sweep_bytes = f"{prefix}/photo_pos_01_1.jpg", b"sweep-bytes"
+    video_key, video_bytes = f"{prefix}/rotation.webm", b"video-bytes" * 100
+    _put_photo(moto_s3, frontal_key, frontal_bytes)
+    _put_photo(moto_s3, sweep_key, sweep_bytes)
+    moto_s3.put_object(
+        Bucket=BUCKET,
+        Key=video_key,
+        Body=video_bytes,
+        ContentType="video/webm",
+        ChecksumAlgorithm="SHA256",
+    )
+
+    media_repo.items.append(_photo_row(session, frontal_key, frontal_bytes, clock_position=None))
+    media_repo.items.append(_photo_row(session, sweep_key, sweep_bytes, clock_position=1))
+    media_repo.items.append(
+        MediaObject(
+            id=uuid.uuid4(),
+            session_id=session.id,
+            kind=MediaKind.VIDEO,
+            s3_bucket=BUCKET,
+            s3_key=video_key,
+            checksum=_sha256_hex(video_bytes),
+            size=len(video_bytes),
+            content_type="video/webm",
+            status=MediaObjectStatus.PENDING,
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    response = admin_client.post(f"/api/v1/enrollments/{session.id}/complete")
+
+    assert response.status_code == 422
+    codes = {r["code"] for r in response.json()["reasons"]}
+    assert "mixed_capture_shape" in codes
+    assert session.state == EnrollmentState.CAPTURING
+
+
+def test_complete_rejects_a_frontal_photo_with_no_sweep_and_no_video(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    media_repo: FakeMediaObjectRepository,
+    moto_s3,
+) -> None:
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+    key, body = f"{PREFIX}enrollment/{session.user_id}/{session.id}/photo_1.jpg", b"frontal"
+    _put_photo(moto_s3, key, body)
+    media_repo.items.append(_photo_row(session, key, body, clock_position=None))
+
+    response = admin_client.post(f"/api/v1/enrollments/{session.id}/complete")
+
+    assert response.status_code == 422
+    codes = {r["code"] for r in response.json()["reasons"]}
+    assert "missing_capture" in codes
+
+
+def test_complete_keeps_an_uploaded_frame_whose_presign_url_already_expired(
+    admin_client: TestClient,
+    enrollment_repo: FakeEnrollmentRepository,
+    media_repo: FakeMediaObjectRepository,
+    audit_repo: FakeAuditLogRepository,
+    moto_s3,
+) -> None:
+    """Per-position capture uploads progressively, so the earliest positions
+    are minutes old by the time /complete runs. A row whose object really is
+    in S3 must be finalized regardless of its presign TTL -- dropping it on
+    age alone would silently discard coverage the subject did record."""
+    session = _make_session(EnrollmentState.CAPTURING)
+    enrollment_repo._by_id[session.id] = session
+    prefix = f"{PREFIX}enrollment/{session.user_id}/{session.id}"
+
+    frontal_key, frontal_bytes = f"{prefix}/photo_1.jpg", b"frontal-bytes"
+    old_key, old_bytes = f"{prefix}/photo_pos_01_1.jpg", b"uploaded-long-ago"
+    _put_photo(moto_s3, frontal_key, frontal_bytes)
+    _put_photo(moto_s3, old_key, old_bytes)
+
+    media_repo.items.append(_photo_row(session, frontal_key, frontal_bytes, clock_position=None))
+    media_repo.items.append(_photo_row(session, old_key, old_bytes, clock_position=1, age_s=3600))
+    # ...while a genuinely abandoned presign (object never landed, URL long
+    # expired) is still excluded rather than blocking completion forever.
+    media_repo.items.append(
+        _photo_row(
+            session,
+            f"{prefix}/photo_pos_02_1.jpg",
+            b"never-uploaded",
+            clock_position=2,
+            age_s=3600,
+        )
+    )
+
+    response = admin_client.post(f"/api/v1/enrollments/{session.id}/complete")
+
+    assert response.status_code == 202, response.text
+    finalized = {m.s3_key for m in media_repo.items if m.status == MediaObjectStatus.FINALIZED}
+    assert old_key in finalized
+    completed = next(e for e in audit_repo.entries if e["action"] == "enrollment.media_completed")
+    assert completed["payload"]["positions_captured"] == [1]

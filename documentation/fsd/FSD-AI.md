@@ -11,7 +11,7 @@
 
 - **SYS-01**: The system authorizes physical entry to a building/office using face recognition.
 - **SYS-02**: Monorepo modules: `frontend/`, `backend/`, `ai-inference/`, `ai-training/`, `qa/`.
-- **SYS-03**: Core loop: **Enroll** (capture photo + 360° face video) → **Store media in AWS S3** → **Train/fine-tune model + build embedding gallery** → **Deploy model** → **Real-time inference at entry point** → **Grant/deny access + audit log**.
+- **SYS-03**: Core loop: **Enroll** (capture frontal photo + one photo burst per clock position across the 360° head-orientation sweep) → **Store media in AWS S3** → **Train/fine-tune model + build embedding gallery** → **Deploy model** → **Real-time inference at entry point** → **Grant/deny access + audit log**.
 
 ## 2. Actors
 
@@ -29,11 +29,11 @@
 ### 3.1 Enrollment (FR-ENR)
 
 - **FR-ENR-01**: Admin creates an enrollment session for a user (new or re-enrollment).
-- **FR-ENR-02**: Frontend captures: (a) ≥1 frontal still photo, (b) one video of **head orientation** starting at the 12 o'clock position, moving **clockwise** through a full cycle back to 12 o'clock (subject's body stays facing the camera; only head yaw/pitch changes — see ASM-03, corrected 2026-08-30). Target duration 10–20 s, ≥720p, ≥24 fps.
+- **FR-ENR-02**: Frontend captures: (a) ≥1 frontal still photo, which also serves as the **neutral-pose reference** for QC (see FR-ENR-06); (b) a set of **still photos, one short burst (3–5 frames) per clock position**, captured automatically the moment the subject's live head orientation is detected at that position. The subject sweeps **head orientation** from 12 o'clock **clockwise** back to 12 o'clock (body stays facing the camera; only head yaw/pitch changes — see ASM-03, corrected 2026-08-30). ≥720p. Positions may be covered in any order and re-shot individually; a burst is kept so the embedding extractor still has multiple frames to average and pick sharpness from. *(Superseded 2026-09-02: previously one 10–20 s `video/webm` of the whole sweep. Sessions enrolled before this change keep their video, and both the backend contract and the ai-training pipeline continue to accept it — see TSD.md §7.)*
 - **FR-ENR-03**: Frontend MUST provide real-time guidance during capture: face-in-frame check, head-orientation progress indicator (clock positions covered), lighting/blur warnings, and retry flow.
 - **FR-ENR-04**: All captured media MUST be uploaded directly to AWS S3 via backend-issued presigned URLs. Media MUST NOT be persisted on client disk or on any server local disk; only transient in-memory/temp buffers that are deleted immediately are allowed (non-negotiable rule; see NFR-SEC-02).
-- **FR-ENR-05**: Backend validates completed uploads (object exists, size/type/duration bounds, checksum) before marking the session `CAPTURED`.
-- **FR-ENR-06**: A quality-check job (async) validates captured media: face detected in stills; in the video, sufficient head-pose coverage across (yaw, pitch) combinations mapped from clock positions (no back-of-head segment exists — see ASM-03); sharpness/exposure thresholds. On failure the session becomes `REJECTED_QUALITY` with machine-readable reasons; the frontend prompts re-capture.
+- **FR-ENR-05**: Backend validates completed uploads (object exists, size/type/duration bounds, checksum) before marking the session `CAPTURED`. A session MUST carry the frontal photo plus **exactly one** sweep shape — per-position photos or one legacy video, never both and never neither.
+- **FR-ENR-06**: A quality-check job (async) validates captured media: face detected in stills; sufficient head-pose coverage across (yaw, pitch) combinations mapped from clock positions (no back-of-head segment exists — see ASM-03); sharpness/exposure thresholds. Each sweep frame's measured pose is checked against **the clock position it was captured for**, and against a **per-subject neutral baseline** estimated from the frontal photo — without that baseline, a subject whose resting head pose is not perfectly level fails the lower half of the dial (positions 4–8) even when they are looking exactly where they were asked to. For legacy video sessions, coverage is derived from sampled frames instead. On failure the session becomes `REJECTED_QUALITY` with machine-readable reasons; the frontend prompts re-capture (per position, where available).
 - **FR-ENR-07**: On quality pass, an embedding-extraction job produces multi-view face embeddings (frames sampled across the rotation) and stores them in the vector store, linked to the user (`identity gallery`). Session becomes `ENROLLED`.
 - **FR-ENR-08**: Enrollment requires recorded **consent** (who, when, consent text version) before capture can start.
 - **FR-ENR-09**: Admin can revoke/delete an enrollment: gallery embeddings are deleted, S3 media deleted (or lifecycle-expired per retention policy), and the user can no longer be recognized.
@@ -75,7 +75,7 @@
 ### Performance (NFR-PRF)
 - **NFR-PRF-01**: End-to-end recognition decision (frame received by inference service → decision) p95 **≤ 300 ms**; full door experience (capture → door signal) p95 ≤ 1 s. Latency reported in **ms** per request.
 - **NFR-PRF-02**: Vector search over the gallery ≤ 10 ms p95 at v1 scale (≤ 5,000 identities — ASM-05).
-- **NFR-PRF-03**: Enrollment upload path must sustain video files of 50–200 MB without routing bytes through backend memory (presigned direct-to-S3).
+- **NFR-PRF-03**: Enrollment upload path must sustain the full capture set without routing bytes through backend memory (presigned direct-to-S3): up to ~60 still frames of a few hundred KB each, uploaded progressively as each clock position is captured, and — for legacy sessions — single video files of 50–200 MB. Because upload is progressive, an early position's presigned URL may well have expired by the time the session is completed; completion therefore keys off whether the object actually landed in S3, not off the URL's age.
 
 ### Security & Privacy (NFR-SEC)
 - **NFR-SEC-01**: Biometric data (media + embeddings) is sensitive personal data (Indonesia UU PDP No. 27/2022 classifies biometric data as sensitive). Consent, purpose limitation, retention, and deletion rights MUST be implemented.

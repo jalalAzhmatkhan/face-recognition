@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from ai_training.db.audit_repo import insert_audit_log
 from ai_training.db.embedding_repo import upsert_embeddings, upsert_synthetic_masked_embeddings
 from ai_training.db.enrollment_repo import (
+    get_frontal_photo,
     get_latest_finalized_video,
     get_state,
     get_user_id,
@@ -74,6 +75,30 @@ def test_get_latest_finalized_video_returns_bucket_and_key() -> None:
         "frac-media",
         "enrollment/u1/s1/rotation.webm",
     )
+
+
+def test_get_frontal_photo_excludes_the_per_position_sweep_frames() -> None:
+    """The sweep frames are `kind = 'photo'` too (migration `e4b9d2f6a8c3`),
+    but they are the poses being MEASURED -- picking one as the neutral
+    baseline would subtract away the very movement QC is checking for."""
+    cursor = MagicMock()
+    cursor.fetchone.return_value = ("frac-media", "enrollment/u1/s1/photo_1.jpg")
+
+    assert get_frontal_photo(cursor, "session-1") == (
+        "frac-media",
+        "enrollment/u1/s1/photo_1.jpg",
+    )
+    sql = cursor.execute.call_args[0][0]
+    assert "clock_position IS NULL" in sql
+    # ASC, not DESC: a retake appends `photo_2.jpg` rather than replacing the
+    # frontal shot, so the EARLIEST position-less photo is the frontal one.
+    assert "ORDER BY created_at ASC" in sql
+
+
+def test_get_frontal_photo_returns_none_when_session_has_no_photo() -> None:
+    cursor = MagicMock()
+    cursor.fetchone.return_value = None
+    assert get_frontal_photo(cursor, "session-1") is None
 
 
 def test_upsert_embeddings_deletes_then_inserts() -> None:

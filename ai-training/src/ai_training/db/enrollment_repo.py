@@ -122,6 +122,12 @@ def get_frontal_photo(cursor: Cursor, session_id: str) -> tuple[str, str] | None
     against. See `ai_training.quality.pipeline.apply_neutral_offset` for why
     that baseline is needed at all.
 
+    `clock_position IS NULL` excludes the per-position sweep frames (which
+    are also `kind = 'photo'`, migration `e4b9d2f6a8c3`) -- those are the
+    poses being MEASURED, so using one as the baseline would cancel out the
+    very movement QC is checking for. Legacy rows predate the column and are
+    NULL, so they still match.
+
     `ORDER BY created_at ASC` (not DESC like the video lookups above): a
     retaken photo appends a NEW row (`photo_2.jpg`, ...) rather than
     replacing the first, and it is the earliest one that is the frontal
@@ -130,6 +136,7 @@ def get_frontal_photo(cursor: Cursor, session_id: str) -> tuple[str, str] | None
     cursor.execute(
         "SELECT s3_bucket, s3_key FROM media_objects "
         "WHERE session_id = %s AND kind = 'photo' AND status = 'FINALIZED' "
+        "AND clock_position IS NULL "
         "ORDER BY created_at ASC LIMIT 1",
         (session_id,),
     )

@@ -209,6 +209,7 @@ def request_presign(
     sha256: str,
     actor: str,
     variant: str | None = None,
+    clock_position: int | None = None,
 ) -> PresignResult:
     """Handle `POST /enrollments/{id}/media/presign` (FR-ENR-02/04, TSD §7).
 
@@ -226,6 +227,11 @@ def request_presign(
     `MediaVariant.DEFAULT` on the stored row. This keyword defaults to
     `None` precisely so existing callers of this function keep working
     unchanged.
+
+    `clock_position` (1..12) marks a photo as one of the sweep frames that
+    replace the 360-degree video, and switches the key to
+    `photo_pos_{PP}_{burst}.{ext}`. Omitted (`None`) means the frontal
+    preflight photo, which keeps the original `photo_{n}.{ext}` naming.
     """
     session = enrollment_repo.get(session_id)
     if session is None:
@@ -240,8 +246,21 @@ def request_presign(
 
     if media_kind is MediaKind.PHOTO:
         existing = media_repo.list_for_session(session_id, kind=MediaKind.PHOTO)
-        n = len(existing) + 1
-        s3_key = f"{prefix}enrollment/{session.user_id}/{session_id}/photo_{n}.{ext}"
+        if clock_position is not None:
+            # Sweep frame: key it by POSITION plus a burst index within that
+            # position, so the object name says what the row's
+            # `clock_position` says. A re-shot position appends
+            # `photo_pos_05_2.jpg`, `_3`, ... rather than overwriting -- more
+            # candidates for QC to pick the sharpest from.
+            burst_index = len([m for m in existing if m.clock_position == clock_position]) + 1
+            name = f"photo_pos_{clock_position:02d}_{burst_index}"
+        else:
+            # Frontal preflight photo (also the neutral-pose reference):
+            # unchanged `photo_{n}` naming, so pre-existing sessions and
+            # tooling that expects `photo_1.jpg` keep working.
+            n = len([m for m in existing if m.clock_position is None]) + 1
+            name = f"photo_{n}"
+        s3_key = f"{prefix}enrollment/{session.user_id}/{session_id}/{name}.{ext}"
     else:
         # One video per session (TSD §4 literal path `rotation.webm`): drop
         # any earlier PENDING video row for this session before recording
@@ -260,6 +279,7 @@ def request_presign(
         content_type=content_type,
         status=MediaObjectStatus.PENDING,
         variant=MediaVariant(variant) if variant else MediaVariant.DEFAULT,
+        clock_position=clock_position,
     )
     media = media_repo.create(media)
 
@@ -309,8 +329,11 @@ def complete_enrollment(
     """Handle `POST /enrollments/{id}/complete` (FR-ENR-05, TSD §7).
 
     Validates, via S3 HEAD (never by trusting the client or the PENDING
-    row's claimed metadata alone), that >=1 photo and exactly 1 video exist
-    and match what was claimed at presign time. On success: finalizes the
+    row's claimed metadata alone), that the session carries a frontal photo
+    plus ONE of the two accepted sweep shapes -- per-position photos
+    (`clock_position` set) or one legacy head-orientation video, never both
+    -- and that each object matches what was claimed at presign time. On
+    success: finalizes the
     `MediaObject` rows (metadata overwritten from the HEAD response),
     performs CAPTURING -> CAPTURED -> QC_RUNNING (two state-machine
     transitions in one call, per BE-06 instructions), enqueues the QC job
@@ -338,27 +361,61 @@ def complete_enrollment(
     # this endpoint's job.
     now = datetime.now(UTC)
     pending_all = media_repo.list_for_session(session_id, status=MediaObjectStatus.PENDING)
+
+    # Which PENDING rows actually count. A row is EXCLUDED only when its
+    # object genuinely never landed in S3 AND its presigned URL has expired
+    # -- i.e. an abandoned presign that can never be fulfilled. Existence is
+    # checked FIRST, before age: a per-position burst upload legitimately
+    # finishes minutes before /complete is called, so filtering on age alone
+    # would silently discard uploaded frames (and with them the coverage the
+    # subject actually recorded).
+    heads: dict[uuid.UUID, dict[str, Any] | None] = {
+        m.id: head_media_object(s3_client, bucket=m.s3_bucket, key=m.s3_key) for m in pending_all
+    }
     pending = [
-        m for m in pending_all if now - m.created_at <= timedelta(seconds=PRESIGN_TTL_SECONDS)
+        m
+        for m in pending_all
+        if heads[m.id] is not None
+        or now - m.created_at <= timedelta(seconds=PRESIGN_TTL_SECONDS)
     ]
     photos = [m for m in pending if m.kind == MediaKind.PHOTO]
     videos = [m for m in pending if m.kind == MediaKind.VIDEO]
+    frontal_photos = [m for m in photos if m.clock_position is None]
+    sweep_photos = [m for m in photos if m.clock_position is not None]
 
     reasons: list[dict[str, Any]] = []
-    if len(photos) < 1:
+    if len(frontal_photos) < 1:
         reasons.append(
             {
                 "code": "missing_photo",
                 "detail": "At least 1 photo is required before completing enrollment (FR-ENR-02).",
             }
         )
-    if len(videos) != 1:
+    # Two accepted capture shapes, so the frontend can be switched over
+    # independently of this endpoint:
+    #   - per-position photos (current): >=1 photo carrying a clock_position,
+    #     no video;
+    #   - legacy single sweep video: exactly 1 video, no positioned photos.
+    if sweep_photos:
+        if videos:
+            reasons.append(
+                {
+                    "code": "mixed_capture_shape",
+                    "detail": (
+                        "A session carries EITHER per-position photos OR one "
+                        f"head-orientation video, not both; found {len(sweep_photos)} "
+                        f"positioned photo(s) and {len(videos)} video(s)."
+                    ),
+                }
+            )
+    elif len(videos) != 1:
         reasons.append(
             {
-                "code": "video_count_mismatch",
+                "code": "missing_capture",
                 "detail": (
-                    "Exactly 1 head-orientation video is required before completing "
-                    f"enrollment (FR-ENR-02); found {len(videos)}."
+                    "Enrollment needs the 12 clock positions captured (FR-ENR-02): "
+                    "either per-position photos, or exactly 1 head-orientation video "
+                    f"for legacy clients; found 0 positioned photos and {len(videos)} video(s)."
                 ),
             }
         )
@@ -366,7 +423,7 @@ def complete_enrollment(
     verified: list[tuple[MediaObject, dict[str, Any]]] = []
     if not reasons:
         for media in (*photos, *videos):
-            head = head_media_object(s3_client, bucket=media.s3_bucket, key=media.s3_key)
+            head = heads[media.id]
             if head is None:
                 reasons.append(
                     {
@@ -460,7 +517,14 @@ def complete_enrollment(
         actor=actor,
         action="enrollment.media_completed",
         entity=f"enrollment_session:{session_id}",
-        payload={"photo_count": len(photos), "video_count": len(videos)},
+        payload={
+            "photo_count": len(photos),
+            "video_count": len(videos),
+            "sweep_photo_count": len(sweep_photos),
+            "positions_captured": sorted(
+                {m.clock_position for m in sweep_photos if m.clock_position is not None}
+            ),
+        },
     )
 
     qc_queue_service.enqueue_qc_job(session_id)
