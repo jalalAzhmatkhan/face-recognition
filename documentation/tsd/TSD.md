@@ -84,14 +84,19 @@ sequenceDiagram
   B-->>A: session {id, state: CREATED}
   A->>B: POST /enrollments/{id}/consent
   B-->>A: state CONSENTED
-  A->>B: POST /enrollments/{id}/media/presign {kind: photo|video, checksum}
+  A->>B: POST /enrollments/{id}/media/presign {kind: photo, checksum}
   B-->>A: presigned PUT URL (short TTL)
-  A->>S: PUT photo / 360-video (direct upload)
+  A->>S: PUT frontal photo (direct upload)
+  loop each clock position 1..12 detected during the sweep
+    A->>B: POST /enrollments/{id}/media/presign {kind: photo, clock_position, checksum}
+    B-->>A: presigned PUT URL -> photo_pos_{PP}_{k}.jpg
+    A->>S: PUT burst frames for that position (direct upload)
+  end
   A->>B: POST /enrollments/{id}/complete
   B->>S: HEAD objects (validate size/type/checksum)
   B->>Q: enqueue quality_check(session_id)
   W->>S: stream media (in-memory only)
-  W->>W: face detect, pose-coverage per clock sector, blur/exposure
+  W->>W: face detect, pose per frame vs its declared clock_position, blur/exposure
   alt QC fail
     W->>B: state REJECTED_QUALITY + reasons
     B-->>A: prompt re-capture
@@ -181,7 +186,8 @@ staff_accounts(id, email, role[ADMIN|OPERATOR|VIEWER], oidc_sub, ...)
 consents(id, user_id, consent_version, granted_at, revoked_at)
 enrollment_sessions(id, user_id, state, qc_report jsonb, created_by, timestamps)
 media_objects(id, session_id, kind[photo|video|event_frame], s3_bucket, s3_key,
-              checksum, size, content_type, retention_expires_at)   -- metadata ONLY, no bytes
+              checksum, size, content_type, retention_expires_at,
+              clock_position smallint NULL CHECK (1..12))           -- metadata ONLY, no bytes
 face_embeddings(id, user_id, session_id, model_version, pose_bucket, vector vector(512),
                 created_at)          -- pgvector HNSW index (cosine)
 models(version, mlflow_run_id, stage[CANDIDATE|PRODUCTION|RETIRED],
@@ -197,8 +203,9 @@ S3 layout (single private bucket, SSE-KMS, versioned):
 
 ```
 s3://frac-media/
-  enrollment/{user_id}/{session_id}/photo_{n}.jpg
-  enrollment/{user_id}/{session_id}/rotation.webm
+  enrollment/{user_id}/{session_id}/photo_{n}.jpg              (frontal preflight shot)
+  enrollment/{user_id}/{session_id}/photo_pos_{PP}_{k}.jpg     (sweep frame, PP = 01..12)
+  enrollment/{user_id}/{session_id}/rotation.webm              (LEGACY sessions only)
   events/{yyyy}/{mm}/{device_id}/{event_id}.jpg      (optional retention, short lifecycle)
   datasets/{snapshot_id}/manifest.json               (training snapshots = manifests, not copies)
   mlflow/ (artifacts)
@@ -234,9 +241,24 @@ Representative contracts — all JSON, all authenticated, errors follow RFC 9457
 POST /api/v1/enrollments            {user_id} → 201 {id, state}
 POST /api/v1/enrollments/{id}/consent  {consent_version} → {state: CONSENTED}
 POST /api/v1/enrollments/{id}/media/presign
-     {kind: "photo"|"video", content_type, size, sha256}
+     {kind: "photo"|"video", content_type, size, sha256,
+      variant?, clock_position?: 1..12}
      → {upload_url, s3_key, expires_at}
+     clock_position marks a photo as one of the 12 sweep frames and keys it
+     photo_pos_{PP}_{k}.jpg (k = burst index, so a burst or a re-shot
+     position appends candidates instead of overwriting). Omit it for the
+     frontal preflight shot, which keeps photo_{n}.jpg numbering counted
+     independently. 422 if sent with kind="video" or outside 1..12.
 POST /api/v1/enrollments/{id}/complete → 202 {state: QC_RUNNING}
+     Requires >=1 frontal photo plus EXACTLY ONE sweep shape: per-position
+     photos, or one legacy rotation video. 422 problem+json listing
+     reasons — missing_photo, mixed_capture_shape (both shapes present),
+     missing_capture (neither), object_not_found, size_mismatch,
+     content_type_mismatch, checksum_mismatch.
+     A PENDING row is dropped from the requirement only when its object is
+     absent from S3 AND its presign TTL has lapsed — existence is checked
+     first, because per-position upload is progressive and the earliest
+     positions are legitimately minutes old by the time /complete runs.
 GET  /api/v1/enrollments/{id} → {state, qc_report?, reasons?}
 DELETE /api/v1/enrollments/{id} → 202 (revocation + cleanup job)
 

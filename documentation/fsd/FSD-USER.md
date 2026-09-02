@@ -18,14 +18,18 @@ Cara kerjanya seperti satpam digital yang sangat teliti:
 
 - Admin membuat sesi pendaftaran untuk seorang karyawan.
 - Karyawan menyetujui dulu (persetujuan/consent dicatat) karena data wajah adalah data pribadi yang sensitif.
-- Karyawan difoto, lalu **direkam video sambil menggerakkan KEPALA** (badan tetap menghadap kamera, tidak berputar): mulai mendongak ke arah "jam 12", lalu bergerak searah jarum jam melalui posisi kepala lain (menoleh, menunduk, dst.) sampai kembali ke posisi "jam 12". Wajah tetap terlihat kamera sepanjang perekaman. Tujuannya agar sistem mengenal wajah dari berbagai sudut kepala, bukan hanya dari depan.
-- Aplikasi memandu selama perekaman: "wajah kurang terang", "putar lebih pelan", indikator arah yang sudah terekam, dan seterusnya.
-- Jika hasil rekaman kurang bagus (buram, gelap, sudut kurang lengkap), sistem meminta rekam ulang.
-- **Semua foto/video langsung dikirim ke penyimpanan cloud yang aman (AWS S3)** — tidak ada yang disimpan di komputer lokal. Ini aturan mutlak.
+- Karyawan difoto dari depan dulu (foto ini juga dipakai sistem sebagai "posisi kepala normal" orang tersebut — lihat di bawah).
+- Lalu karyawan **menggerakkan KEPALA** (badan tetap menghadap kamera, tidak berputar): mulai mendongak ke arah "jam 12", lalu bergerak searah jarum jam melalui posisi kepala lain (menoleh, menunduk, dst.) sampai kembali ke posisi "jam 12". Wajah tetap terlihat kamera sepanjang proses. Tujuannya agar sistem mengenal wajah dari berbagai sudut kepala, bukan hanya dari depan.
+- **Setiap kali kepala tepat berada di satu posisi jam, aplikasi otomatis memotret beberapa jepretan untuk posisi itu** — karyawan tidak perlu menekan tombol apa pun. Tidak ada video yang direkam.
+- Karena setiap posisi dipotret sendiri-sendiri, **urutannya bebas** dan **satu posisi bisa diulang sendiri** tanpa harus mengulang semuanya dari awal.
+- Aplikasi memandu selama proses: "wajah kurang terang", "gerakkan lebih pelan", indikator posisi jam mana yang sudah tertangkap, dan seterusnya.
+- Sistem menyesuaikan diri dengan **posisi kepala normal** tiap orang. Kalau kepala seseorang secara alami sedikit menunduk atau mendongak saat santai, sistem memperhitungkannya — supaya posisi bagian bawah (jam 4–8) tidak jadi mustahil dicapai.
+- Jika hasilnya kurang bagus (buram, gelap, ada posisi yang belum lengkap), sistem meminta pengulangan — cukup posisi yang bermasalah saja.
+- **Semua foto langsung dikirim ke penyimpanan cloud yang aman (AWS S3)** — tidak ada yang disimpan di komputer lokal. Ini aturan mutlak.
 
 ## 3. Bagaimana Sistem Belajar?
 
-- Setelah ada pendaftaran baru, sistem memproses rekaman: memilih cuplikan wajah terbaik dari berbagai sudut, lalu mengubahnya menjadi "sidik wajah" digital (angka-angka unik, bukan foto).
+- Setelah ada pendaftaran baru, sistem memproses hasil capture: memilih jepretan wajah terbaik dari tiap sudut kepala, lalu mengubahnya menjadi "sidik wajah" digital (angka-angka unik, bukan foto).
 - Secara berkala model dilatih ulang (fine-tuning) agar makin akurat.
 - Model baru hanya dipakai kalau terbukti **lebih jarang gagal mengenali orang terdaftar** dibanding model lama, dan tetap cepat. Ada persetujuan manusia sebelum model baru "naik produksi".
 
@@ -69,7 +73,7 @@ Jika sistem sedang gangguan, pintu **tidak** membuka otomatis (lebih aman gagal-
 2. ~~"Berputar 360°" artinya orangnya yang berputar badan/kepala satu putaran penuh di depan kamera.~~ **DIKOREKSI (2026-08-30):** yang bergerak adalah **orientasi KEPALA saja** (menengok/menunduk/mendongak mengikuti pola arah jam), badan tetap menghadap kamera dan wajah tetap terlihat kamera sepanjang waktu — bukan badan berputar dan bukan sampai membelakangi kamera.
 3. Skala awal: sampai ± 5.000 orang terdaftar dan ± 20 pintu, satu lokasi. Benar?
 4. Perangkat pintu: kamera + kunci elektrik yang bisa diperintah sistem — merek/model belum ditentukan?
-5. Masa simpan video mentah 90 hari setelah pendaftaran berhasil — setuju?
+5. Masa simpan foto/video mentah 90 hari setelah pendaftaran berhasil — setuju?
 6. Anti-pemalsuan tahap awal berbasis perangkat lunak saja (belum pakai kamera inframerah/3D) — cukup?
 7. Target: hampir tidak pernah menolak orang terdaftar (≥ 98%), dengan orang asing salah diterima maksimal 1 dari 1.000 percobaan — setuju dengan keseimbangan ini?
 

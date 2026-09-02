@@ -32,7 +32,7 @@ Menggantikan otorisasi akses manual (kartu/PIN) di gedung/kantor dengan **verifi
 **Alur inti (core loop):**
 
 ```
-Enroll (capture foto + video orientasi kepala) → Simpan media di AWS S3
+Enroll (foto depan + foto per posisi jam, orientasi kepala) → Simpan media di AWS S3
   → Quality Check + ekstraksi fitur wajah → Bangun galeri embedding
   → Model dipakai untuk inferensi real-time di pintu
   → Keputusan Grant/Deny + audit log
@@ -309,9 +309,13 @@ sequenceDiagram
     API-->>FE: siap capture
 
     Note over FE,Karyawan: Wizard capture 360° (orientasi kepala,<br/>bukan badan berputar)
-    FE->>Karyawan: Panduan: 1 foto depan + video<br/>menoleh/menunduk/mendongak (12 posisi jam)
+    FE->>Karyawan: Panduan: 1 foto depan, lalu<br/>menoleh/menunduk/mendongak (12 posisi jam)
     FE->>API: POST /transition {target_state: CAPTURING}
-    FE->>S3: Upload foto + video langsung (presigned URL)
+    FE->>S3: Upload foto depan (presigned URL)
+    loop Tiap posisi jam yang terdeteksi tercapai
+        FE->>FE: Auto-jepret burst 3-5 frame
+        FE->>S3: Upload frame posisi itu (presigned URL)
+    end
     Note right of FE: Media TIDAK PERNAH<br/>lewat/disimpan di backend
 
     FE->>API: POST /enrollments/{id}/complete
@@ -320,11 +324,11 @@ sequenceDiagram
     API--)Worker: enqueue job Quality Check (async)
     API-->>FE: 202 Accepted (proses berjalan di background)
 
-    Worker->>S3: Ambil video (in-memory, tanpa disimpan lokal)
-    Worker->>Worker: Deteksi wajah + cek 12 posisi jam<br/>+ cek blur/pencahayaan
+    Worker->>S3: Ambil foto-foto (in-memory, tanpa disimpan lokal)
+    Worker->>Worker: Deteksi wajah + cek pose tiap frame<br/>vs posisi jam yang diklaim + blur/pencahayaan<br/>(relatif ke pose normal dari foto depan)
     alt Kualitas tidak cukup
         Worker->>DB: state=REJECTED_QUALITY + alasan per posisi
-        FE->>Admin: Tampilkan alasan, tombol "Rekam Ulang"
+        FE->>Admin: Tampilkan alasan, tombol "Ulangi posisi ini"
     else Kualitas lolos
         Worker->>Worker: Ekstraksi fitur wajah (embedding)<br/>per posisi jam
         Worker->>DB: Simpan embedding ke galeri (pgvector)
@@ -336,7 +340,9 @@ sequenceDiagram
 **Poin penting untuk pembaca non-teknis:**
 - **Consent dulu, baru rekam** — sistem tidak akan membuka akses ke kamera sebelum persetujuan tercatat.
 - **Rekaman langsung ke cloud** — perangkat admin/karyawan tidak pernah menyimpan file foto/video; begitu selesai diunggah, tidak ada jejak file di komputer/browser.
-- **Validasi otomatis** — kalau video kurang jelas (goyang, gelap, wajah tidak lengkap terlihat), sistem menolak dengan alasan spesifik dan meminta rekam ulang — bukan diterima seadanya.
+- **Jepret otomatis per arah** — karyawan cukup menggerakkan kepala; aplikasi memotret sendiri begitu tiap posisi jam tercapai. Urutannya bebas, dan satu posisi bisa diulang tanpa mengulang semuanya.
+- **Menyesuaikan posisi kepala normal tiap orang** — kalau kepala seseorang secara alami sedikit menunduk/mendongak saat santai, sistem memperhitungkannya, sehingga posisi bawah (jam 4–8) tetap wajar dicapai.
+- **Validasi otomatis** — kalau hasilnya kurang jelas (goyang, gelap, wajah tidak lengkap terlihat), sistem menolak dengan alasan spesifik dan meminta pengulangan — bukan diterima seadanya.
 
 ### 6.3 Verifikasi Akses — Karyawan Masuk Gedung
 
@@ -528,7 +534,7 @@ Rekomendasi ini disusun oleh riset literatur SOTA (±55 paper, 2021–2026 — l
 |---|---|---|---|
 | **Deteksi + landmark** | SCRFD (kandidat produksi) / **MediaPipe Face Landmarker** (dipakai saat ini untuk QC pipeline) | SCRFD: kode MIT, *weights* non-komersial (perlu lisensi/retrain); MediaPipe: Apache-2.0, gratis | SCRFD unggul akurasi/latensi untuk deteksi produksi; MediaPipe dipakai di `ai-training` karena model asetnya gratis-didistribusikan tanpa isu lisensi dan cukup untuk quality-check landmark |
 | **Liveness / Anti-Spoofing** | MiniFASNet (Silent-Face) | Apache-2.0 | Model FAS *single-frame* ringan (sub-ms), harus **di-fine-tune ulang** dengan data serangan print/replay dari kamera pintu sendiri — literatur menunjukkan performa akademik FAS tidak transfer lintas domain kamera |
-| **Ekstraksi fitur (embedding)** | AdaFace (IR-50/IR-101, 512-d) | Repo MIT | *Quality-adaptive margin* — paling tahan terhadap frame blur/pose ekstrem, persis kondisi video enrollment 360° dan kamera CCTV pintu (bukan foto studio) |
+| **Ekstraksi fitur (embedding)** | AdaFace (IR-50/IR-101, 512-d) | Repo MIT | *Quality-adaptive margin* — paling tahan terhadap frame blur/pose ekstrem, persis kondisi capture enrollment 360° dan kamera CCTV pintu (bukan foto studio) |
 | **Pencocokan** | Cosine similarity, *max-fusion* multi-template per posisi jam | — | Video 360° menghasilkan banyak sudut pandang wajah → disimpan sebagai beberapa template per identitas (bukan 1), skor akhir = kemiripan tertinggi terhadap salah satu template (memaksimalkan Recall) |
 
 **Keputusan lisensi (dicatat 2026-08-30):** Aplikasi ini **tidak diperjualbelikan** — dipakai internal organisasi. Risiko lisensi *non-commercial* pada *weights* SCRFD/InsightFace diterima secara sadar oleh pemilik proyek; jalur mitigasi (retrain dari kode MIT, atau data sintetis DCFace/Vec2Face+) tetap tersedia bila kelak diperlukan.
@@ -539,7 +545,7 @@ Rekomendasi ini disusun oleh riset literatur SOTA (±55 paper, 2021–2026 — l
 
 | Aspek | Embedding Matching (dipilih) | Fine-Tuning per Identitas (dihindari) |
 |---|---|---|
-| Recall | Tinggi bila galeri multi-pose — justru keunggulan capture 360° kita | Naik marginal, berisiko *overfit* ke kondisi video enrollment |
+| Recall | Tinggi bila galeri multi-pose — justru keunggulan capture 360° kita | Naik marginal, berisiko *overfit* ke kondisi capture enrollment |
 | Operasional | Enroll/revoke = insert/delete vektor, instan | Perlu retrain tiap ada perubahan user (GPU job + QA regresi ulang) |
 | Skalabilitas | Ribuan identitas, pencocokan < 1 ms | Model membengkak per identitas; *catastrophic forgetting* |
 | Stabilitas Precision/F1 | Threshold global terkendali | Distribusi skor bergeser tiap retrain, threshold harus dikalibrasi ulang |
