@@ -40,6 +40,7 @@ from ai_training.db.enrollment_repo import (
     get_latest_finalized_video,
     get_latest_finalized_video_with_retention,
     get_state,
+    get_sweep_photos,
     get_user_id,
     guarded_transition,
     list_enrolled_sessions,
@@ -59,6 +60,7 @@ from ai_training.quality.mask_overlay import MaskOverlayProvider, build_mask_ove
 from ai_training.quality.pipeline import (
     estimate_neutral_pose,
     resolve_qc_settings,
+    run_photo_quality_check,
     run_quality_check,
 )
 from ai_training.similarity.high_similarity_check import run_high_similarity_check_core
@@ -202,13 +204,23 @@ def run_enrollment_qc_core(
         )
         return "skipped_wrong_state"
 
-    media = get_latest_finalized_video(cursor, session_id)
-    if media is None:
+    # Two capture shapes reach this task (see FR-ENR-02):
+    #   - per-position sweep photos, what the wizard uploads now;
+    #   - one `rotation.webm`, for sessions enrolled before the switch.
+    # Photos take precedence and are checked first; an empty photo list is
+    # exactly the "this is a legacy video session" signal.
+    sweep_photos = get_sweep_photos(cursor, session_id)
+    media = None if sweep_photos else get_latest_finalized_video(cursor, session_id)
+    if not sweep_photos and media is None:
         rejected_report = {
             "session_id": session_id,
             "overall": "REJECTED_QUALITY",
             "coverage_ratio": 0.0,
             "positions": [],
+            # Kept as "video_missing" rather than renamed: the code is part
+            # of the qc_report contract already rendered by the frontend's
+            # reasonHumanizer and stored in every historical report, and it
+            # still means the same thing -- no usable capture was found.
             "reasons": ["video_missing"],
         }
         if guarded_transition(
@@ -235,8 +247,6 @@ def run_enrollment_qc_core(
         )
         return "skipped_race"
 
-    bucket, key = media
-    video_bytes = downloader(bucket, key, settings)
     # System Parameter admin menu: an ADMIN-configured sharpness/brightness
     # override (e.g. loosened for laptop-webcam enrollment) takes effect
     # here, on the SAME cursor already open for this task -- see
@@ -261,12 +271,28 @@ def run_enrollment_qc_core(
                 "ai_training.worker.neutral_pose_unavailable session_id=%s", session_id
             )
     try:
-        report, frames_by_position = run_quality_check(
-            video_bytes,
-            session_id=session_id,
-            settings=effective_qc_settings,
-            neutral_pose=neutral_pose,
-        )
+        if sweep_photos:
+            # Each frame carries the position it was captured for, so QC
+            # scores it against THAT target rather than guessing from the
+            # pose alone -- see `_evaluate_frame`'s `declared_position`.
+            report, frames_by_position = run_photo_quality_check(
+                [
+                    (position, downloader(bucket, key, settings))
+                    for position, bucket, key in sweep_photos
+                ],
+                session_id=session_id,
+                settings=effective_qc_settings,
+                neutral_pose=neutral_pose,
+            )
+        else:
+            assert media is not None  # guarded above: no photos AND no video already returned
+            bucket, key = media
+            report, frames_by_position = run_quality_check(
+                downloader(bucket, key, settings),
+                session_id=session_id,
+                settings=effective_qc_settings,
+                neutral_pose=neutral_pose,
+            )
     except RuntimeError:
         # A corrupt/undecodable video is a CONTENT quality problem, not a
         # worker fault -- retrying will never fix it. Found live: without
@@ -275,12 +301,11 @@ def run_enrollment_qc_core(
         # landing in the dead-letter table for something that was always
         # going to fail the same way. Route it through the same
         # REJECTED_QUALITY path as "video_missing" instead.
-        logger.warning(
-            "ai_training.worker.video_undecodable session_id=%s bucket=%s key=%s",
-            session_id,
-            bucket,
-            key,
-        )
+        #
+        # The photo path cannot reach here: `run_photo_quality_check` drops
+        # an undecodable frame rather than raising, so a bad frame costs
+        # that frame and its position falls back to `no_face_detected`.
+        logger.warning("ai_training.worker.video_undecodable session_id=%s", session_id)
         rejected_report = {
             "session_id": session_id,
             "overall": "REJECTED_QUALITY",
@@ -689,29 +714,49 @@ def run_gallery_reembed_job_core(
                 counts["skipped_already_done"] += 1
                 continue
 
-            media = get_latest_finalized_video(cursor, session_id)
-            if media is None:
+            # Same two capture shapes as run_enrollment_qc_core: sweep
+            # photos for sessions enrolled since the switch, one video for
+            # older ones. Without the photo branch a photo-enrolled session
+            # would count as `skipped_no_video` and silently keep its old
+            # model's embeddings forever, i.e. drop out of the gallery on
+            # the next model promotion.
+            sweep_photos = get_sweep_photos(cursor, session_id)
+            media = None if sweep_photos else get_latest_finalized_video(cursor, session_id)
+            if not sweep_photos and media is None:
                 counts["skipped_no_video"] += 1
                 continue
-            bucket, key = media
-            video_bytes = downloader(bucket, key, settings)
 
             try:
-                _report, frames_by_position = run_quality_check(
-                    video_bytes, session_id=session_id, settings=settings.qc
-                )
+                if sweep_photos:
+                    _report, frames_by_position = run_photo_quality_check(
+                        [
+                            (position, downloader(bucket, key, settings))
+                            for position, bucket, key in sweep_photos
+                        ],
+                        session_id=session_id,
+                        settings=settings.qc,
+                    )
+                else:
+                    assert media is not None  # guarded directly above
+                    bucket, key = media
+                    _report, frames_by_position = run_quality_check(
+                        downloader(bucket, key, settings),
+                        session_id=session_id,
+                        settings=settings.qc,
+                    )
             except RuntimeError:
                 # Same "content problem, not a worker fault" classification
                 # as run_enrollment_qc_core's identical guard -- the video
                 # already passed QC once at enrollment time, so a decode
                 # failure here means the stored object itself is now bad
                 # (corrupted/replaced), not something a retry fixes.
+                # `bucket`/`key` deliberately not logged here: only the
+                # video branch can raise RuntimeError, and on the photo
+                # branch those names are unbound -- referencing them would
+                # turn a handled content problem into a NameError.
                 logger.warning(
-                    "ai_training.worker.gallery_reembed_video_undecodable "
-                    "session_id=%s bucket=%s key=%s",
+                    "ai_training.worker.gallery_reembed_video_undecodable session_id=%s",
                     session_id,
-                    bucket,
-                    key,
                 )
                 counts["failed"] += 1
                 continue
@@ -950,9 +995,21 @@ def run_backfill_masked_templates_job_core(
                 counts["skipped_already_has_masked"] += 1
                 continue
 
-            media = get_latest_finalized_video_with_retention(cursor, session_id)
-            if media is None or (
-                media.retention_expires_at is not None and media.retention_expires_at <= now
+            # Sweep photos first, same as everywhere else. A photo-enrolled
+            # session is NOT a "legacy user" -- D-4.5's whole premise is
+            # that the media may have aged out of retention, which cannot
+            # be true of a session enrolled since the photo switch. So a
+            # session with sweep frames skips the retention/reenroll_due
+            # branch entirely rather than being wrongly flagged.
+            sweep_photos = get_sweep_photos(cursor, session_id)
+            media = (
+                None
+                if sweep_photos
+                else get_latest_finalized_video_with_retention(cursor, session_id)
+            )
+            if not sweep_photos and (
+                media is None
+                or (media.retention_expires_at is not None and media.retention_expires_at <= now)
             ):
                 counts["skipped_media_retention_expired"] += 1
                 flipped = mark_user_reenroll_due(
@@ -986,24 +1043,34 @@ def run_backfill_masked_templates_job_core(
                 )
                 continue
 
-            video_bytes = downloader(media.bucket, media.key, settings)
-
             try:
-                _report, frames_by_position = run_quality_check(
-                    video_bytes, session_id=session_id, settings=settings.qc
-                )
+                if sweep_photos:
+                    _report, frames_by_position = run_photo_quality_check(
+                        [
+                            (position, downloader(bucket, key, settings))
+                            for position, bucket, key in sweep_photos
+                        ],
+                        session_id=session_id,
+                        settings=settings.qc,
+                    )
+                else:
+                    assert media is not None  # guarded directly above
+                    _report, frames_by_position = run_quality_check(
+                        downloader(media.bucket, media.key, settings),
+                        session_id=session_id,
+                        settings=settings.qc,
+                    )
             except RuntimeError:
                 # Same "content problem, not a worker fault" classification
                 # as run_gallery_reembed_job_core's identical guard -- the
                 # video passed QC once at original enrollment time, so a
                 # decode failure here means the stored object itself is now
                 # bad (corrupted/replaced), not something a retry fixes.
+                # Only the video branch can reach here (see
+                # `run_photo_quality_check`), so `media` is bound.
                 logger.warning(
-                    "ai_training.worker.backfill_masked_video_undecodable "
-                    "session_id=%s bucket=%s key=%s",
+                    "ai_training.worker.backfill_masked_video_undecodable session_id=%s",
                     session_id,
-                    media.bucket,
-                    media.key,
                 )
                 counts["failed"] += 1
                 continue

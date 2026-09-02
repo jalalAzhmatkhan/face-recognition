@@ -45,9 +45,13 @@ class FakeCursor:
         media: dict[str, tuple[str, str, datetime | None] | None],
         already_masked: set[str] | None = None,
         already_reenroll_due: set[str] | None = None,
+        sweep_photo_sessions: dict[str, list[tuple[int, str, str]]] | None = None,
     ) -> None:
         self.sessions = sessions
         self.media = media
+        # session_id -> [(clock_position, bucket, key)]. Absent/empty means
+        # "legacy video session", which is exactly the production signal.
+        self.sweep_photo_sessions = sweep_photo_sessions or {}
         self.masked_by_user: set[str] = set(already_masked or set())
         self.reenroll_due_by_user: set[str] = set(already_reenroll_due or set())
         self.executed: list[tuple[str, tuple]] = []
@@ -58,8 +62,16 @@ class FakeCursor:
 
     def execute(self, query: str, params: tuple = ()) -> None:
         self.executed.append((query, params))
+        # Reset BOTH buffers on every statement: leaving a stale _fetch_all
+        # behind meant an unrecognised query silently handed back the
+        # PREVIOUS query's rows (found live when get_sweep_photos was added
+        # and fetchall() returned the session list, blowing up on int()).
+        self._fetch_one = None
+        self._fetch_all = []
         if query.startswith("SELECT id, user_id FROM enrollment_sessions"):
             self._fetch_all = list(self.sessions)
+        elif query.startswith("SELECT clock_position, s3_bucket, s3_key FROM media_objects"):
+            self._fetch_all = list(self.sweep_photo_sessions.get(params[0], []))
         elif query.startswith("SELECT 1 FROM face_embeddings WHERE user_id"):
             user_id = params[0]
             self._fetch_one = (1,) if user_id in self.masked_by_user else None
@@ -122,6 +134,13 @@ def _patch_pipeline(monkeypatch) -> None:
     monkeypatch.setattr(
         "ai_training.worker.tasks.run_quality_check",
         lambda video_bytes, *, session_id, settings, neutral_pose=None: (
+            MagicMock(),
+            {"12": [MagicMock(position="12", blur=100.0, yaw=0.0, passed=True)]},
+        ),
+    )
+    monkeypatch.setattr(
+        "ai_training.worker.tasks.run_photo_quality_check",
+        lambda photos, *, session_id, settings, neutral_pose=None: (
             MagicMock(),
             {"12": [MagicMock(position="12", blur=100.0, yaw=0.0, passed=True)]},
         ),
@@ -444,6 +463,78 @@ def test_scales_linearly_over_many_sessions(monkeypatch) -> None:
     )
     assert total == n
     assert counts["skipped_already_has_masked"] == len(already_masked)
+
+
+def test_backfills_a_photo_enrolled_session_from_its_sweep_frames(monkeypatch) -> None:
+    _patch_pipeline(monkeypatch)
+    cursor = FakeCursor(
+        sessions=[("session-photo", "user-1")],
+        media={},
+        sweep_photo_sessions={
+            "session-photo": [(p, "frac-media", f"photo_pos_{p:02d}_1.jpg") for p in range(1, 13)]
+        },
+    )
+
+    counts = run_backfill_masked_templates_job_core(
+        cursor,
+        _settings(),
+        "job-1",
+        downloader=_fake_downloader,
+        mask_overlay_provider=_OneTemplateMaskProvider(),
+    )
+
+    assert counts["processed"] == 1
+    assert counts["templates_inserted"] == 1
+
+
+def test_a_photo_enrolled_session_is_never_flagged_reenroll_due(monkeypatch) -> None:
+    """D-4.5's retention/reenroll_due branch exists for LEGACY users whose
+    enrollment video may have aged out of the 90-day window (ASM-10). A
+    session enrolled since the photo switch cannot be in that situation,
+    so it must not be swept up by it -- flagging it would tell a
+    perfectly-enrolled user to re-enrol for no reason."""
+    _patch_pipeline(monkeypatch)
+    cursor = FakeCursor(
+        sessions=[("session-photo", "user-1")],
+        # No video row at all: on the old code path this is precisely the
+        # "media gone" case that flips reenroll_due.
+        media={},
+        sweep_photo_sessions={"session-photo": [(1, "frac-media", "photo_pos_01_1.jpg")]},
+    )
+
+    counts = run_backfill_masked_templates_job_core(
+        cursor,
+        _settings(),
+        "job-1",
+        downloader=_fake_downloader,
+        mask_overlay_provider=_OneTemplateMaskProvider(),
+    )
+
+    assert counts["skipped_media_retention_expired"] == 0
+    assert cursor.reenroll_due_calls == []
+    assert "user.reenroll_due_marked" not in [action for action, _payload in cursor.audit_actions]
+
+
+def test_a_legacy_session_with_expired_media_is_still_flagged(monkeypatch) -> None:
+    """The other half of the same guard: adding the photo branch must not
+    disarm D-4.5 for the legacy users it was built for."""
+    _patch_pipeline(monkeypatch)
+    cursor = FakeCursor(
+        sessions=[("session-legacy", "user-1")],
+        media={"session-legacy": None},
+        sweep_photo_sessions={},
+    )
+
+    counts = run_backfill_masked_templates_job_core(
+        cursor,
+        _settings(),
+        "job-1",
+        downloader=_fake_downloader,
+        mask_overlay_provider=_OneTemplateMaskProvider(),
+    )
+
+    assert counts["skipped_media_retention_expired"] == 1
+    assert cursor.reenroll_due_calls == [("user-1", "video_retention_expired")]
 
 
 def test_proxy_task_in_backend_never_actually_runs() -> None:

@@ -10,9 +10,11 @@ checklist for how to exercise this against a real recording.
 from __future__ import annotations
 
 import contextlib
+import logging
 import math
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -27,6 +29,8 @@ from ai_training.quality.pose import (
     nearest_clock_position,
 )
 from ai_training.quality.report import PositionResult, QCReport
+
+logger = logging.getLogger(__name__)
 
 
 def _require_cv2() -> Any:
@@ -179,8 +183,27 @@ def apply_neutral_offset(
 
 
 def _evaluate_frame(
-    frame: Any, settings: QCSettings, neutral_pose: tuple[float, float] | None = None
+    frame: Any,
+    settings: QCSettings,
+    neutral_pose: tuple[float, float] | None = None,
+    declared_position: str | None = None,
 ) -> FrameQuality | None:
+    """Evaluate one decoded frame.
+
+    `declared_position` ("01".."12") is the position the frame was CAPTURED
+    FOR, which only the photo path knows -- a sweep frame is uploaded with
+    its own `clock_position` (backend migration `e4b9d2f6a8c3`). Given it,
+    the frame is scored against THAT target instead of whichever target it
+    happens to land nearest.
+
+    That difference matters. `nearest_clock_position` has no radius gate, so
+    a frame always lands somewhere: on the video path a pose that drifted
+    into a neighbouring sector is silently re-labelled and can PASS as that
+    neighbour, quietly leaving the intended position uncovered. Scoring
+    against the declared target instead turns the same drift into an honest
+    `pose_out_of_range` on the position the subject was actually asked for.
+    `None` (the video path) keeps the nearest-position behaviour unchanged.
+    """
     detection = detect_face_and_landmarks(
         frame, model_path=settings.face_landmarker_model_path or None
     )
@@ -190,7 +213,7 @@ def _evaluate_frame(
     height, width = frame.shape[:2]
     raw_yaw, raw_pitch, _roll = estimate_pose_from_landmarks(detection, (width, height))
     yaw, pitch = apply_neutral_offset(raw_yaw, raw_pitch, neutral_pose, settings=settings)
-    position = nearest_clock_position(
+    position = declared_position or nearest_clock_position(
         yaw, pitch, yaw_range_deg=settings.yaw_range_deg, pitch_range_deg=settings.pitch_range_deg
     )
     blur = qmetrics.blur_score(frame)
@@ -223,6 +246,21 @@ def _evaluate_frame(
     )
 
 
+def decode_image(photo_bytes: bytes) -> Any | None:
+    """Decode JPEG/PNG bytes to a BGR frame, or `None` if the bytes are not
+    a readable image. Never raises — a single corrupt sweep frame must cost
+    that frame, not the whole session (its position simply has one fewer
+    candidate, and falls back to `no_face_detected` if it had no others)."""
+    try:
+        import numpy as np
+
+        cv2 = _require_cv2()  # inside the try: a missing `ml` extra must not raise either
+        frame = cv2.imdecode(np.frombuffer(photo_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except Exception:  # noqa: BLE001 - see docstring
+        return None
+    return frame
+
+
 def estimate_neutral_pose(photo_bytes: bytes, settings: QCSettings) -> tuple[float, float] | None:
     """`(yaw, pitch)` of the session's frontal photo, for use as the neutral
     baseline in `apply_neutral_offset` -- or `None` if it cannot be
@@ -234,11 +272,7 @@ def estimate_neutral_pose(photo_bytes: bytes, settings: QCSettings) -> tuple[flo
     existed rather than failing outright.
     """
     try:
-        import numpy as np
-
-        cv2 = _require_cv2()  # inside the try: a missing `ml` extra must not raise either
-        buffer = np.frombuffer(photo_bytes, dtype=np.uint8)
-        frame = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+        frame = decode_image(photo_bytes)
         if frame is None:
             return None
         detection = detect_face_and_landmarks(
@@ -280,6 +314,66 @@ def run_quality_check(
         if evaluated is not None:
             by_position[evaluated.position].append(evaluated)
 
+    return _build_report(by_position, session_id=session_id, settings=settings), by_position
+
+
+def run_photo_quality_check(
+    photos: Sequence[tuple[str, bytes]],
+    *,
+    session_id: str,
+    settings: QCSettings,
+    neutral_pose: tuple[float, float] | None = None,
+) -> tuple[QCReport, dict[str, list[FrameQuality]]]:
+    """Photo-path counterpart of `run_quality_check` (FR-ENR-06).
+
+    `photos` is `(clock_position, image_bytes)` pairs, positions as
+    "01".."12" — the sweep frames a session uploaded, each already labelled
+    with the position it was captured for. Ordering and duplicates are
+    irrelevant: several frames per position is the normal case (the wizard
+    captures a burst), and every frame is scored independently.
+
+    Returns the SAME `(report, frames_by_position)` shape as the video path,
+    so the caller's PASS handling and TR-03 embedding extraction are shared
+    verbatim between the two.
+
+    Frames that cannot be decoded, or that show no face, are dropped rather
+    than failing the session — a position with no surviving candidate
+    reports `no_face_detected`, exactly as an unreached position does on the
+    video path.
+    """
+    by_position: dict[str, list[FrameQuality]] = {position: [] for position in CLOCK_POSITIONS}
+    for position, image_bytes in photos:
+        if position not in by_position:
+            logger.warning(
+                "ai_training.quality.unknown_clock_position session_id=%s position=%s",
+                session_id,
+                position,
+            )
+            continue
+        frame = decode_image(image_bytes)
+        if frame is None:
+            logger.warning(
+                "ai_training.quality.undecodable_photo session_id=%s position=%s",
+                session_id,
+                position,
+            )
+            continue
+        evaluated = _evaluate_frame(frame, settings, neutral_pose, declared_position=position)
+        if evaluated is not None:
+            by_position[position].append(evaluated)
+
+    return _build_report(by_position, session_id=session_id, settings=settings), by_position
+
+
+def _build_report(
+    by_position: dict[str, list[FrameQuality]],
+    *,
+    session_id: str,
+    settings: QCSettings,
+) -> QCReport:
+    """Fold per-position frame evaluations into the session-level verdict.
+    Shared by both capture shapes so a photo session and a legacy video
+    session are judged by identical rules."""
     position_results: list[PositionResult] = []
     passed_count = 0
     for position in CLOCK_POSITIONS:
@@ -307,11 +401,10 @@ def run_quality_check(
 
     coverage_ratio = passed_count / len(CLOCK_POSITIONS)
     overall = "PASS" if coverage_ratio >= settings.min_pass_ratio else "REJECTED_QUALITY"
-    report = QCReport(
+    return QCReport(
         session_id=session_id,
         overall=overall,
         coverage_ratio=coverage_ratio,
         positions=position_results,
         generated_at=datetime.now(UTC),
     )
-    return report, by_position

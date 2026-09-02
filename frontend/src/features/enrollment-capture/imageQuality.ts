@@ -10,11 +10,25 @@ import type { QualityAssessment } from './types'
  *  - Lighting: mean grayscale brightness (0-255).
  */
 
-export const QUALITY_THRESHOLDS = {
+export interface QualityThresholds {
+  minBlurVariance: number
+  minBrightness: number
+  maxBrightness: number
+}
+
+/**
+ * Built-in defaults. Deliberately NOT `as const`: these are overridable at
+ * runtime by the System Parameter menu
+ * (`GET /system-parameters/enrollment-quality`), and `as const` narrowed
+ * them to the literal types `60`/`60`/`200`, so assigning a fetched value
+ * was a type error under the build config — the override could not
+ * typecheck at all.
+ */
+export const QUALITY_THRESHOLDS: QualityThresholds = {
   minBlurVariance: 60,
   minBrightness: 60,
   maxBrightness: 200,
-} as const
+}
 
 function toGrayscale(imageData: ImageData): Float32Array {
   const { data, width, height } = imageData
@@ -62,7 +76,7 @@ export function averageBrightness(imageData: ImageData): number {
 
 export function assessQuality(
   imageData: ImageData,
-  thresholds: typeof QUALITY_THRESHOLDS = QUALITY_THRESHOLDS,
+  thresholds: QualityThresholds = QUALITY_THRESHOLDS,
 ): QualityAssessment {
   const blurVariance = laplacianVariance(imageData)
   const brightness = averageBrightness(imageData)

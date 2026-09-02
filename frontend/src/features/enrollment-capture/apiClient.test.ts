@@ -25,6 +25,28 @@ describe('buildPresignRequestBody', () => {
       sha256: 'a'.repeat(64),
     })
   })
+
+  it('omits clock_position entirely for the frontal photo', () => {
+    // Not `clock_position: null` -- the backend reads a MISSING field as
+    // "frontal preflight photo", which is how ai-training later finds the
+    // neutral-pose reference.
+    const body = buildPresignRequestBody('photo', {
+      contentType: 'image/jpeg',
+      size: 1,
+      sha256Hex: 'a'.repeat(64),
+    })
+    expect('clock_position' in body).toBe(false)
+  })
+
+  it('carries clock_position through for a sweep frame', () => {
+    const body = buildPresignRequestBody('photo', {
+      contentType: 'image/jpeg',
+      size: 1,
+      sha256Hex: 'a'.repeat(64),
+      clockPosition: 7,
+    })
+    expect(body.clock_position).toBe(7)
+  })
 })
 
 describe('presignMedia / completeEnrollment (authenticated requests)', () => {

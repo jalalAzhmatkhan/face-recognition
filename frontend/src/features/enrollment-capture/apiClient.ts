@@ -1,4 +1,5 @@
 import type {
+  ClockPosition,
   CompleteResponse,
   ConsentResponse,
   MediaKind,
@@ -79,14 +80,24 @@ async function authFetch(
 
 export function buildPresignRequestBody(
   kind: MediaKind,
-  file: { contentType: string; size: number; sha256Hex: string },
+  file: {
+    contentType: string
+    size: number
+    sha256Hex: string
+    clockPosition?: ClockPosition
+  },
 ): PresignRequestBody {
-  return {
+  const body: PresignRequestBody = {
     kind,
     content_type: file.contentType,
     size: file.size,
     sha256: file.sha256Hex,
   }
+  // Omitted entirely rather than sent as null: the backend treats a missing
+  // clock_position as "frontal preflight photo" and rejects the field
+  // outright on kind: 'video'.
+  if (file.clockPosition !== undefined) body.clock_position = file.clockPosition
+  return body
 }
 
 export async function presignMedia(

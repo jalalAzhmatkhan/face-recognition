@@ -70,6 +70,12 @@ export interface PresignRequestBody {
   content_type: string
   size: number
   sha256: string
+  /** Which of the 12 sweep positions this photo captures (backend migration
+   * `e4b9d2f6a8c3`). Omitted for the frontal preflight photo — that one is
+   * the neutral-pose reference, and the backend finds it by looking for the
+   * earliest photo with NO position. Rejected by the backend on
+   * `kind: 'video'`. */
+  clock_position?: ClockPosition
 }
 
 export interface PresignResponse {
