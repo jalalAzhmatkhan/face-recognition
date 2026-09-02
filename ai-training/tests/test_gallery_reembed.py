@@ -63,7 +63,10 @@ def _stub_frames_by_position(monkeypatch) -> None:
     no real cv2/mediapipe pipeline runs."""
     monkeypatch.setattr(
         "ai_training.worker.tasks.run_quality_check",
-        lambda video_bytes, *, session_id, settings: (MagicMock(), {"12": ["frame"]}),
+        lambda video_bytes, *, session_id, settings, neutral_pose=None: (
+            MagicMock(),
+            {"12": ["frame"]},
+        ),
     )
 
     class FakeTemplate:

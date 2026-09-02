@@ -27,6 +27,68 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+/** How far a measured neutral baseline may shift the clock: ONE full axis
+ * range, which is the largest shift the geometry can express, so a
+ * mis-measured baseline (subject tilted while the frontal photo was taken)
+ * saturates instead of running away.
+ *
+ * Deliberately not a tighter cap: ai-training's solvePnP estimator has a
+ * genuine neutral bias of ~97% of its pitch range, and an over-tight cap
+ * there removed only part of the bias while looking like a working fix
+ * (see `ai-training/tests/test_neutral_pose_offset.py`). Keeping both sides
+ * on the same rule avoids re-learning that the hard way here. */
+const MAX_NEUTRAL_YAW_DEG = POSE_RANGE.maxYawDeg
+const MAX_NEUTRAL_PITCH_DEG = POSE_RANGE.maxPitchDeg
+
+/**
+ * Mean of several pose samples, or `null` for an empty list.
+ *
+ * Averaging a handful of consecutive preflight frames (rather than trusting
+ * one) keeps a single blink/wobble from poisoning the neutral baseline.
+ */
+export function averagePose(poses: HeadPose[]): HeadPose | null {
+  if (poses.length === 0) return null
+  const sum = poses.reduce(
+    (acc, pose) => ({ yaw: acc.yaw + pose.yaw, pitch: acc.pitch + pose.pitch }),
+    { yaw: 0, pitch: 0 },
+  )
+  return { yaw: sum.yaw / poses.length, pitch: sum.pitch / poses.length }
+}
+
+/**
+ * Re-express a pose RELATIVE to the subject's own neutral (straight-at-the-
+ * camera) reading — the fix for "jam 4-8 tidak terdeteksi".
+ *
+ * `clockSectors.ts`'s geometry assumes a neutral face measures `(0, 0)`, but
+ * this estimator does not deliver that: the nose tip of a real, frontal face
+ * sits roughly a third of the way ABOVE the eye-line/chin midpoint, so
+ * `estimateHeadPose` reports a POSITIVE (upward) pitch — around a third of
+ * `maxPitchDeg` — for someone sitting perfectly still. ai-training's
+ * independent solvePnP estimator has the same bias, only larger (a real
+ * frontal portrait measured +24.3 of a +-25 range, recorded in
+ * `ai_training/quality/pose.py`'s own comments).
+ *
+ * Two things follow from an uncorrected bias, and both bite the BOTTOM half
+ * of the clock specifically:
+ *  - the radius gate becomes lopsided (reaching 12 o'clock needs a fraction
+ *    of the head movement that reaching 6 o'clock does), and
+ *  - the measured ANGLE is rotated upward, so a subject genuinely aiming at
+ *    5 o'clock gets classified into 4 or 3 — the sector lights up, just the
+ *    wrong one.
+ *
+ * Subtracting a per-subject, per-session baseline (captured at the moment
+ * the frontal photo is taken, see `EnrollmentCapturePage`) removes both,
+ * without hand-tuning per-sector thresholds and without assuming anything
+ * about a particular face, camera height, or estimator.
+ */
+export function calibrateToNeutral(pose: HeadPose, neutral: HeadPose | null): HeadPose {
+  if (neutral === null) return pose
+  return {
+    yaw: pose.yaw - clamp(neutral.yaw, -MAX_NEUTRAL_YAW_DEG, MAX_NEUTRAL_YAW_DEG),
+    pitch: pose.pitch - clamp(neutral.pitch, -MAX_NEUTRAL_PITCH_DEG, MAX_NEUTRAL_PITCH_DEG),
+  }
+}
+
 export function estimateHeadPose(landmarks: Landmarks68): HeadPose | null {
   if (landmarks.length < 68) return null
 

@@ -86,7 +86,7 @@ def _manifest() -> DatasetSnapshot:
     )
 
 
-def _fake_run_quality_check(video_bytes, *, session_id, settings):
+def _fake_run_quality_check(video_bytes, *, session_id, settings, neutral_pose=None):
     if session_id == "s1":
         return (
             _qc_report("s1", "PASS", ["01", "02"]),
